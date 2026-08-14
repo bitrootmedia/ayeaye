@@ -1,0 +1,16 @@
+-- Runs once, on first container boot (docker-entrypoint-initdb.d).
+--
+-- The application database is created automatically from POSTGRES_DB; this
+-- adds a second one for the SuperTokens auth core, so identity lives in its
+-- own database from day one.
+--
+-- Two consequences worth knowing:
+--   * a cross-database foreign key to a SuperTokens user is impossible, which
+--     is why there's a local `users` table mirroring it;
+--   * a backup MUST be `pg_dumpall`, not `pg_dump`. A dump of the app database
+--     alone restores every task and no way to log in. See README.md.
+--
+-- This file only runs on an EMPTY data directory. If you change it after the
+-- first boot, `docker compose down -v` before trying again or it is silently
+-- skipped.
+CREATE DATABASE supertokens;

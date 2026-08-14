@@ -1,0 +1,131 @@
+# Development. Compose auto-loads this file, so `docker compose up -d` in a
+# checkout gives you the dev stack and the same command on a server (where this
+# file was never deployed) gives you the production one. Nothing to remember.
+#
+# What changes here, and nothing else:
+#   * source is bind-mounted and both Python and Vite reload on save;
+#   * Mailpit catches every outbound email;
+#   * Postgres and the API's own port are published, for psql and /docs.
+#
+# What deliberately does NOT change: the single origin. The Vite dev server is
+# behind Caddy on http://localhost exactly as nginx is in production, so the
+# session cookie, the auth redirects and CORS behave identically in both. Bugs
+# in that layer are the expensive kind and this is how you stop finding them
+# after a deploy.
+
+# Every service that swaps its Dockerfile here also gets its OWN image tag.
+# Without that, dev and prod build different Dockerfiles into the same name
+# (`ayeayecaptain-web`), and `docker compose up -d` — which reuses an existing
+# image rather than rebuilding — silently starts whichever was tagged last. Run
+# a production build locally, then bring dev up, and Caddy proxies to a Vite
+# port on an nginx container: HTTP 502, with every container reporting healthy.
+
+services:
+  caddy:
+    environment:
+      # Vite listens on 5173; nginx on 80. Same Caddyfile either way.
+      WEB_PORT: 5173
+
+  web:
+    image: ayeayecaptain-web-dev
+    build:
+      dockerfile: Dockerfile # the Vite dev server, not the nginx image
+    volumes:
+      - ./apps/web:/app
+      # Shadow the bind mount: the container's install is Linux-native and must
+      # survive a host node_modules built for a different platform.
+      - web_node_modules:/app/node_modules
+
+  api:
+    image: ayeayecaptain-api-dev
+    build:
+      dockerfile: Dockerfile
+    environment:
+      # Mailpit, so nothing ever leaves the machine. Read it at
+      # http://localhost:8025.
+      #
+      # Pinned, NOT `${SMTP_PORT:-1025}`. `.env` is production-shaped and sets
+      # SMTP_PORT=587, and a `:-` default only applies when the variable is
+      # unset — so the indirection would quietly hand dev the production port
+      # and every message would fail to connect. Development mail goes to
+      # Mailpit, full stop; to test a real provider, edit this file.
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_START_TLS: "false"
+    ports:
+      # Only for the interactive API docs at http://localhost:8000/docs, which
+      # Caddy doesn't route (it serves the SPA at everything but /api and
+      # /health). The app itself should always be used through http://localhost.
+      - "8000:8000"
+    volumes:
+      - ./apps/api/src:/app/src
+      # Mounted so `alembic revision --autogenerate` writes the migration back
+      # to the host repo rather than into a container layer that's about to be
+      # thrown away.
+      - ./apps/api/alembic:/app/alembic
+      - ./apps/api/alembic.ini:/app/alembic.ini
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir src
+
+  worker:
+    image: ayeayecaptain-worker-dev
+    build:
+      dockerfile: Dockerfile
+    environment:
+      # Pinned for the same reason as the api service above.
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_START_TLS: "false"
+    volumes:
+      - ./apps/api/src:/app/src
+    command: uv run taskiq worker --reload app.tasks:broker
+
+  # Its own image tag for the same reason as every other service that swaps
+  # its Dockerfile here — a shared tag means a prod build followed by a dev
+  # `up` silently starts the wrong image.
+  scheduler:
+    image: ayeayecaptain-scheduler-dev
+    build:
+      dockerfile: Dockerfile
+    volumes:
+      - ./apps/api/src:/app/src
+
+  # Migrations are authored in dev and committed; production applies whatever
+  # is in the repo. So this needs the host's alembic directory too, or a
+  # migration you just wrote isn't in the image that's supposed to apply it.
+  migrate:
+    image: ayeayecaptain-migrate-dev
+    build:
+      dockerfile: Dockerfile
+    volumes:
+      - ./apps/api/src:/app/src
+      - ./apps/api/alembic:/app/alembic
+      - ./apps/api/alembic.ini:/app/alembic.ini
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  rustfs:
+    environment:
+      # A web console to look in the bucket while developing. Off in
+      # production, where nothing should be poking at storage by hand.
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+    ports:
+      - "9001:9001"
+
+  # Catches every outbound email. SMTP on 1025, web UI on 8025 — this is where
+  # password resets and, from Phase 1, invites land.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  web_node_modules:

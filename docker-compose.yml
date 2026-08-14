@@ -1,0 +1,242 @@
+# The stack. ONE file, and it is the production one.
+#
+#   docker compose up -d
+#
+# is correct on a server and correct on a laptop. There is no flag to remember
+# and no second file to pass, because Compose auto-loads compose.override.yml
+# when it is present — and it is present in a git checkout, absent in nothing.
+# A self-hoster who clones this repo gets the dev override too, which is fine:
+# they also get a .env pointing at localhost, and both are edited together.
+#
+# This matters more than it looks. In the project this one is descended from,
+# dev and prod were two files and a deploy that forgot `-f compose.prod.yml`
+# silently brought up the dev stack on the server: no reverse proxy, the site
+# dark, and every container reporting healthy. For software strangers install
+# on their own machines, that failure mode is not acceptable.
+#
+# Required values use ${VAR:?...} so a missing .env aborts with an explanation
+# instead of starting eight healthy containers around a broken one.
+
+name: ayeayecaptain
+
+services:
+  # The only service that publishes a port. Everything else talks over the
+  # internal network, so there is nothing else on the box to firewall.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      ACME_EMAIL: ${ACME_EMAIL:?missing .env — run `cp .env.example .env` first}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # issued certificates — don't lose this volume
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+      - rustfs
+
+  # Runs to completion before the API starts, every time. Without it the first
+  # `up` points an API at an empty database, because nothing else creates the
+  # schema — and a self-hoster must never be asked to run alembic by hand.
+  #
+  # A one-shot service rather than an entrypoint hook: it shows up in
+  # `docker compose ps`, its logs are its own, and a failed migration stops the
+  # rollout instead of leaving an API to retry against a half-migrated schema.
+  migrate:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.prod
+    restart: "no"
+    command: uv run alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+      SUPERTOKENS_CONNECTION_URI: http://supertokens:3567
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?missing .env — run `cp .env.example .env` first}
+      # One origin for the SPA, the API and the auth routes. See the Caddyfile.
+      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      # Internal for our own calls; presigned URLs are signed against the
+      # public one, because SigV4 covers the Host header. It defaults to
+      # SITE_URL, which is right whenever Caddy fronts /media/*.
+      S3_ENDPOINT: http://rustfs:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      # Leave SMTP_HOST empty to disable email entirely — a supported
+      # configuration, not a broken one. See PLAN.md §2.4.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_START_TLS: ${SMTP_START_TLS:-true}
+      MAIL_FROM: ${MAIL_FROM:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      supertokens:
+        condition: service_healthy
+
+  # The same image as `api` with a different command, so models, config and
+  # database code can never drift between the two. Anything that talks to an
+  # SMTP server belongs here rather than on a request thread.
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    command: uv run taskiq worker app.tasks:broker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app/src
+      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      # The worker reaches storage too — it makes the thumbnails. Same image as
+      # `api`, but a separate environment block, so anything the API needs and
+      # the worker also uses has to be repeated here.
+      S3_ENDPOINT: http://rustfs:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_START_TLS: ${SMTP_START_TLS:-true}
+      MAIL_FROM: ${MAIL_FROM:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The clock. Enqueues periodic jobs onto the same Redis queue the worker
+  # drains — it never does the work itself, so a slow sweep can't delay the
+  # next tick. Currently one job: the hourly reminder sweep.
+  #
+  # A tenth container earns its place because a reminder has to arrive whether
+  # or not anyone has the app open, and a loop inside the API would die on
+  # every reload and would fire twice the day someone runs two replicas.
+  # Everything it triggers is idempotent regardless — see the `notified_*_at`
+  # claim in services/reminders.py — so a restart mid-sweep costs nothing.
+  scheduler:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    command: uv run taskiq scheduler app.tasks:scheduler
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app/src
+      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+
+  # Object storage for comment attachments. Not published to the host — Caddy
+  # proxies /media/* to it, which is also what makes uploads same-origin and
+  # therefore free of CORS entirely.
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      # No console in production; the S3 API is all the app needs.
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    volumes:
+      - rustfs_data:/data
+
+  # --- data ------------------------------------------------------------------
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      # PG18+ images keep data in a version subdirectory, so the volume mounts
+      # at /var/lib/postgresql — NOT .../data as it did up to 17.
+      - postgres_data:/var/lib/postgresql
+      # Creates the separate `supertokens` database on first boot.
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Persist the queue so a restart doesn't drop pending work.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/supertokens
+      API_KEYS: ${SUPERTOKENS_API_KEY:?missing .env — run `cp .env.example .env` first}
+    healthcheck:
+      # The image doesn't reliably ship curl or wget, so this speaks raw HTTP
+      # over bash's /dev/tcp. A wget-based check reports unhealthy forever
+      # regardless of whether the core is fine.
+      test: >
+        bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 &&
+        echo -e "GET /hello HTTP/1.1\r\nhost: 127.0.0.1:3567\r\nConnection: close\r\n\r\n" >&3 &&
+        cat <&3 | grep "Hello"'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  rustfs_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

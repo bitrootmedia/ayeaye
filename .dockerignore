@@ -1,0 +1,14 @@
+# Both images build from their own app directory (apps/api, apps/web), so this
+# is a backstop rather than the load-bearing exclusion list it has to be in a
+# repo-root-context monorepo.
+**/node_modules
+**/dist
+**/.vite
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/.ruff_cache
+.git
+.idea
+_notes
+.env

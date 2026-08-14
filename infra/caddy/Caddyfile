@@ -1,0 +1,55 @@
+# One site. One hostname. That is a product decision, not a simplification —
+# there is no backoffice and no second surface to give a host of its own, so
+# the SPA, the API, the auth routes and every future upload share an origin.
+#
+# What that buys, all of it load-bearing:
+#   * the session cookie is first-party, so none of the cross-site cookie
+#     rules apply and nothing breaks when a browser tightens them;
+#   * CORS is a formality — there is no cross-origin request to allow;
+#   * a self-hoster needs exactly one DNS record and one certificate.
+#
+# SITE_URL carries the scheme on purpose. `http://localhost` tells Caddy to
+# serve plain HTTP with no certificate, so the app works on a laptop with zero
+# edits; `https://tasks.example.com` turns on automatic HTTPS via Let's Encrypt.
+# One variable, and it is the same one the API is configured from.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_URL} {
+	# The API, the auth routes (/api/auth/*) and, later, websockets — Caddy
+	# proxies upgrades transparently.
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# The liveness probe. Routed explicitly because it lives at the root:
+	# without this rule it falls through to the SPA below and an uptime
+	# monitor reports a cheerful 200 while the API is flat on its back.
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	# Object storage. NOT handle_path — the prefix must survive. The bucket is
+	# called `media`, so with path-style addressing the object URL is literally
+	# /media/<key>, and that path is covered by the presigned signature.
+	# Stripping it would break every upload and every download.
+	#
+	# Same origin as the app that uploads, so browser uploads need no CORS at
+	# all — which is the entire class of preflight problem the reference
+	# project had to work around on the client.
+	handle /media/* {
+		reverse_proxy rustfs:9000
+	}
+
+	# The SPA. MUST stay last — `handle` with no matcher is the catch-all, and
+	# anything written after it is unreachable.
+	#
+	# WEB_PORT is 80 (nginx serving the built bundle) in production and 5173
+	# (the Vite dev server) in development, which is how dev gets the exact
+	# same single origin instead of a second port and a CORS allowlist.
+	handle {
+		reverse_proxy web:{$WEB_PORT:80}
+	}
+}
