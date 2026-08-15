@@ -1,4 +1,4 @@
-import { KeyRoundIcon, PlaneIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, KeyRoundIcon, PlaneIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -11,7 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToastManager } from "@/components/ui/toast";
-import type { Absence } from "@/lib/types";
+import { ago } from "@/lib/format";
+import type { Absence, AccessToken } from "@/lib/types";
 
 /**
  * Your account: who you are, how to reach you, and when you aren't here.
@@ -111,6 +112,7 @@ export default function Account() {
 
         <PasswordCard />
         <OutOfOfficeCard />
+        <AccessTokensCard />
       </div>
     </>
   );
@@ -286,6 +288,150 @@ function OutOfOfficeCard() {
         <p className="text-xs text-muted-foreground">
           Everyone in your organisations sees this on their dashboard. That&rsquo;s the point of
           recording it rather than remembering it.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AccessTokensCard() {
+  const toast = useToastManager();
+  const [rows, setRows] = useState<AccessToken[]>([]);
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<"read" | "write">("read");
+  const [fresh, setFresh] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setRows(await api<AccessToken[]>("/me/tokens").catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const create = async () => {
+    if (!name.trim()) return;
+    try {
+      const made = await api<AccessToken & { token: string }>("/me/tokens", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim(), scope }),
+      });
+      setFresh(made.token);
+      setName("");
+      await load();
+    } catch (err) {
+      const detail =
+        err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+      toast.add({ title: "Couldn't create that", description: detail });
+    }
+  };
+
+  return (
+    <Card className="lg:col-span-2" role="region" aria-label="Access tokens">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRoundIcon className="size-4" />
+          Access tokens
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Connect your own assistant over MCP. A token acts as <em>you</em> — it can reach exactly
+          what you can reach, and nothing more.
+        </p>
+
+        {/* Shown once, and the copy says so. There is no endpoint that could
+            show it again: only a hash is stored. */}
+        {fresh && (
+          <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+            <p className="text-sm font-medium">Copy it now — it won&rsquo;t be shown again.</p>
+            <code className="block overflow-x-auto rounded bg-background px-2 py-1 font-mono text-xs">
+              {fresh}
+            </code>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard.writeText(fresh);
+                  toast.add({ title: "Copied" });
+                }}
+              >
+                <CopyIcon />
+                Copy token
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void navigator.clipboard.writeText(
+                    `claude mcp add --transport http ayeayecaptain ${window.location.origin}/mcp --header "Authorization: Bearer ${fresh}"`,
+                  );
+                  toast.add({ title: "Copied the command" });
+                }}
+              >
+                <CopyIcon />
+                Copy the `claude mcp add` command
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setFresh(null)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {rows.map((row) => (
+          <div key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-2 pl-3">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{row.name}</span>
+            <Badge variant="outline">{row.scope === "write" ? "Can change things" : "Read only"}</Badge>
+            <span className="font-mono text-xs text-muted-foreground">{row.prefix}…</span>
+            <span className="text-xs text-muted-foreground">
+              {row.last_used_at ? `used ${ago(row.last_used_at)}` : "never used"}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`Revoke ${row.name}`}
+              onClick={async () => {
+                await api(`/me/tokens/${row.id}`, { method: "DELETE" });
+                await load();
+              }}
+            >
+              <Trash2Icon />
+            </Button>
+          </div>
+        ))}
+
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="space-y-2">
+            <Label htmlFor="token-name">What is it for</Label>
+            <Input
+              id="token-name"
+              className="w-56"
+              placeholder="Claude on my laptop"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && create()}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="token-scope">Access</Label>
+            <select
+              id="token-scope"
+              className="h-8 rounded-lg border bg-background px-2 text-sm"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as "read" | "write")}
+            >
+              <option value="read">Read only</option>
+              <option value="write">Can change things</option>
+            </select>
+          </div>
+          <Button disabled={!name.trim()} onClick={create}>
+            Create token
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Start with read-only. A write token lets an assistant create tasks and comment as you —
+          useful, and worth deciding on purpose.
         </p>
       </CardContent>
     </Card>

@@ -7,15 +7,17 @@ import {
   LockIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
+import { useRealtime } from "@/hooks/use-realtime";
 import type { Shell } from "@/App";
 import { CommentThread } from "@/components/comment-thread";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
 import { PriorityGlyph } from "@/components/priority";
+import { RichText, RichTextEditor } from "@/components/rich-text";
 import { PrivateNote } from "@/components/private-note";
 import { ReminderPanel } from "@/components/reminder-panel";
 import { ClosedBadge, StatusBadge } from "@/components/status-badge";
@@ -36,7 +38,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { timestamp } from "@/lib/format";
 import {
@@ -98,6 +99,31 @@ export default function TaskDetail() {
   }, [load]);
 
   const onCommentsChanged = useCallback(() => setFilesKey((k) => k + 1), []);
+
+  // Live updates for the task itself — a status, a file, a due date, a timer
+  // somebody started. The event carries nothing but the id, so this refetches
+  // and gets the same answer the screen would have got on a reload; if access
+  // went away in between, that refetch 404s and the screen says so.
+  //
+  // Deliberately **not** filtered by `change`: a screen that only refreshes
+  // for the kinds it recognises stops refreshing the day somebody adds a
+  // sixth one, and the failure is invisible.
+  useRealtime(
+    useCallback(
+      (event) => {
+        if (event.type === "task" && event.task_id === taskId) {
+          void load();
+          // The Files panel fetches separately, so it needs its own nudge.
+          setFilesKey((k) => k + 1);
+        }
+      },
+      [taskId, load],
+    ),
+    useMemo(
+      () => (taskId ? { kind: "task" as const, id: taskId } : undefined),
+      [taskId],
+    ),
+  );
 
   if (!org) return null;
 
@@ -249,7 +275,13 @@ export default function TaskDetail() {
               <CardTitle>Details</CardTitle>
             </CardHeader>
             <CardContent>
-              <Details task={task} orgId={org.id} editable={editable} onSaved={load} />
+              <Details
+                task={task}
+                orgId={org.id}
+                editable={editable}
+                onSaved={load}
+                onImageAdded={onCommentsChanged}
+              />
             </CardContent>
           </Card>
 
@@ -474,11 +506,14 @@ function Details({
   orgId,
   editable,
   onSaved,
+  onImageAdded,
 }: {
   task: Task;
   orgId: string;
   editable: boolean;
   onSaved: () => Promise<void>;
+  /** A picture pasted into the description is a task file too. */
+  onImageAdded?: () => void;
 }) {
   const toast = useToastManager();
   const [title, setTitle] = useState(task.title);
@@ -487,9 +522,11 @@ function Details({
   if (!editable) {
     return (
       <div className="space-y-2 text-sm">
-        <p className={task.description ? "" : "text-muted-foreground"}>
-          {task.description || "No description."}
-        </p>
+        {task.description ? (
+          <RichText html={task.description} />
+        ) : (
+          <p className="text-muted-foreground">No description.</p>
+        )}
         <p className="text-xs text-muted-foreground">You have view-only access to this task.</p>
       </div>
     );
@@ -504,12 +541,13 @@ function Details({
         <Input id="task-title" value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="task-desc">Description</Label>
-        <Textarea
-          id="task-desc"
-          rows={5}
+        <Label>Description</Label>
+        <RichTextEditor
+          orgId={orgId}
+          taskId={task.id}
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={setDescription}
+          onImageAdded={onImageAdded}
         />
       </div>
       <Button

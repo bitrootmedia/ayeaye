@@ -242,6 +242,22 @@ async def _announce(
         else f"/orgs/{ctx.organisation.id}/projects/{thread.conversation.project_id}"
     )
 
+    # A comment is activity on the task, so it counts as the task changing:
+    # `updated_at` is "last activity", and the list view sorts by it. Done
+    # before the message event so a client refetching either way sees the new
+    # stamp. Project threads have no task to touch.
+    if thread.conversation.task_id:
+        from sqlalchemy import select as _select
+
+        from app.models import Task as _Task
+        from app.services import tasks as tasks_service
+
+        task = (
+            await db.execute(_select(_Task).where(_Task.id == thread.conversation.task_id))
+        ).scalar_one_or_none()
+        if task is not None:
+            await tasks_service.announce(db, task, "commented")
+
     # Live first: everyone with the thread open sees it appear, including the
     # author's other tabs.
     anchor_id = thread.conversation.task_id or thread.conversation.project_id

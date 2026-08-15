@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Fragment } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -37,18 +38,24 @@ export function PageHeader({
         <Breadcrumb>
           <BreadcrumbList>
             {crumbs.map((crumb, i) => (
-              <BreadcrumbItem key={`${crumb.label}-${i}`}>
-                {crumb.to ? (
-                  <BreadcrumbLink render={<Link to={crumb.to} />}>{crumb.label}</BreadcrumbLink>
-                ) : (
-                  <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-                )}
-                {/* Separator by position, not by linkedness. Keying it off
-                    `crumb.to` ran two unlinked crumbs together — a task inside
-                    a project you can only see the name of rendered as
-                    "Hull refit Strip the old antifoul". */}
+              // **The separator is a sibling of the item, not a child.** Both
+              // render an `<li>`, and nesting them is invalid HTML — a screen
+              // reader announces a list item inside a list item, and React
+              // logs it on every page that has a breadcrumb.
+              <Fragment key={`${crumb.label}-${i}`}>
+                <BreadcrumbItem>
+                  {crumb.to ? (
+                    <BreadcrumbLink render={<Link to={crumb.to} />}>{crumb.label}</BreadcrumbLink>
+                  ) : (
+                    <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+                  )}
+                </BreadcrumbItem>
+                {/* By position, not by linkedness. Keying it off `crumb.to`
+                    ran two unlinked crumbs together — a task inside a project
+                    you can only see the name of rendered as "Hull refit Strip
+                    the old antifoul". */}
                 {i < crumbs.length - 1 && <BreadcrumbSeparator />}
-              </BreadcrumbItem>
+              </Fragment>
             ))}
           </BreadcrumbList>
         </Breadcrumb>

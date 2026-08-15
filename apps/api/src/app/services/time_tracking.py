@@ -344,6 +344,11 @@ async def start(
     await db.refresh(entry)
     if stopped is not None:
         await db.refresh(stopped)
+    await _announce(db, entry.task_id, "timer_started")
+    if stopped is not None and stopped.task_id != entry.task_id:
+        # Starting a timer stops the one already running, which is a change to
+        # a *different* task — and somebody may well have that one open.
+        await _announce(db, stopped.task_id, "timer_stopped")
     return entry, stopped
 
 
@@ -351,6 +356,19 @@ def _event(task_id: uuid.UUID, actor: User, kind: str, **data):
     from app.models import TaskEvent
 
     return TaskEvent(task_id=task_id, actor_user_id=actor.id, kind=kind, data=data)
+
+
+async def _announce(db: AsyncSession, task_id: uuid.UUID, change: str) -> None:
+    """Time is task history, so a screen with the task open has to move.
+
+    Imported lazily: `tasks_service` already imports this module for
+    `context_for`, and at the top that is a cycle.
+    """
+    from app.services import tasks as tasks_service
+
+    task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
+    if task is not None:
+        await tasks_service.announce(db, task, change)
 
 
 async def stop(db: AsyncSession, user: User) -> TimeEntry | None:
@@ -362,6 +380,7 @@ async def stop(db: AsyncSession, user: User) -> TimeEntry | None:
     db.add(_event(entry.task_id, user, EVENT_TIME_LOGGED))
     await db.commit()
     await db.refresh(entry)
+    await _announce(db, entry.task_id, "timer_stopped")
     return entry
 
 
@@ -407,6 +426,7 @@ async def log_manual(
     db.add(_event(task.id, user, EVENT_TIME_LOGGED, minutes=minutes, manual=True))
     await db.commit()
     await db.refresh(entry)
+    await _announce(db, task.id, "time_logged")
     return entry
 
 
@@ -468,6 +488,7 @@ async def edit(
         db.add(_event(entry.task_id, user, EVENT_TIME_EDITED, **changed))
     await db.commit()
     await db.refresh(entry)
+    await _announce(db, entry.task_id, "time_edited")
     return entry
 
 
@@ -480,5 +501,7 @@ async def delete(db: AsyncSession, ctx: OrgContext, user: User, entry: TimeEntry
     minutes = duration_seconds(entry.started_at, entry.ended_at, now=datetime.now(UTC)) // 60
     # The event outlives the entry, so a rollup that shrinks has an explanation.
     db.add(_event(entry.task_id, user, EVENT_TIME_DELETED, minutes=minutes))
+    task_id = entry.task_id
     await db.delete(entry)
     await db.commit()
+    await _announce(db, task_id, "time_deleted")

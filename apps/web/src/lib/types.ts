@@ -254,6 +254,11 @@ export type Task = {
   due_on: string | null;
   position: number;
   created_at: string;
+  /** **Last activity, not last row update.** A comment, a file, a tag, an
+   *  hour logged — all bump it. A private note deliberately does not: a note
+   *  nobody else can read must not announce itself through a timestamp
+   *  everybody can see. */
+  updated_at: string;
   access: AccessLevel;
   /** Resolved server-side: only the owner (or an org admin) may close. */
   can_close: boolean;
@@ -261,6 +266,20 @@ export type Task = {
    *  organisation admin qualifies for that one and not for this. */
   can_hide: boolean;
   tags: Tag[];
+};
+
+/** One board column: what's shown, and how much there really is. */
+export type BoardColumn = {
+  key: string;
+  /** The column's real size. `tasks.length` is only the page. */
+  total: number;
+  tasks: Task[];
+};
+
+export type BoardData = {
+  group_by: "status" | "priority";
+  per_group: number;
+  columns: BoardColumn[];
 };
 
 export type TaskEvent = {
@@ -325,6 +344,16 @@ export type DashboardData = {
   away: Absence[];
   /** Resolved server-side — admins write, everyone reads. */
   can_announce: boolean;
+};
+
+/** A personal access token. The secret is only ever in the create response. */
+export type AccessToken = {
+  id: string;
+  name: string;
+  scope: "read" | "write";
+  prefix: string;
+  last_used_at: string | null;
+  created_at: string;
 };
 
 export type Notification = {

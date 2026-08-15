@@ -61,6 +61,10 @@ class TaskOut(BaseModel):
     due_on: date | None
     position: int
     created_at: datetime
+    # "Last activity", not "last row update": a comment, a file, a tag or an
+    # hour logged all bump it. A private note deliberately does not — see
+    # services/tasks.py:announce.
+    updated_at: datetime
     # Hidden: only the owner ever sees a task with this set, so anyone reading
     # this field is that owner. It is on the wire so the screen can say so.
     is_hidden: bool
@@ -107,6 +111,20 @@ class NoteIn(BaseModel):
 class NoteOut(BaseModel):
     body: str
     updated_at: datetime | None
+
+
+class BoardColumn(BaseModel):
+    key: str
+    # The column's REAL size, not len(tasks). A board that shows fifty cards
+    # and says "50" when there are 812 is a board that lies about the work.
+    total: int
+    tasks: list[TaskOut]
+
+
+class BoardOut(BaseModel):
+    group_by: str
+    per_group: int
+    columns: list[BoardColumn]
 
 
 class TaskCloseIn(BaseModel):

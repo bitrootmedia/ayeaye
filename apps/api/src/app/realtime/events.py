@@ -1,5 +1,9 @@
 """The Redis pub/sub hop between API processes.
 
+One channel for everything realtime, not one per feature: every API process
+already holds a subscriber, and a second connection per event type buys
+nothing but another thing to reconnect. Consumers branch on `type`.
+
 Uvicorn runs several workers in production and each holds only its own
 sockets, so a message posted on worker 1 has to reach a browser connected to
 worker 3. Redis is the only thing the processes share at runtime.
@@ -23,7 +27,7 @@ from app.realtime.connections import ConnectionManager
 
 logger = logging.getLogger("app.realtime")
 
-CHAT_CHANNEL = "chat_events"
+EVENTS_CHANNEL = "realtime_events"
 
 
 async def publish_message(
@@ -39,7 +43,7 @@ async def publish_message(
     client = aioredis.from_url(settings.redis_url)
     try:
         await client.publish(
-            CHAT_CHANNEL,
+            EVENTS_CHANNEL,
             json.dumps(
                 {
                     "type": "message",
@@ -61,8 +65,48 @@ async def publish_message(
         await client.aclose()
 
 
-async def chat_subscriber(manager: ConnectionManager) -> None:
-    """Forward chat events from Redis to this process's sockets.
+async def publish_task_changed(*, task_id: str, organisation_id: str, change: str) -> None:
+    """Announce that a task moved — a status, a file, a date, anything.
+
+    **The audience is whoever has it on screen**, not whoever has a stake in
+    it. Those are the two registries in `connections.py`, and conflating them
+    was a bug once already: a read-only colleague looking at the task has
+    nothing worth *notifying* them about, but their screen must still update.
+    So `user_ids` is deliberately empty here and the watch key does the work.
+
+    Like every other event on this channel it carries **no content** — only
+    which task, and what kind of change for the log. The client refetches, so
+    a viewer whose access was revoked a moment ago gets a 404 from that
+    refetch rather than a payload they should never have seen. That is also
+    what makes "the owner hid this task" arrive correctly: the watcher's
+    refetch 404s and their screen says so.
+    """
+    client = aioredis.from_url(settings.redis_url)
+    try:
+        await client.publish(
+            EVENTS_CHANNEL,
+            json.dumps(
+                {
+                    "type": "task",
+                    "task_id": task_id,
+                    "organisation_id": organisation_id,
+                    "change": change,
+                    "user_ids": [],
+                    # Two audiences: the task's own screen, and any board in
+                    # that organisation the task might be sitting on.
+                    "watch": [f"task:{task_id}", f"org:{organisation_id}"],
+                }
+            ),
+        )
+    except Exception as exc:
+        # The change is already committed. Losing the ping costs a refresh.
+        logger.warning("could not publish a task event: %s", exc)
+    finally:
+        await client.aclose()
+
+
+async def realtime_subscriber(manager: ConnectionManager) -> None:
+    """Forward events from Redis to this process's sockets.
 
     Started in the lifespan and cancelled on shutdown. Reconnects on its own:
     a Redis blip must not silently leave every browser on this worker with a
@@ -72,8 +116,8 @@ async def chat_subscriber(manager: ConnectionManager) -> None:
         client = aioredis.from_url(settings.redis_url)
         try:
             pubsub = client.pubsub()
-            await pubsub.subscribe(CHAT_CHANNEL)
-            logger.info("subscribed to %s", CHAT_CHANNEL)
+            await pubsub.subscribe(EVENTS_CHANNEL)
+            logger.info("subscribed to %s", EVENTS_CHANNEL)
             async for raw in pubsub.listen():
                 if raw.get("type") != "message":
                     continue
@@ -84,12 +128,12 @@ async def chat_subscriber(manager: ConnectionManager) -> None:
                 await manager.dispatch(
                     event,
                     user_ids=event.get("user_ids", []),
-                    watch_key=event.get("watch"),
+                    watch_keys=event.get("watch"),
                 )
         except asyncio.CancelledError:
             await client.aclose()
             raise
         except Exception as exc:
-            logger.warning("chat subscriber dropped (%s), reconnecting", exc)
+            logger.warning("realtime subscriber dropped (%s), reconnecting", exc)
             await client.aclose()
             await asyncio.sleep(2)

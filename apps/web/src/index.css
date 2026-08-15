@@ -177,3 +177,86 @@
     font-variant-numeric: tabular-nums;
     }
 }
+
+/* --- rich task descriptions -------------------------------------------------
+ *
+ * One class, applied to the editor and to the rendered description alike, so
+ * writing and reading a description look the same. Scoped with `.prose-task`
+ * rather than styling bare tags, because this markup is *user content* and
+ * must not leak its styling onto the app's own headings and lists.
+ */
+@layer components {
+  .prose-task {
+    @apply text-sm leading-relaxed;
+  }
+  .prose-task > * + * {
+    @apply mt-3;
+  }
+  .prose-task h2 {
+    @apply mt-5 text-base font-semibold;
+  }
+  .prose-task h3 {
+    @apply mt-4 text-sm font-semibold;
+  }
+  .prose-task ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+  .prose-task ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+  .prose-task blockquote {
+    @apply border-l-2 pl-3 text-muted-foreground;
+  }
+  .prose-task a {
+    @apply text-primary underline underline-offset-2;
+  }
+  .prose-task hr {
+    @apply border-t;
+  }
+  /* Inline code and code blocks are the one place a second palette is
+     legitimate: there the colour carries syntax, not importance. Everywhere
+     else in this product colour means status. */
+  .prose-task :not(pre) > code {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+  }
+  .prose-task pre {
+    @apply overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs;
+  }
+  .prose-task img {
+    @apply max-h-96 rounded-lg border;
+  }
+  /* An image whose attachment is gone. Says so rather than showing the
+     browser's broken-image glyph. */
+  .prose-task img:not([src]) {
+    @apply block border-dashed p-3 text-xs text-muted-foreground;
+  }
+}
+
+/* highlight.js token classes, mapped onto our own hues so the code block
+ * follows the theme instead of shipping a second one. */
+:root {
+  --code-keyword: oklch(0.52 0.16 285);
+  --code-string: oklch(0.5 0.13 150);
+  --code-number: oklch(0.55 0.13 60);
+  --code-comment: oklch(0.62 0.02 260);
+  --code-name: oklch(0.5 0.14 240);
+}
+.dark {
+  --code-keyword: oklch(0.78 0.13 290);
+  --code-string: oklch(0.79 0.12 152);
+  --code-number: oklch(0.82 0.11 70);
+  --code-comment: oklch(0.62 0.02 260);
+  --code-name: oklch(0.78 0.11 240);
+}
+.prose-task .hljs-keyword,
+.prose-task .hljs-built_in,
+.prose-task .hljs-literal { color: var(--code-keyword); }
+.prose-task .hljs-string,
+.prose-task .hljs-regexp { color: var(--code-string); }
+.prose-task .hljs-number { color: var(--code-number); }
+.prose-task .hljs-comment { color: var(--code-comment); font-style: italic; }
+.prose-task .hljs-title,
+.prose-task .hljs-function,
+.prose-task .hljs-attr,
+.prose-task .hljs-name,
+.prose-task .hljs-tag { color: var(--code-name); }

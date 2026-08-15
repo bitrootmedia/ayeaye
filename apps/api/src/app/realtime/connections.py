@@ -39,7 +39,9 @@ class ConnectionManager:
     def __init__(self) -> None:
         # Keyed by our local user id — the same id everything else points at.
         self._by_user: dict[str, set[WebSocket]] = {}
-        # "task:<uuid>" / "project:<uuid>" -> sockets with it on screen.
+        # "task:<uuid>" / "project:<uuid>" / "org:<uuid>" -> sockets with it
+        # on screen. The org key is the board: it shows many tasks at once, so
+        # watching each of them would be hundreds of registrations per tab.
         self._by_watch: dict[str, set[WebSocket]] = {}
 
     async def connect(self, user_id: str, ws: WebSocket) -> None:
@@ -72,13 +74,23 @@ class ConnectionManager:
     def is_connected(self, user_id: str) -> bool:
         return bool(self._by_user.get(user_id))
 
-    async def dispatch(self, event: dict, *, user_ids: list[str], watch_key: str | None) -> None:
-        """Send to the people with a stake, plus anyone watching that thread."""
+    async def dispatch(
+        self, event: dict, *, user_ids: list[str], watch_keys: str | list[str] | None
+    ) -> None:
+        """Send to the people with a stake, plus anyone watching.
+
+        Several keys, because one change has more than one audience: a task
+        moving concerns the people with that task open **and** the people
+        looking at a board it appears on. Same event, two registries, and a
+        socket in both still receives it once — `targets` is a set.
+        """
         targets: set[WebSocket] = set()
         for user_id in user_ids:
             targets |= set(self._by_user.get(user_id, ()))
-        if watch_key:
-            targets |= set(self._by_watch.get(watch_key, ()))
+        if isinstance(watch_keys, str):
+            watch_keys = [watch_keys]
+        for key in watch_keys or ():
+            targets |= set(self._by_watch.get(key, ()))
         for ws in targets:
             try:
                 await ws.send_json(event)

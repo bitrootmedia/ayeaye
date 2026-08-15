@@ -15,10 +15,16 @@ One container stack, one hostname, two commands. A free public instance runs at
 - **Tasks** with an owner and one action-required person, five statuses, six
   priorities, and open/closed as a separate field — so "closed while still
   blocked" is something you can say. A board that groups by status or by
-  priority, a list view, and a full history of every change.
-- **Files on tasks.** Drop one on the task or post it in a comment; either way
-  it lands in the same Files panel, with thumbnails for images that open full
-  size in place.
+  priority, a sortable table with filters on every column, and a full history
+  of every change. Anything that happens to a task — a comment, a file, an
+  hour logged — counts as activity, so "what moved this week" is one click on
+  a column heading.
+- **Descriptions with formatting.** Headings, lists, quotes, links, and code
+  blocks with syntax colouring. Paste or drop a picture straight in — it
+  becomes a file on the task, so it's in the Files panel too.
+- **Files on tasks.** Drag one onto the task or onto a comment — or use the
+  button — and either way it lands in the same Files panel, with thumbnails
+  for images that open full size in place.
 - **Tags**, shared across the organisation. Mark one *off the board* and its
   tasks stop queueing for attention — that's how a knowledge-base article
   lives alongside the work without cluttering it, while staying searchable.
@@ -39,6 +45,10 @@ One container stack, one hostname, two commands. A free public instance runs at
   attachments and in-browser voice notes.
 - **No dropdown you can only scroll.** Anywhere you pick a project or a
   person, the list opens with a filter already focused.
+- **Connect your own assistant.** An MCP endpoint at `/mcp` lets Claude — or
+  any MCP client — read your work and, if you let it, create tasks and comment
+  as you. It acts as *you*: it reaches exactly what you can reach. See
+  [Your own assistant](#your-own-assistant).
 - **Search everywhere.** ⌘K on any screen, typo-tolerant, as you type. It only
   ever finds what you have access to — the permission check runs in the same
   query as the text match, so there is no index to fall out of date.
@@ -121,6 +131,43 @@ is a supported way to run this, not a broken one:
 
 Set the `SMTP_*` variables when you want real mail. `MAIL_FROM` has to be on a
 domain your provider has verified or every message is rejected at submission.
+
+## Your own assistant
+
+Anyone with an account can connect an MCP client. Nothing to configure on the
+server: the endpoint is on the same hostname as everything else.
+
+**1. Make a token.** Account → Access tokens. Give it a name you'll recognise
+later, and start with **read only** — you can make a write one when you
+actually want the assistant changing things.
+
+The secret is shown **once**. Only a hash is stored, so there is no screen
+that could show it to you again, and a database backup is not a list of live
+credentials.
+
+**2. Point your client at it.** The token screen has a copy button for this
+exact line:
+
+```bash
+claude mcp add --transport http ayeayecaptain https://tasks.example.com/mcp \
+  --header "Authorization: Bearer ayc_…"
+```
+
+Then ask for things in words:
+
+> *What's on my plate this week?*
+> *What did we get done in the last seven days?*
+> *Create a task for Ada to chase the yard about the travel lift, urgent.*
+
+**What it can do.** `organisations`, `list_tasks`, `search`, `task`,
+`activity`, `my_reminders` with a read token; `create_task`, `update_task` and
+`comment` need a write one.
+
+**What it can't.** A token is a person, not an integration: every call resolves
+through the same permission rules as the web app, as you. It cannot see a
+project nobody shared with you, cannot read anybody's private notes, cannot see
+a task somebody hid, and cannot invite people. Revoking a token from the same
+screen takes effect on the next call.
 
 ## Back it up
 
@@ -238,6 +285,7 @@ cd apps/web && pnpm install && pnpm typecheck
 ./scripts/e2e-notes.sh
 ./scripts/e2e-reminders.sh
 ./scripts/e2e-dashboard.sh
+./scripts/e2e-mcp.sh
 
 # Browser tests in a real Chromium (first run: cd e2e && pnpm install && pnpm install-browsers)
 ./scripts/e2e-browser.sh

@@ -73,8 +73,12 @@ export function OrgSwitcher({
           </DropdownMenuTrigger>
 
           <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuLabel>Organisations</DropdownMenuLabel>
+            {/* **The label lives inside the group.** Base UI's `GroupLabel`
+                reads a context that only `Menu.Group` provides, and outside
+                one it throws on open — which, with no error boundary, used to
+                blank the whole app the first time anybody clicked here. */}
             <DropdownMenuGroup>
+              <DropdownMenuLabel>Organisations</DropdownMenuLabel>
               {organisations.length === 0 && (
                 <DropdownMenuItem disabled>None yet</DropdownMenuItem>
               )}

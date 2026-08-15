@@ -5,13 +5,15 @@ Thin: the rules live in `services/tasks.py` and `services/access.py`.
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.models import Attachment, Project, Tag, Task, TaskGrant, Team, User
 from app.schemas.structure import GrantLevelIn, GrantOut, PersonOut, TeamOut
 from app.schemas.tasks import (
+    BoardColumn,
+    BoardOut,
     NoteIn,
     NoteOut,
     SearchHitOut,
@@ -34,6 +36,7 @@ from app.services import attachments as attachments_service
 from app.services import conversations as conversations_service
 from app.services import notes as notes_service
 from app.services import projects as projects_service
+from app.services import richtext
 from app.services import search as search_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
@@ -118,6 +121,36 @@ async def _tags_for(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, list[Ta
     return await tags_service.for_tasks(db, [t.id for t in tasks])
 
 
+async def _image_urls(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, str]:
+    """Fresh presigned URLs for every image referenced by these descriptions.
+
+    One lookup for the whole page. A description with ten screenshots would
+    otherwise be ten queries, and a board of them would be hundreds.
+
+    Scoped to attachments **on these tasks**: an id copied from another task's
+    description resolves to nothing and renders as a missing image, rather
+    than as a working link to something the reader may not be allowed to see.
+    """
+    wanted: set[uuid.UUID] = set()
+    for task in tasks:
+        wanted.update(richtext.image_ids(task.description))
+    if not wanted:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                select(Attachment).where(
+                    Attachment.id.in_(wanted),
+                    Attachment.task_id.in_([t.id for t in tasks]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {row.id: attachments_service.view_url(row) for row in rows}
+
+
 def _task_out(
     task: Task,
     level: str,
@@ -126,11 +159,12 @@ def _task_out(
     project_names: dict[uuid.UUID, str],
     is_owner: bool,
     tags: dict[uuid.UUID, list[Tag]] | None = None,
+    image_urls: dict[uuid.UUID, str] | None = None,
 ) -> TaskOut:
     return TaskOut(
         id=str(task.id),
         title=task.title,
-        description=task.description,
+        description=richtext.render(task.description, image_urls or {}),
         status=task.status,
         priority=task.priority,
         is_open=task.closed_at is None,
@@ -144,6 +178,7 @@ def _task_out(
         due_on=task.due_on,
         position=task.position,
         created_at=task.created_at,
+        updated_at=task.updated_at,
         is_hidden=task.hidden_at is not None,
         access=level,
         can_close=tasks_service.can_close(level=level, is_owner=is_owner),
@@ -154,6 +189,7 @@ def _task_out(
 
 @router.get("/tasks", response_model=list[TaskOut])
 async def list_tasks(
+    response: Response,
     ctx: CurrentOrg,
     user: CurrentUser,
     db: DbSession,
@@ -162,29 +198,59 @@ async def list_tasks(
     include_closed: bool = False,
     tag_id: uuid.UUID | None = None,
     include_off_board: bool = False,
+    status: str | None = None,
+    priority: str | None = None,
+    owner_user_id: uuid.UUID | None = None,
+    action_required_user_id: uuid.UUID | None = None,
+    sort: str | None = None,
+    dir: str = "asc",
+    limit: int | None = None,
+    offset: int = 0,
 ):
     """Every task you can see, optionally narrowed. Narrowing never widens
     access.
+
+    **No default limit.** A silent cap is worse than a big response: the caller
+    believes they have everything and quietly doesn't. Ask for a `limit` and
+    the count of everything matching comes back in `X-Total-Count`, so a
+    paging client always knows what it is a page *of*.
 
     Tasks carrying an `off_board` tag are left out unless you ask for that tag
     by name (or set `include_off_board`). That is a **display** rule, not an
     access one: they are perfectly visible, they just aren't queueing for
     attention. See services/tags.py.
     """
-    visible = await tasks_service.list_visible(
-        db,
-        ctx,
-        user,
-        project_id=project_id,
-        loose_only=loose,
-        include_closed=include_closed,
-        tag_id=tag_id,
-        include_off_board=include_off_board,
-    )
+    filters = {
+        "project_id": project_id,
+        "loose_only": loose,
+        "include_closed": include_closed,
+        "tag_id": tag_id,
+        "include_off_board": include_off_board,
+        "status": status,
+        "priority": priority,
+        "owner_user_id": owner_user_id,
+        "action_required_user_id": action_required_user_id,
+        # An unknown sort key is ignored rather than rejected: the value comes
+        # from a URL people share and edit, and a link naming a column that no
+        # longer exists should show the default order, not an error page.
+        "sort": sort if sort in access_service.SORTS else None,
+        "descending": dir == "desc",
+    }
+    if limit is None:
+        # Unbounded, as before. Every caller that doesn't page still gets
+        # everything rather than a cap it never asked for.
+        visible = await tasks_service.list_visible(db, ctx, user, **filters)
+        total = len(visible)
+    else:
+        visible, total = await tasks_service.list_page(
+            db, ctx, user, limit=limit, offset=offset, **filters
+        )
+    response.headers["X-Total-Count"] = str(total)
     tasks = [t for t, _ in visible]
     people = await _people(db, tasks)
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, tasks)
+    images = await _image_urls(db, tasks)
     return [
         _task_out(
             task,
@@ -193,9 +259,70 @@ async def list_tasks(
             project_names=names,
             is_owner=task.owner_user_id == user.id,
             tags=tags,
+            image_urls=images,
         )
         for task, level in visible
     ]
+
+
+@router.get("/tasks/board", response_model=BoardOut)
+async def task_board(
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+    group: str = "status",
+    per_group: int = 50,
+    project_id: uuid.UUID | None = None,
+    loose: bool = False,
+    include_closed: bool = False,
+    tag_id: uuid.UUID | None = None,
+):
+    """The board: the top `per_group` of each column, with each column's real
+    total.
+
+    Its own endpoint rather than a mode of `/tasks`, because a board cannot be
+    paged with `LIMIT`. Rows come back priority-first, so the first N of
+    several thousand are all criticals and four columns arrive empty. The
+    window function in `access.board_stmt` bounds each column separately.
+
+    Registered before `/tasks/{task_id}`: FastAPI matches in declaration
+    order, and a literal path after a UUID parameter is a path that never
+    runs.
+    """
+    per_group = max(1, min(per_group, 200))
+    group = "priority" if group == "priority" else "status"
+    rows = await tasks_service.board(
+        db,
+        ctx,
+        user,
+        group_by=group,
+        per_group=per_group,
+        project_id=project_id,
+        loose_only=loose,
+        include_closed=include_closed,
+        tag_id=tag_id,
+    )
+    people = await _people(db, [t for t, _, _ in rows])
+    names = await _project_names(db, ctx.organisation.id)
+    tags = await _tags_for(db, [t for t, _, _ in rows])
+    images = await _image_urls(db, [t for t, _, _ in rows])
+
+    columns: dict[str, BoardColumn] = {}
+    for task, level, total in rows:
+        key = task.priority if group == "priority" else task.status
+        column = columns.setdefault(key, BoardColumn(key=key, total=total, tasks=[]))
+        column.tasks.append(
+            _task_out(
+                task,
+                level,
+                people=people,
+                project_names=names,
+                is_owner=task.owner_user_id == user.id,
+                tags=tags,
+                image_urls=images,
+            )
+        )
+    return BoardOut(group_by=group, per_group=per_group, columns=list(columns.values()))
 
 
 @router.post("/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
@@ -218,6 +345,7 @@ async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: 
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
+    images = await _image_urls(db, [task])
     return _task_out(
         task,
         access_service.LEVEL_OWNER if task.owner_user_id == user.id else "write",
@@ -225,6 +353,7 @@ async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: 
         project_names=names,
         is_owner=task.owner_user_id == user.id,
         tags=tags,
+        image_urls=images,
     )
 
 
@@ -234,6 +363,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     people = await _people(db, [tctx.task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [tctx.task])
+    images = await _image_urls(db, [tctx.task])
     return _task_out(
         tctx.task,
         tctx.level,
@@ -241,6 +371,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
         project_names=names,
         is_owner=tctx.is_owner,
         tags=tags,
+        image_urls=images,
     )
 
 
@@ -267,8 +398,15 @@ async def update_task(
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
+    images = await _image_urls(db, [task])
     return _task_out(
-        task, fresh.level, people=people, project_names=names, is_owner=fresh.is_owner, tags=tags
+        task,
+        fresh.level,
+        people=people,
+        project_names=names,
+        is_owner=fresh.is_owner,
+        tags=tags,
+        image_urls=images,
     )
 
 
@@ -286,8 +424,15 @@ async def close_task(
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
+    images = await _image_urls(db, [task])
     return _task_out(
-        task, tctx.level, people=people, project_names=names, is_owner=tctx.is_owner, tags=tags
+        task,
+        tctx.level,
+        people=people,
+        project_names=names,
+        is_owner=tctx.is_owner,
+        tags=tags,
+        image_urls=images,
     )
 
 
@@ -373,6 +518,7 @@ async def tag_task(
     tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
     tag = await tags_service.get_or_create(db, ctx, user, name=body.name)
     await tags_service.apply(db, tctx.task, tag)
+    await tasks_service.announce(db, tctx.task, "tagged")
     return [_tag_out(t) for t in (await tags_service.for_tasks(db, [task_id])).get(task_id, [])]
 
 
@@ -384,6 +530,7 @@ async def untag_task(
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
     await tags_service.unapply(db, tctx.task, tag_id)
+    await tasks_service.announce(db, tctx.task, "untagged")
 
 
 @router.post("/tasks/{task_id}/hidden", response_model=TaskOut)
@@ -402,8 +549,15 @@ async def hide_task(
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
+    images = await _image_urls(db, [task])
     return _task_out(
-        task, tctx.level, people=people, project_names=names, is_owner=tctx.is_owner, tags=tags
+        task,
+        tctx.level,
+        people=people,
+        project_names=names,
+        is_owner=tctx.is_owner,
+        tags=tags,
+        image_urls=images,
     )
 
 
@@ -523,6 +677,7 @@ async def delete_task_file(
         "you can only remove files you added",
     )
     await attachments_service.delete(db, attachment)
+    await tasks_service.announce(db, tctx.task, "file_removed")
 
 
 # --- who can see it ---------------------------------------------------------

@@ -132,6 +132,107 @@ ok "removing him succeeds"      "$(code -b /tmp/ta.jar -X DELETE $B/api/organisa
 ok "his task now belongs to an owner" "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks/$TID | j "d['owner']['email']")" "$A"
 ok "and the handover is recorded" "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks/$TID/events | j "sum(1 for e in d if e['kind']=='owner_changed' and e['data'].get('reason'))")" "1"
 
+echo "== the board is bounded per column, and says so"
+# Twelve in one column. A plain LIMIT can't bound a board: rows come back
+# priority-first, so the first N of a busy organisation are all criticals and
+# the other columns arrive empty. Each column is bounded separately.
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  post /tmp/ta.jar $B/api/organisations/$OID/tasks "{\"title\":\"Bulk $i\",\"status\":\"todo\"}" >/dev/null
+done
+BOARD=$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks/board?per_group=5")
+ok "a column is capped"         "$(echo "$BOARD" | j "len([c for c in d['columns'] if c['key']=='todo'][0]['tasks'])")" "5"
+ok "…but reports its real size" "$(echo "$BOARD" | j "[c for c in d['columns'] if c['key']=='todo'][0]['total'] >= 12")" "True"
+ok "grouping by priority works" "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks/board?group=priority" | j "d['group_by']")" "priority"
+ok "per_group is clamped"       "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks/board?per_group=99999" | j "d['per_group']")" "200"
+# The board is a view of the same access model, not a way round it. Dave was
+# removed from the organisation above, so this is a non-member — and note the
+# assertion is on the STATUS: `len(d)` on a 404 body is 1, which quietly
+# compares equal to a one-task board.
+ok "a non-member gets 404"      "$(code -b /tmp/td.jar $B/api/organisations/$OID/tasks/board)" "404"
+# And for a member, the board holds exactly what the list holds.
+ok "same tasks as the list"     "$(curl -s -b /tmp/tc.jar "$B/api/organisations/$OID/tasks/board?per_group=200" | j "sum(len(c['tasks']) for c in d['columns'])")" "$(curl -s -b /tmp/tc.jar $B/api/organisations/$OID/tasks | j "len(d)")"
+
+echo "== the list pages, and says what it is a page of"
+ok "no limit means everything"  "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks | j "len(d) >= 12")" "True"
+ok "a limit is honoured"        "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=4" | j "len(d)")" "4"
+ok "the total comes back whole" "$(curl -s -o /dev/null -D - -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=4" | grep -i '^x-total-count' | tr -d '\r' | cut -d' ' -f2)" "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks | j "len(d)")"
+ok "offset moves the window"    "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=4&offset=4" | j "d[0]['id']")" "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=8" | j "d[4]['id']")"
+ok "past the end is empty, not an error" "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=5&offset=99999" | j "len(d)")" "0"
+
+echo "== updated_at is last ACTIVITY, not last row update"
+# The column the list sorts by. Every one of these leaves the tasks row itself
+# untouched, so without an explicit stamp it would answer a question nobody
+# asks.
+UT=$(post /tmp/ta.jar $B/api/organisations/$OID/tasks '{"title":"Touch me"}' | j "d['id']")
+stamp(){ curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks/$UT | j "d['updated_at']"; }
+WAS=$(stamp)
+sleep 1
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$UT '{"status":"review"}' >/dev/null
+NOW=$(stamp); ok "a status change bumps it"  "$([ "$NOW" != "$WAS" ] && echo yes)" "yes"
+
+WAS=$NOW; sleep 1
+post /tmp/ta.jar $B/api/organisations/$OID/tasks/$UT/comments '{"body":"a word"}' >/dev/null
+NOW=$(stamp); ok "a COMMENT bumps it"        "$([ "$NOW" != "$WAS" ] && echo yes)" "yes"
+
+WAS=$NOW; sleep 1
+post /tmp/ta.jar $B/api/organisations/$OID/tasks/$UT/tags '{"name":"Touched"}' >/dev/null
+NOW=$(stamp); ok "a TAG bumps it"            "$([ "$NOW" != "$WAS" ] && echo yes)" "yes"
+
+WAS=$NOW; sleep 1
+post /tmp/ta.jar $B/api/organisations/$OID/tasks/$UT/time '{"minutes":15}' >/dev/null
+NOW=$(stamp); ok "LOGGED TIME bumps it"      "$([ "$NOW" != "$WAS" ] && echo yes)" "yes"
+
+# The exception, and the whole point of it: a note nobody else can read must
+# not announce itself through a timestamp everybody can see.
+WAS=$NOW; sleep 1
+curl -s -b /tmp/ta.jar -H 'Content-Type: application/json' -X PUT $B/api/organisations/$OID/tasks/$UT/note -d '{"body":"just for me"}' >/dev/null
+NOW=$(stamp); ok "a PRIVATE NOTE does not"   "$([ "$NOW" = "$WAS" ] && echo same)" "same"
+
+echo "== the list filters and sorts"
+ok "filter by status"           "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?status=review" | j "set(t['status'] for t in d) == {'review'}")" "True"
+ok "filter by priority"         "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?priority=normal" | j "set(t['priority'] for t in d) == {'normal'}")" "True"
+AUID=$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/members | j "[m['user_id'] for m in d if m['email']=='$A'][0]")
+ok "filter by owner"            "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?owner_user_id=$AUID" | j "set(t['owner']['id'] for t in d) == {'$AUID'}")" "True"
+ok "filters combine"            "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?status=review&owner_user_id=$AUID" | j "all(t['status']=='review' and t['owner']['id']=='$AUID' for t in d)")" "True"
+# Sorted server-side, because the page is a page: ordering in the browser
+# would only order the rows it happens to be holding.
+ok "sort by updated_at desc"    "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?sort=updated_at&dir=desc" | j "d[0]['id']")" "$UT"
+ok "…and asc puts it last"      "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?sort=updated_at" | j "d[-1]['id']")" "$UT"
+ok "sort by title is A-Z"       "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?sort=title" | j "[t['title'] for t in d] == sorted(t['title'] for t in d)")" "True"
+# By rank, not by spelling: alphabetically "blocker" would come first.
+ok "status sorts by workflow"   "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?sort=status" | j "d[0]['status']")" "todo"
+ok "an unknown sort is ignored" "$(code -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?sort=nonsense")" "200"
+
+echo "== a description is sanitised HTML, and search reads the prose"
+# The editor produces tidy markup. That is irrelevant — this is what a client
+# can actually send, and the next person to open the task renders it.
+RT=$(post /tmp/ta.jar $B/api/organisations/$OID/tasks '{"title":"Rich"}' | j "d['id']")
+desc(){ curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT | j "d['description'] or ''"; }
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p>Hull needs <strong>epoxy</strong></p><script>alert(1)</script>"}' >/dev/null
+ok "the script tag is gone"     "$(desc | grep -c script)" "0"
+ok "the formatting stays"       "$(desc | grep -c '<strong>epoxy</strong>')" "1"
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p onclick=\"steal()\">Hi</p>"}' >/dev/null
+ok "an inline handler is gone"  "$(desc | grep -c onclick)" "0"
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p><a href=\"javascript:alert(1)\">x</a></p>"}' >/dev/null
+ok "a javascript: link is gone" "$(desc | grep -c javascript)" "0"
+# An image with no attachment id can never be served, so it is dropped rather
+# than stored as a permanent broken-image icon.
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p>a</p><img src=\"https://tracker.example.com/pixel.gif\">"}' >/dev/null
+ok "an external image is gone"  "$(desc | grep -c 'tracker.example.com')" "0"
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<pre><code class=\"language-python\">x=1</code></pre>"}' >/dev/null
+ok "a code language survives"   "$(desc | grep -c 'language-python')" "1"
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<pre><code class=\"absolute inset-0\">x</code></pre>"}' >/dev/null
+ok "any other class does not"   "$(desc | grep -c 'absolute')" "0"
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p></p>"}' >/dev/null
+ok "an emptied editor is empty" "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT | j "d['description'] is None")" "True"
+
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$RT '{"description":"<p>The <em>mizzenmast</em> bracket</p>"}' >/dev/null
+ok "search matches the prose"   "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/search?q=mizzenmast" | j "sum(1 for h in d['hits'] if h['id']=='$RT')")" "1"
+# The whole reason for the generated column: searching a tag name must not
+# return every task that happens to be formatted.
+ok "…and not the markup"        "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/search?q=strong" | j "sum(1 for h in d['hits'] if h['id']=='$RT')")" "0"
+ok "the snippet is prose"       "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/search?q=mizzenmast" | j "'<' in ([h['subtitle'] for h in d['hits'] if h['id']=='$RT'][0] or '')")" "False"
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" = 0 ]

@@ -11,8 +11,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.mcp.server import mcp
 from app.realtime.connections import manager
-from app.realtime.events import chat_subscriber
+from app.realtime.events import realtime_subscriber
 from app.storage import s3
 from app.tasks import broker
 
@@ -25,9 +26,13 @@ async def lifespan(app: FastAPI):
     await s3.ensure_bucket()
     # Every uvicorn worker holds only its own sockets, so each one subscribes
     # and forwards to whichever browsers it happens to be holding.
-    subscriber = asyncio.create_task(chat_subscriber(manager))
+    subscriber = asyncio.create_task(realtime_subscriber(manager))
     try:
-        yield
+        # The MCP transport runs its own task group, and it has to be entered
+        # here rather than per request: a session manager started inside a
+        # handler dies with that handler's task.
+        async with mcp.session_manager.run():
+            yield
     finally:
         subscriber.cancel()
         # Let it observe the cancellation before the broker goes away.

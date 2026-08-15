@@ -16,12 +16,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ago } from "@/lib/format";
 import { formatBytes, isAudio, isImage, putToStorage } from "@/lib/storage";
 import { VoiceNotePlayer, VoiceNoteRecorder } from "@/components/voice-note";
 import { canRecord } from "@/lib/audio";
 import { personName, type Person } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type Attachment = {
   id: string;
@@ -187,6 +189,15 @@ export function CommentThread({
     }
   };
 
+  /** Stage several dropped files, one after another.
+   *
+   *  Sequential, because there is one progress bar and one `uploading` slot —
+   *  and because four parallel uploads on a phone connection is four slow
+   *  ones rather than one fast one. */
+  const uploadAll = async (files: File[]) => {
+    for (const file of files) await upload(file, file.name, file.type);
+  };
+
   const send = async () => {
     const body = draft.trim();
     if (!body || sending) return;
@@ -208,6 +219,13 @@ export function CommentThread({
       setSending(false);
     }
   };
+
+  // Uploading is disabled while one is in flight: the composer shows one
+  // progress bar, and a second drop mid-upload would replace it.
+  const { dragging, dropProps } = useFileDrop(
+    (files) => void uploadAll(files),
+    !thread?.can_post || !!uploading,
+  );
 
   return (
     // A named region, because the same picture can appear both here and in
@@ -244,7 +262,27 @@ export function CommentThread({
         <div ref={bottom} />
 
         {thread?.can_post && (
-          <div className="space-y-2 border-t pt-3">
+          // The composer is the drop zone, not the whole card: dropping onto
+          // the thread above would sit ambiguously between "attach to a new
+          // comment" and "attach to that one", and only the first is a thing
+          // this product can do.
+          <div
+            role="group"
+            aria-label="Comment composer"
+            className={cn(
+              "relative space-y-2 rounded-lg border-t pt-3 transition-colors",
+              dragging && "ring-2 ring-primary",
+            )}
+            {...dropProps}
+          >
+            {dragging && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <PaperclipIcon className="size-4" />
+                  Drop to attach to your comment
+                </span>
+              </div>
+            )}
             {staged.length > 0 && (
               <ul className="flex flex-wrap gap-2">
                 {staged.map((file) => (
@@ -313,13 +351,14 @@ export function CommentThread({
                   ref={filePicker}
                   type="file"
                   className="hidden"
+                  multiple
                   aria-label="File to upload"
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
+                    const files = Array.from(e.target.files ?? []);
                     // Reset first: picking the same file twice in a row fires
                     // no change event otherwise.
                     e.target.value = "";
-                    if (file) void upload(file, file.name, file.type);
+                    if (files.length) void uploadAll(files);
                   }}
                 />
                 <Button

@@ -10,7 +10,7 @@ from supertokens_python.recipe.session.asyncio import get_session_without_reques
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.db import SessionLocal
-from app.models import Message, User
+from app.models import Message, Task, User
 from app.realtime.connections import manager
 from app.schemas.structure import PersonOut
 from app.services import attachments as attachments_service
@@ -279,7 +279,16 @@ async def confirm_attachment(
     # must never be access. Both kinds route back through the same visibility
     # rules as everything else.
     await _anchor_of(db, ctx, user, attachment)
-    return _attachment_out(await attachments_service.confirm(db, attachment, user))
+    ready = await attachments_service.confirm(db, attachment, user)
+    # A file added straight to the task is visible the moment it's confirmed,
+    # so that is when other screens need telling. A file staged for a comment
+    # is not on the task yet — the comment's own event covers it when sent.
+    if ready.task_id is not None:
+        from app.services import tasks as tasks_service
+
+        task = (await db.execute(select(Task).where(Task.id == ready.task_id))).scalar_one()
+        await tasks_service.announce(db, task, "file_added")
+    return _attachment_out(ready)
 
 
 async def _anchor_of(db, ctx, user, attachment):
@@ -380,7 +389,7 @@ async def _handle_watch(ws: WebSocket, raw: str, user_id: str) -> None:
         kind, anchor_id = target["kind"], uuid.UUID(target["id"])
     except Exception:
         return
-    if kind not in ("task", "project"):
+    if kind not in ("task", "project", "org"):
         return
 
     async with SessionLocal() as db:
@@ -390,14 +399,39 @@ async def _handle_watch(ws: WebSocket, raw: str, user_id: str) -> None:
         try:
             if kind == "task":
                 await _visible_task(db, user, anchor_id)
-            else:
+            elif kind == "project":
                 await _visible_project(db, user, anchor_id)
+            else:
+                # A board. Membership is the check — the events carry no
+                # content, and what the board then refetches is filtered by
+                # the access model like every other list.
+                await _is_member(db, user, anchor_id)
         except Exception:
             # No access, or it's gone. Silently ignored: telling a socket
             # which ids exist is exactly the leak 404-not-403 avoids.
             return
 
     manager.watch(f"{kind}:{anchor_id}", ws)
+
+
+async def _is_member(db, user, org_id: uuid.UUID) -> None:
+    """Raises unless this person is an active member of that organisation."""
+    from sqlalchemy import select
+
+    from app.models import OrganisationMember
+    from app.models.organisation import STATUS_ACTIVE
+
+    found = (
+        await db.execute(
+            select(OrganisationMember.id).where(
+                OrganisationMember.organisation_id == org_id,
+                OrganisationMember.user_id == user.id,
+                OrganisationMember.status == STATUS_ACTIVE,
+            )
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        raise LookupError("not a member")
 
 
 async def _visible_task(db, user, task_id: uuid.UUID):

@@ -24,6 +24,7 @@ import uuid
 from fastapi import HTTPException
 from fastapi import status as http_status
 from sqlalchemy import delete, exists, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,12 +210,20 @@ async def apply(db: AsyncSession, task: Task, tag: Tag) -> None:
 
     The UI can send the whole set on save, and a duplicate is a no-op rather
     than a 409 somebody has to interpret.
+
+    **`ON CONFLICT DO NOTHING`, not catch-and-rollback.** A duplicate is an
+    expected outcome here, not an exception — and a rollback expires every
+    ORM instance in the session, so the caller's `task` becomes a lazy load
+    waiting to happen. Under asyncio that is a `MissingGreenlet` 500 the
+    moment anything downstream touches `task.id`, which is exactly what
+    announcing the change does.
     """
-    db.add(TaskTag(task_id=task.id, tag_id=tag.id))
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
+    await db.execute(
+        pg_insert(TaskTag)
+        .values(task_id=task.id, tag_id=tag.id)
+        .on_conflict_do_nothing(constraint="uq_task_tags_task_tag")
+    )
+    await db.commit()
 
 
 async def unapply(db: AsyncSession, task: Task, tag_id: uuid.UUID) -> None:

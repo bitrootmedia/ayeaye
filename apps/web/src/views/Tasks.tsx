@@ -1,4 +1,6 @@
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   CircleDotIcon,
   Columns3Icon,
   EyeOffIcon,
@@ -7,15 +9,24 @@ import {
   PlusIcon,
   SignalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
-import { ApiError, api } from "@/api";
+import { ApiError, api, apiWithHeaders } from "@/api";
 import type { Shell } from "@/App";
+import { useRealtime } from "@/hooks/use-realtime";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
 import { PriorityGlyph } from "@/components/priority";
 import { ClosedBadge, StatusBadge } from "@/components/status-badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { TagChip } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,12 +52,15 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
+import { ago, timestamp } from "@/lib/format";
 import {
   PRIORITY_LABEL,
   STATUS_LABEL,
   TASK_PRIORITIES,
   TASK_STATUSES,
   personName,
+  type BoardData,
+  type Member,
   type Project,
   type Tag,
   type Task,
@@ -55,6 +69,19 @@ import {
 } from "@/lib/types";
 
 const NO_PROJECT = "__loose__";
+
+/** List rows per page, and how much "Show more" adds. */
+const PAGE = 100;
+
+/**
+ * How long the board waits before refetching after a live event.
+ *
+ * The task screen refetches immediately — one task, one small response. A
+ * board is the opposite: it shows everything and a busy organisation produces
+ * a steady trickle of changes, so it collects them into one refresh. Skipped
+ * entirely when the tab is hidden; the next visible event catches up.
+ */
+const LIVE_COALESCE_MS = 1_500;
 
 /**
  * The board.
@@ -79,33 +106,97 @@ export default function Tasks() {
   const tagFilter = params.get("tag");
   const view = params.get("view") === "list" ? "list" : "board";
   const groupBy = params.get("group") === "priority" ? "priority" : "status";
+  // Sorting and filtering live in the URL, so a view somebody arrived at is a
+  // view they can send to a colleague.
+  const sort = params.get("sort");
+  const descending = params.get("dir") === "desc";
+  const statusFilter = params.get("status");
+  const priorityFilter = params.get("priority");
+  const ownerFilter = params.get("owner");
+  const actionFilter = params.get("needs");
   const showClosed = params.get("closed") === "1";
 
+  const [board, setBoard] = useState<BoardData | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [listTotal, setListTotal] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [creating, setCreating] = useState(false);
+  // How many list rows to ask for. Grows on "Show more" rather than appending
+  // pages: re-asking for a bigger window is one code path, and it can't drift
+  // out of order when something changes underneath.
+  const [listLimit, setListLimit] = useState(PAGE);
+  const refresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const load = useCallback(async () => {
-    if (!orgId) return;
+  const filters = useCallback(() => {
     const query = new URLSearchParams({ include_closed: String(showClosed) });
     if (projectFilter === NO_PROJECT) query.set("loose", "true");
     else if (projectFilter) query.set("project_id", projectFilter);
     // Asking for a tag by name is asking for its tasks, off-board or not.
     if (tagFilter) query.set("tag_id", tagFilter);
-    const [ts, ps, gs] = await Promise.all([
-      api<Task[]>(`/organisations/${orgId}/tasks?${query}`),
+    if (statusFilter) query.set("status", statusFilter);
+    if (priorityFilter) query.set("priority", priorityFilter);
+    if (ownerFilter) query.set("owner_user_id", ownerFilter);
+    if (actionFilter) query.set("action_required_user_id", actionFilter);
+    return query;
+  }, [projectFilter, tagFilter, showClosed, statusFilter, priorityFilter, ownerFilter, actionFilter]);
+
+  const load = useCallback(async () => {
+    if (!orgId) return;
+    const query = filters();
+    const [ps, gs, ms] = await Promise.all([
       api<Project[]>(`/organisations/${orgId}/projects`),
       api<Tag[]>(`/organisations/${orgId}/tags`),
+      api<Member[]>(`/organisations/${orgId}/members`),
     ]);
-    setTasks(ts);
     setProjects(ps);
     setTags(gs);
-  }, [orgId, projectFilter, tagFilter, showClosed]);
+    setMembers(ms);
+
+    if (view === "board") {
+      // The board is bounded per column server-side — a `LIMIT` can't do it,
+      // because the rows arrive priority-first and four columns would come
+      // back empty. See services/access.py:board_stmt.
+      query.set("group", groupBy);
+      setBoard(await api<BoardData>(`/organisations/${orgId}/tasks/board?${query}`));
+    } else {
+      if (sort) {
+        query.set("sort", sort);
+        query.set("dir", descending ? "desc" : "asc");
+      }
+      query.set("limit", String(listLimit));
+      const res = await apiWithHeaders<Task[]>(`/organisations/${orgId}/tasks?${query}`);
+      setTasks(res.data);
+      setListTotal(Number(res.headers.get("X-Total-Count") ?? res.data.length));
+    }
+  }, [orgId, filters, view, groupBy, listLimit, sort, descending]);
 
   useEffect(() => {
-    void load().catch(() => setTasks([]));
-  }, [load]);
+    void load().catch(() => {
+      setTasks([]);
+      setBoard({ group_by: groupBy, per_group: 0, columns: [] });
+    });
+  }, [load, groupBy]);
+
+  // Live. Every task change publishes on the socket; this screen shows many
+  // tasks at once, so it coalesces rather than refetching per event — twenty
+  // people working means twenty events a second and one board is a real
+  // payload however well it is bounded.
+  useRealtime(
+    useCallback(
+      (event) => {
+        if (event.type !== "task") return;
+        if (refresh.current) clearTimeout(refresh.current);
+        refresh.current = setTimeout(() => {
+          if (document.visibilityState === "visible") void load();
+        }, LIVE_COALESCE_MS);
+      },
+      [load],
+    ),
+    // The board watches its organisation rather than every card on it.
+    useMemo(() => (orgId ? { kind: "org" as const, id: orgId } : undefined), [orgId]),
+  );
 
   if (!org) return null;
 
@@ -131,6 +222,17 @@ export default function Tasks() {
     hint: t.off_board ? "kept off the board" : undefined,
   }));
   const offBoardTag = tags.find((t) => t.id === tagFilter && t.off_board) ?? null;
+  const people: PickerItem[] = members
+    .filter((m) => m.status === "active" && m.user_id)
+    .map((m) => ({
+      value: m.user_id!,
+      label: m.display_name || m.email || "Unknown",
+      hint: m.display_name ? (m.email ?? undefined) : undefined,
+    }));
+  const empty =
+    view === "board"
+      ? (board?.columns.length ?? 0) === 0
+      : (tasks?.length ?? 0) === 0;
 
   return (
     <>
@@ -194,6 +296,61 @@ export default function Tasks() {
             />
           </div>
         )}
+        {/* The rest only in the list. On a board, status *is* the columns —
+            filtering by one would leave a board with a single column, which
+            is a list drawn badly. */}
+        {view === "list" && (
+          <>
+            <div className="w-44">
+              <EntityPicker
+                ariaLabel="Filter by status"
+                items={TASK_STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }))}
+                value={statusFilter}
+                placeholder="Any status"
+                emptyLabel="Any status"
+                searchPlaceholder="Filter…"
+                onChange={(v) => setParam("status", v)}
+              />
+            </div>
+            <div className="w-44">
+              <EntityPicker
+                ariaLabel="Filter by priority"
+                items={TASK_PRIORITIES.map((p) => ({
+                  value: p,
+                  label: PRIORITY_LABEL[p],
+                  icon: <PriorityGlyph priority={p} />,
+                }))}
+                value={priorityFilter}
+                placeholder="Any priority"
+                emptyLabel="Any priority"
+                searchPlaceholder="Filter…"
+                onChange={(v) => setParam("priority", v)}
+              />
+            </div>
+            <div className="w-52">
+              <EntityPicker
+                ariaLabel="Filter by owner"
+                items={people}
+                value={ownerFilter}
+                placeholder="Any owner"
+                emptyLabel="Any owner"
+                searchPlaceholder="Find a person…"
+                onChange={(v) => setParam("owner", v)}
+              />
+            </div>
+            <div className="w-52">
+              <EntityPicker
+                ariaLabel="Filter by who must act"
+                items={people}
+                value={actionFilter}
+                placeholder="Anyone to act"
+                emptyLabel="Anyone to act"
+                searchPlaceholder="Find a person…"
+                onChange={(v) => setParam("needs", v)}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {/* Off-board tasks are absent unless you asked for one by name, so the
@@ -205,11 +362,11 @@ export default function Tasks() {
         </p>
       )}
 
-      {tasks === null ? (
+      {(view === "board" ? board === null : tasks === null) ? (
         <div className="flex flex-1 items-center justify-center py-12">
           <Spinner />
         </div>
-      ) : tasks.length === 0 ? (
+      ) : empty ? (
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
@@ -229,9 +386,36 @@ export default function Tasks() {
           </EmptyContent>
         </Empty>
       ) : view === "board" ? (
-        <Board orgId={org.id} tasks={tasks} groupBy={groupBy} />
+        <Board orgId={org.id} board={board!} groupBy={groupBy} />
       ) : (
-        <TaskList orgId={org.id} tasks={tasks} />
+        <>
+          <TaskList
+            orgId={org.id}
+            tasks={tasks!}
+            sort={sort}
+            descending={descending}
+            onSort={(key) => {
+              const next = new URLSearchParams(params);
+              // Same column again flips the direction; a different one starts
+              // ascending, which is what every table anyone has used does.
+              next.set("dir", sort === key && !descending ? "desc" : "asc");
+              next.set("sort", key);
+              setParams(next, { replace: true });
+            }}
+          />
+          {/* Said out loud, always. A list that silently stops at a hundred
+              is a list you make decisions from without knowing it. */}
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs text-muted-foreground">
+              {tasks!.length} of {listTotal}
+            </span>
+            {tasks!.length < listTotal && (
+              <Button variant="outline" size="sm" onClick={() => setListLimit((n) => n + PAGE)}>
+                Show more
+              </Button>
+            )}
+          </div>
+        </>
       )}
 
       <NewTaskDialog
@@ -248,33 +432,33 @@ export default function Tasks() {
 
 function Board({
   orgId,
-  tasks,
+  board,
   groupBy,
 }: {
   orgId: string;
-  tasks: Task[];
+  board: BoardData;
   groupBy: "status" | "priority";
 }) {
-  // Both arrangements are "one column per value of a fixed enum", so the only
-  // thing that differs is which key and what the heading looks like. Six
-  // priority columns against five status ones — the grid takes both.
-  const columns =
-    groupBy === "status"
-      ? TASK_STATUSES.map((status) => ({
-          key: status,
-          heading: <StatusBadge status={status} />,
-          items: tasks.filter((t) => t.status === status),
-        }))
-      : TASK_PRIORITIES.map((priority) => ({
-          key: priority,
-          heading: (
-            <span className="flex items-center gap-1.5 text-sm font-medium">
-              <PriorityGlyph priority={priority} />
-              {PRIORITY_LABEL[priority]}
-            </span>
-          ),
-          items: tasks.filter((t) => t.priority === priority),
-        }));
+  // The server bounds each column and reports its real size. Columns are
+  // still driven by the fixed enum rather than by what came back, so an empty
+  // column stays on screen — a board whose columns appear and disappear as
+  // work moves is one you can't scan.
+  const byKey = new Map(board.columns.map((c) => [c.key, c]));
+  const keys: string[] = groupBy === "status" ? TASK_STATUSES : TASK_PRIORITIES;
+  const columns = keys.map((key) => ({
+    key,
+    heading:
+      groupBy === "status" ? (
+        <StatusBadge status={key as TaskStatus} />
+      ) : (
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <PriorityGlyph priority={key as TaskPriority} />
+          {PRIORITY_LABEL[key as TaskPriority]}
+        </span>
+      ),
+    items: byKey.get(key)?.tasks ?? [],
+    total: byKey.get(key)?.total ?? 0,
+  }));
 
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
@@ -282,7 +466,13 @@ function Board({
         <div key={column.key} className="flex flex-col gap-2 rounded-xl bg-muted/40 p-2">
           <div className="flex items-center justify-between px-1 py-1">
             {column.heading}
-            <span className="font-mono text-xs text-muted-foreground">{column.items.length}</span>
+            {/* The real total, not what fits. "50" beside a column holding
+                812 is the board lying about how much work there is. */}
+            <span className="font-mono text-xs text-muted-foreground">
+              {column.items.length < column.total
+                ? `${column.items.length} of ${column.total}`
+                : column.total}
+            </span>
           </div>
           {column.items.map((task) => (
             <Link
@@ -306,29 +496,123 @@ function Board({
           {column.items.length === 0 && (
             <p className="px-1 py-2 text-xs text-muted-foreground">Nothing here.</p>
           )}
+          {column.items.length < column.total && (
+            <Link
+              to={`/orgs/${orgId}/tasks?view=list`}
+              className="px-1 py-2 text-xs text-muted-foreground underline underline-offset-2"
+            >
+              {column.total - column.items.length} more — see the list
+            </Link>
+          )}
         </div>
       ))}
     </div>
   );
 }
 
-function TaskList({ orgId, tasks }: { orgId: string; tasks: Task[] }) {
+/** The columns, in order. `sort` is the server-side key; a column without one
+ *  can\'t be sorted (nothing here needs that yet, but tags would). */
+const COLUMNS = [
+  { key: "title", label: "Task", sort: "title" },
+  { key: "project", label: "Project", sort: "project" },
+  { key: "status", label: "Status", sort: "status" },
+  { key: "priority", label: "Priority", sort: "priority" },
+  { key: "owner", label: "Owner", sort: "owner" },
+  { key: "action_required", label: "Action required", sort: "action_required" },
+  { key: "created_at", label: "Created", sort: "created_at" },
+  { key: "updated_at", label: "Updated", sort: "updated_at" },
+] as const;
+
+function TaskList({
+  orgId,
+  tasks,
+  sort,
+  descending,
+  onSort,
+}: {
+  orgId: string;
+  tasks: Task[];
+  sort: string | null;
+  descending: boolean;
+  onSort: (key: string) => void;
+}) {
   return (
-    <div className="divide-y rounded-xl border bg-card">
-      {tasks.map((task) => (
-        <Link
-          key={task.id}
-          to={`/orgs/${orgId}/tasks/${task.id}`}
-          className="flex flex-wrap items-center gap-3 p-3 transition-colors hover:bg-accent/50"
-        >
-          <StatusBadge status={task.status} />
-          <PriorityGlyph priority={task.priority} />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{task.title}</span>
-          <HiddenMark task={task} />
-          <ClosedBadge isOpen={task.is_open} />
-          <TaskMeta task={task} />
-        </Link>
-      ))}
+    <div className="overflow-x-auto rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {COLUMNS.map((column) => (
+              <TableHead key={column.key}>
+                {/* Sorting is the server's job — the page is a page, so
+                    ordering the rows in the browser would only order the
+                    hundred you happen to be holding. */}
+                <button
+                  type="button"
+                  className="flex items-center gap-1 hover:text-foreground"
+                  aria-label={`Sort by ${column.label}`}
+                  onClick={() => onSort(column.sort)}
+                >
+                  {column.label}
+                  {sort === column.sort &&
+                    (descending ? (
+                      <ArrowDownIcon className="size-3" />
+                    ) : (
+                      <ArrowUpIcon className="size-3" />
+                    ))}
+                </button>
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tasks.map((task) => (
+            <TableRow key={task.id}>
+              <TableCell className="max-w-72">
+                <Link
+                  to={`/orgs/${orgId}/tasks/${task.id}`}
+                  className="flex items-center gap-2 font-medium hover:underline"
+                >
+                  <span className="truncate">{task.title}</span>
+                  <HiddenMark task={task} />
+                  <ClosedBadge isOpen={task.is_open} />
+                </Link>
+                {task.tags.length > 0 && (
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    {task.tags.map((tag) => (
+                      <TagChip key={tag.id} tag={tag} className="text-xs" />
+                    ))}
+                  </span>
+                )}
+              </TableCell>
+              <TableCell className="max-w-40 truncate text-muted-foreground">
+                {task.project_name ?? <span className="italic">No project</span>}
+              </TableCell>
+              <TableCell>
+                <StatusBadge status={task.status} />
+              </TableCell>
+              <TableCell>
+                <PriorityGlyph priority={task.priority} withLabel />
+              </TableCell>
+              <TableCell className="max-w-40 truncate">{personName(task.owner)}</TableCell>
+              <TableCell className="max-w-40 truncate">
+                {task.action_required ? (
+                  personName(task.action_required)
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
+              {/* Dates in the mono voice, like every other machine value, so
+                  the columns line up rather than ragging. */}
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {timestamp(task.created_at)}
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {ago(task.updated_at)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }

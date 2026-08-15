@@ -14,7 +14,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
 import { formatBytes, isAudio, isImage, putToStorage } from "@/lib/storage";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { personName, type TaskFile } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type Ticket = {
   attachment: { id: string; filename: string };
@@ -90,6 +92,15 @@ export function TaskFilesPanel({
     }
   };
 
+  /** Several at once, one after another.
+   *
+   *  Sequential rather than parallel: the progress line shows one file, and
+   *  four simultaneous uploads on a phone connection is how you get four slow
+   *  ones instead of one fast one. */
+  const uploadAll = async (files: File[]) => {
+    for (const file of files) await upload(file);
+  };
+
   const remove = async (file: TaskFile) => {
     try {
       await api(`/organisations/${orgId}/tasks/${taskId}/files/${file.id}`, {
@@ -103,10 +114,30 @@ export function TaskFilesPanel({
     }
   };
 
+  // The whole card, not just the button: a drop target you have to aim at is
+  // one people miss, and missing means the browser opens the file.
+  const { dragging, dropProps } = useFileDrop(
+    (files) => void uploadAll(files),
+    !canEdit || !!uploading,
+  );
+
   return (
     // Named, because a file posted in a comment appears both here and in the
     // thread below, and "the picture" has to be able to mean one of them.
-    <Card role="region" aria-label="Files">
+    <Card
+      role="region"
+      aria-label="Files"
+      className={cn("relative transition-colors", dragging && "ring-2 ring-primary")}
+      {...dropProps}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/80">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <PaperclipIcon className="size-4" />
+            Drop to attach to this task
+          </span>
+        </div>
+      )}
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <PaperclipIcon className="size-4" />
@@ -170,9 +201,10 @@ export function TaskFilesPanel({
               type="file"
               className="sr-only"
               aria-label="File to add to this task"
+              multiple
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void upload(file);
+                const files = Array.from(e.target.files ?? []);
+                if (files.length) void uploadAll(files);
               }}
             />
             <Button

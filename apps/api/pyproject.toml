@@ -25,6 +25,8 @@ dependencies = [
     # Thumbnails, in the worker. A gallery that downloads 12MP originals to
     # render them at 80px is the alternative.
     "pillow>=11.0",
+    "nh3>=0.3.6",
+    "mcp>=2.0.0",
 ]
 
 [dependency-groups]

@@ -29,7 +29,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { Spinner } from "@/components/ui/spinner";
 import { Toaster, useToastManager } from "@/components/ui/toast";
 import { AUTH_BASE_PATH } from "@/config";
-import { rememberOrg } from "@/lib/current-org";
+import { lastOrg, rememberOrg } from "@/lib/current-org";
 import type { Organisation, PendingInvite, Timer } from "@/lib/types";
 
 /** How often the unread badge refreshes.
@@ -141,6 +141,15 @@ function Shell() {
   const exact = useMatch("/orgs/:orgId");
   const orgId = (nested ?? exact)?.params.orgId ?? null;
   const currentOrg = organisations.find((o) => o.id === orgId) ?? null;
+  // **What the rail navigates, which is not the same as what the URL names.**
+  // The organisations list, your notifications, your reminders and your
+  // account all sit outside any organisation — but you are still *working in*
+  // one, and losing the whole section the moment you glance at a list is how
+  // you end up with no way back except clicking through it again. The
+  // switcher already claims an organisation on those screens; this is what
+  // makes the nav underneath agree with it.
+  const railOrg =
+    currentOrg ?? organisations.find((o) => o.id === lastOrg()) ?? organisations[0] ?? null;
 
   const reload = useCallback(async () => {
     // `/me` is in here too: the account screen changes the display name and
@@ -219,8 +228,8 @@ function Shell() {
   // Bound globally, but search is organisation-scoped — pressing it outside
   // one would have nothing to search.
   const openSearch = useCallback(() => {
-    if (currentOrg) setSearching(true);
-  }, [currentOrg]);
+    if (railOrg) setSearching(true);
+  }, [railOrg]);
   useSearchHotkey(openSearch);
 
   const signOutTo = () => signOut().then(() => (window.location.href = AUTH_BASE_PATH));
@@ -272,7 +281,7 @@ function Shell() {
       <AppSidebar
         me={me}
         organisations={organisations}
-        currentOrg={currentOrg}
+        currentOrg={railOrg}
         inviteCount={invites.length}
         unread={unread}
         remindersDue={remindersDue}
@@ -290,7 +299,7 @@ function Shell() {
           </span>
           <div className="ml-auto flex items-center gap-2">
             <TimerBar timer={timer} onChanged={refreshTimer} />
-            {currentOrg && <SearchTrigger onClick={openSearch} />}
+            {railOrg && <SearchTrigger onClick={openSearch} />}
           </div>
           <Link
             to="/notifications"
@@ -309,9 +318,9 @@ function Shell() {
         </main>
       </SidebarInset>
 
-      {currentOrg && (
+      {railOrg && (
         <SearchPalette
-          orgId={currentOrg.id}
+          orgId={railOrg.id}
           open={searching}
           onOpenChange={setSearching}
         />

@@ -21,7 +21,7 @@ Five rules, from PLAN.md §5 and the product decisions in CLAUDE.md:
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 
 from fastapi import HTTPException
 from fastapi import status as http_status
@@ -66,7 +66,8 @@ from app.models.task import (
     PRIORITY_NORMAL,
     STATUSES,
 )
-from app.services import access, notifications
+from app.realtime import events as realtime
+from app.services import access, notifications, richtext
 from app.services.organisations import OrgContext
 
 # --- pure rules. no database, no request. -----------------------------------
@@ -208,28 +209,79 @@ async def list_visible(
     db: AsyncSession,
     ctx: OrgContext,
     user: User,
-    *,
-    project_id: uuid.UUID | None = None,
-    loose_only: bool = False,
-    include_closed: bool = False,
-    tag_id: uuid.UUID | None = None,
-    include_off_board: bool = False,
+    **filters,
 ) -> list[tuple[Task, str]]:
+    """Everything matching, unbounded. `**filters` goes straight through to
+    `visible_tasks_stmt` — one place defines what a task list can be narrowed
+    or sorted by, and this and `list_page` can\'t drift apart."""
     rows = (
         await db.execute(
             access.visible_tasks_stmt(
                 user_id=user.id,
                 org_id=ctx.organisation.id,
                 org_role=ctx.role,
-                project_id=project_id,
-                loose_only=loose_only,
-                include_closed=include_closed,
-                tag_id=tag_id,
-                include_off_board=include_off_board,
+                **filters,
             )
         )
     ).all()
     return [(task, access.level_name(rank) or "") for task, rank in rows]
+
+
+async def list_page(
+    db: AsyncSession,
+    ctx: OrgContext,
+    user: User,
+    *,
+    limit: int,
+    offset: int,
+    **filters,
+) -> tuple[list[tuple[Task, str]], int]:
+    """One page, and the total. Returns `([], 0)` for a page past the end."""
+    rows = (
+        await db.execute(
+            access.paged_tasks_stmt(
+                limit=limit,
+                offset=offset,
+                user_id=user.id,
+                org_id=ctx.organisation.id,
+                org_role=ctx.role,
+                **filters,
+            )
+        )
+    ).all()
+    total = int(rows[0][2]) if rows else 0
+    return [(task, access.level_name(rank) or "") for task, rank, _ in rows], total
+
+
+async def board(
+    db: AsyncSession,
+    ctx: OrgContext,
+    user: User,
+    *,
+    group_by: str,
+    per_group: int,
+    project_id: uuid.UUID | None = None,
+    loose_only: bool = False,
+    include_closed: bool = False,
+    tag_id: uuid.UUID | None = None,
+) -> list[tuple[Task, str, int]]:
+    """The board, bounded per column. Returns `(task, level, column_total)`."""
+    rows = (
+        await db.execute(
+            access.board_stmt(
+                user_id=user.id,
+                org_id=ctx.organisation.id,
+                org_role=ctx.role,
+                group_by=group_by,
+                per_group=per_group,
+                project_id=project_id,
+                loose_only=loose_only,
+                include_closed=include_closed,
+                tag_id=tag_id,
+            )
+        )
+    ).all()
+    return [(task, access.level_name(rank) or "", int(total)) for task, rank, total in rows]
 
 
 async def _member_or_404(db: AsyncSession, ctx: OrgContext, user_id: uuid.UUID) -> None:
@@ -322,7 +374,7 @@ async def create(
         organisation_id=ctx.organisation.id,
         project_id=project_id,
         title=title,
-        description=(description or "").strip() or None,
+        description=richtext.sanitise(description),
         status=status,
         priority=priority,
         owner_user_id=owner_user_id or user.id,
@@ -366,6 +418,38 @@ def _who(user: User) -> str:
     return user.display_name or user.email or "Someone"
 
 
+async def announce(db: AsyncSession, task: Task, change: str) -> None:
+    """Record that a task changed: stamp `updated_at`, then tell every screen.
+
+    **One function for both, deliberately.** They have the same trigger and
+    the same set of call sites, and splitting them means the day somebody adds
+    a seventh kind of change they remember one and forget the other. The rule
+    is a single sentence: *if it writes to a task, it announces.*
+
+    **`updated_at` is "last activity", not "last row update".** A comment, a
+    file, a tag, an hour logged — none of those touch the `tasks` row, so
+    without this the column answers a question nobody asks. It is a sortable
+    column on the list view precisely so people can find what has been moving.
+
+    **The exception is a private note**, which never calls this. A note nobody
+    else can read must not announce itself by bumping a timestamp everybody
+    can see — that would leak, through the back door, exactly what the feature
+    promises to keep. Reminders are personal in the same way and are left out
+    for the same reason.
+
+    **After the commit, never before.** A ping about a change that then failed
+    to save sends everyone to refetch the old state and believe it is new.
+    """
+    # Python-side rather than `func.now()`: the in-memory instance is what the
+    # response is built from, and a SQL function would leave it holding an
+    # expression until something refreshed it.
+    task.updated_at = datetime.now(UTC)
+    await db.commit()
+    await realtime.publish_task_changed(
+        task_id=str(task.id), organisation_id=str(task.organisation_id), change=change
+    )
+
+
 async def update(
     db: AsyncSession,
     tctx: TaskContext,
@@ -399,7 +483,9 @@ async def update(
             task.title = title
 
     if "description" in fields:
-        task.description = (fields["description"] or "").strip() or None
+        # Sanitised on the way in, always. The editor produces tidy HTML and
+        # that is irrelevant — anyone can PATCH a `<script>` with curl.
+        task.description = richtext.sanitise(fields["description"])
 
     if "status" in fields and fields["status"] != task.status:
         status = fields["status"]
@@ -492,6 +578,8 @@ async def update(
     await db.commit()
     await db.refresh(task)
 
+    await announce(db, task, "updated")
+
     link = f"/orgs/{ctx.organisation.id}/tasks/{task.id}"
     if notify_action_required:
         await notifications.notify(
@@ -540,6 +628,7 @@ async def set_open(
         record(db, task, user, EVENT_REOPENED)
     await db.commit()
     await db.refresh(task)
+    await announce(db, task, "closed" if closed else "reopened")
 
     # Tell the person who was asked to act, and the previous owner if it isn't
     # the closer — the two people most likely to be waiting on it.
@@ -592,6 +681,10 @@ async def set_hidden(
         record(db, task, user, EVENT_UNHIDDEN)
     await db.commit()
     await db.refresh(task)
+    # Watchers who just lost access get a 404 from their refetch, which is how
+    # their screen learns to say so. That is the event doing its job, not a
+    # leak — it carries nothing but the id they were already looking at.
+    await announce(db, task, "hidden" if hidden else "unhidden")
     return task
 
 
@@ -690,6 +783,7 @@ async def grant(
             detail="they already have access — change the level instead",
         ) from exc
     await db.refresh(row)
+    await announce(db, tctx.task, "shared")
 
     if user_id and user_id != user.id:
         await notifications.notify(
@@ -728,6 +822,7 @@ async def revoke(db: AsyncSession, tctx: TaskContext, user: User, row: TaskGrant
     )
     await db.delete(row)
     await db.commit()
+    await announce(db, tctx.task, "unshared")
 
 
 # --- offboarding ------------------------------------------------------------------

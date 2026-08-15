@@ -1,3 +1,6 @@
+import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from supertokens_python.recipe.emailpassword.asyncio import (
@@ -11,6 +14,7 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.types import RecipeUserId
 
 from app.api.deps import CurrentUser, DbSession
+from app.services import tokens as tokens_service
 from app.services import users as users_service
 
 router = APIRouter(tags=["users"])
@@ -69,6 +73,58 @@ async def me(user: CurrentUser):
 async def update_me(body: MeUpdate, user: CurrentUser, db: DbSession):
     updated = await users_service.update_profile(db, user, **body.model_dump(exclude_unset=True))
     return _me(updated)
+
+
+class TokenIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    scope: str = Field(default="read", pattern="^(read|write)$")
+
+
+class TokenOut(BaseModel):
+    id: str
+    name: str
+    scope: str
+    prefix: str
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class TokenCreated(TokenOut):
+    # Returned **once**, at creation. Only the hash is stored, so there is no
+    # endpoint that can show it again — which is the property that makes a
+    # database backup not a list of live credentials.
+    token: str
+
+
+def _token_out(row) -> TokenOut:
+    return TokenOut(
+        id=str(row.id),
+        name=row.name,
+        scope=row.scope,
+        prefix=row.prefix,
+        last_used_at=row.last_used_at,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/me/tokens", response_model=list[TokenOut])
+async def list_tokens(user: CurrentUser, db: DbSession):
+    """Your access tokens. The secrets are not here and cannot be."""
+    return [_token_out(row) for row in await tokens_service.mine(db, user)]
+
+
+@router.post("/me/tokens", response_model=TokenCreated, status_code=status.HTTP_201_CREATED)
+async def create_token(body: TokenIn, user: CurrentUser, db: DbSession):
+    """Mint one. **The plaintext is in this response and nowhere else.**"""
+    row, plaintext = await tokens_service.create(db, user, name=body.name, scope=body.scope)
+    return TokenCreated(**_token_out(row).model_dump(), token=plaintext)
+
+
+@router.delete("/me/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_token(token_id: uuid.UUID, user: CurrentUser, db: DbSession):
+    """Immediate: the next call with it fails, because the lookup is by hash
+    and the row is gone."""
+    await tokens_service.revoke(db, user, token_id)
 
 
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)

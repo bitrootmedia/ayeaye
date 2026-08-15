@@ -81,7 +81,8 @@ from app.models.structure import (
     ProjectMember,
     TeamMember,
 )
-from app.models.task import PRIORITY_RANK, Task, TaskGrant
+from app.models.task import PRIORITY_RANK, STATUS_RANK, Task, TaskGrant
+from app.models.user import User
 
 # Ranks are what SQL compares; `_LEVEL_BY_RANK` turns the winner back into a
 # name on the way out. -1 means "no route at all", which is the 404 case.
@@ -389,6 +390,54 @@ def _priority_rank():
     return case(PRIORITY_RANK, value=Task.priority, else_=0)
 
 
+# What the list view may be sorted by. A closed set, because the value lands
+# in an ORDER BY: anything else is a 500 at best.
+SORTS = (
+    "title",
+    "project",
+    "created_at",
+    "updated_at",
+    "status",
+    "priority",
+    "owner",
+    "action_required",
+    "due_on",
+)
+
+
+def _sort_expression(sort: str):
+    """One column's ORDER BY term.
+
+    People and projects sort by **name**, not by id — an id ordering is
+    stable, meaningless, and looks broken. Correlated scalar subqueries rather
+    than joins, so the statement's shape doesn't change and the board can keep
+    sharing this builder.
+
+    Status and priority sort by **rank, not alphabetically**: "blocker,
+    in_progress, on_hold, review, todo" orders the spellings, not the work.
+    """
+    if sort == "project":
+        return (
+            select(Project.name)
+            .where(Project.id == Task.project_id)
+            .correlate(Task)
+            .scalar_subquery()
+        )
+    if sort in ("owner", "action_required"):
+        column = Task.owner_user_id if sort == "owner" else Task.action_required_user_id
+        return (
+            select(func.coalesce(User.display_name, User.email))
+            .where(User.id == column)
+            .correlate(Task)
+            .scalar_subquery()
+        )
+    if sort == "priority":
+        return _priority_rank()
+    if sort == "status":
+        return case(STATUS_RANK, value=Task.status, else_=0)
+    return getattr(Task, sort)
+
+
 def visible_tasks_stmt(
     *,
     user_id: uuid.UUID,
@@ -399,6 +448,12 @@ def visible_tasks_stmt(
     include_closed: bool = False,
     tag_id: uuid.UUID | None = None,
     include_off_board: bool = False,
+    status: str | None = None,
+    priority: str | None = None,
+    owner_user_id: uuid.UUID | None = None,
+    action_required_user_id: uuid.UUID | None = None,
+    sort: str | None = None,
+    descending: bool = False,
 ) -> Select:
     """Every task the user can see, with their level. Rule 4: one statement.
 
@@ -427,6 +482,14 @@ def visible_tasks_stmt(
         stmt = stmt.where(Task.project_id.is_(None))
     if not include_closed:
         stmt = stmt.where(Task.closed_at.is_(None))
+    if status is not None:
+        stmt = stmt.where(Task.status == status)
+    if priority is not None:
+        stmt = stmt.where(Task.priority == priority)
+    if owner_user_id is not None:
+        stmt = stmt.where(Task.owner_user_id == owner_user_id)
+    if action_required_user_id is not None:
+        stmt = stmt.where(Task.action_required_user_id == action_required_user_id)
     if tag_id is not None:
         # Imported here, not at module scope: `services/tags.py` imports this
         # module for `administers_organisation`, and at the top that is a
@@ -438,7 +501,81 @@ def visible_tasks_stmt(
         from app.services import tags as tags_service
 
         stmt = stmt.where(~tags_service.off_board_exists())
+    if sort in SORTS:
+        term = _sort_expression(sort)
+        # NULLs last either way: an unassigned task belongs at the bottom of a
+        # sort by owner, not at the top of it.
+        term = term.desc().nullslast() if descending else term.asc().nullslast()
+        # `Task.id` breaks ties — UUIDv7, so equal rows keep creation order
+        # rather than shuffling between pages of the same list.
+        stmt = stmt.order_by(None).order_by(term, Task.id)
     return stmt
+
+
+def paged_tasks_stmt(*, limit: int, offset: int, **kwargs) -> Select:
+    """One page of the list, **and the size of the whole thing**, in one query.
+
+    `COUNT(*) OVER ()` rather than a second `SELECT count(*)`: the access
+    expression is the expensive part and running it twice to learn a number is
+    the sort of thing that only shows up once there is data. The window is
+    computed over the full result set before `LIMIT` applies, which is exactly
+    the total a pager needs.
+    """
+    inner = visible_tasks_stmt(**kwargs)
+    sub = inner.add_columns(func.count().over().label("total")).subquery()
+    task = aliased(Task, sub)
+    return select(task, sub.c.level_rank, sub.c.total).limit(limit).offset(offset)
+
+
+def board_stmt(
+    *,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    org_role: str,
+    group_by: str,
+    per_group: int,
+    project_id: uuid.UUID | None = None,
+    loose_only: bool = False,
+    include_closed: bool = False,
+    tag_id: uuid.UUID | None = None,
+    include_off_board: bool = False,
+) -> Select:
+    """The board: the top `per_group` tasks in each column, **and each
+    column's real total**, in one statement.
+
+    A board can't use a plain `LIMIT`. Its rows are ordered by priority, so
+    the first 200 of 7,300 are all the criticals and four of the five columns
+    come back empty — the page would be bounded and also wrong. `ROW_NUMBER()`
+    partitioned by the grouping column bounds each column independently, and
+    `COUNT()` over the same partition is what lets a column say "50 of 812"
+    instead of quietly lying about how much work there is.
+
+    Both windows ride the same scan as the access expression, so this stays
+    one query however many columns there are.
+    """
+    inner = visible_tasks_stmt(
+        user_id=user_id,
+        org_id=org_id,
+        org_role=org_role,
+        project_id=project_id,
+        loose_only=loose_only,
+        include_closed=include_closed,
+        tag_id=tag_id,
+        include_off_board=include_off_board,
+    )
+    group_col = Task.priority if group_by == "priority" else Task.status
+    within = [_priority_rank().desc(), Task.position, Task.id]
+    sub = inner.add_columns(
+        func.row_number().over(partition_by=group_col, order_by=within).label("rn"),
+        func.count().over(partition_by=group_col).label("group_total"),
+    ).subquery()
+
+    task = aliased(Task, sub)
+    return (
+        select(task, sub.c.level_rank, sub.c.group_total)
+        .where(sub.c.rn <= per_group)
+        .order_by(sub.c.rn)
+    )
 
 
 def visible_task_ids_stmt(*, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:

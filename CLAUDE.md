@@ -81,8 +81,8 @@ reminders with a scheduler, the account screen, and an organisation dashboard.
 Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
-Verified by 229 infra-free unit tests, 441 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 83 browser tests in a real Chromium
+Verified by 229 infra-free unit tests, 507 end-to-end checks over HTTP
+(`./scripts/e2e-*.sh`) and 114 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -230,8 +230,26 @@ them apart.
 inside a loop. This is the discipline that makes the access model survive
 contact with real data.
 
+**A list that can grow is paged, and says what it is a page of.** `/tasks`
+takes `limit`/`offset` and returns `X-Total-Count`; the board has its own
+endpoint because a board **cannot** be paged with `LIMIT` — its rows come back
+priority-first, so the first N of several thousand are all criticals and four
+columns arrive empty. `access.board_stmt` bounds each column with
+`ROW_NUMBER() OVER (PARTITION BY …)` and reports each column's real size with
+`COUNT() OVER (…)`, in the same statement. There is **no default limit**: a
+silent cap is worse than a big response, because the caller believes they have
+everything.
+
 **Routers are thin.** HTTP in `api/routers/`, logic in `services/`. `main.py`
 assembles and does nothing else, so it doesn't grow as the API does.
+
+**The rail's organisation is not the URL's.** Your notifications, reminders,
+account and the organisations list all sit outside any organisation — but you
+are still *working in* one, and dropping the whole nav section the moment you
+glance at a list leaves no way back except clicking through it. `railOrg`
+falls back to the last one you were in; the header still describes the *page*,
+so the two don't contradict each other. Search follows the rail for the same
+reason: if the nav claims an organisation, ⌘K has to search it.
 
 **Sans for interface, mono for data.** Every id, duration, timestamp and figure
 is `font-mono` with tabular figures so columns line up. Time tracking makes
@@ -245,6 +263,25 @@ confetti, and the dot keeps the label at full contrast.
 amber (in review) across the whole product. Anything else that needs a scale
 gets shape instead — priority is six chevrons, with colour on the top two
 only. Add a second full colour scale and red stops meaning "this needs you".
+
+**The list is a table; the board is cards.** They answer different questions,
+so they are not two skins on one component: the table shows task, project,
+status, priority, owner, action-required, created and updated, every column
+sortable, with filters above it. **Sorting and filtering are the server's
+job** — the list is a page, so ordering in the browser would only order the
+hundred rows it happens to be holding. Both live in the URL, so a view
+somebody arrived at is one they can send to a colleague.
+
+**Status and priority sort by rank, never alphabetically.** "blocker,
+in_progress, on_hold, review, todo" orders the spellings, not the work.
+`STATUS_RANK` and `PRIORITY_RANK` are the only places that order is written
+down. People and projects sort by *name*, not id, through correlated scalar
+subqueries — a join would change the statement's shape and the board shares
+the builder.
+
+**An unknown sort key is ignored, not rejected.** The value comes from a URL
+people edit and share; a link naming a column that no longer exists should
+show the default order, not an error page.
 
 **A field that can grow uses `EntityPicker`, not a `Select`.** Projects and
 people are unbounded; a native-feeling dropdown you can only scroll is fine at
@@ -451,6 +488,99 @@ on a shared machine must not be enough to lock its owner out of their account.
 SuperTokens owns the password policy and its rejection is passed straight
 through; restating it here would be two rules that can disagree.
 
+## Rich task descriptions
+
+Read `services/richtext.py`. A description is **sanitised HTML** now, and that
+one change touches three things people don't expect:
+
+**The client is never trusted.** The editor emits tidy markup and that is
+irrelevant — anyone can `PATCH` a `<script>` with curl, and the next person to
+open the task runs it. Every write goes through `sanitise()` and an
+**allow-list**, because a block-list is a list of the attacks somebody already
+thought of. `dangerouslySetInnerHTML` in `RichText` is safe *only* because of
+this; don't point it at anything that hasn't been through that function.
+
+**Search must not match markup.** `ILIKE '%div%'` against stored HTML matches
+every task in the database, and snippets would show tags instead of prose.
+`tasks.description_text` is a **generated column** — Postgres strips the tags,
+so it cannot drift the way a column maintained in Python would, needs no
+backfill and no second write path. Search and snippets read it; nothing else
+does. `regexp_replace` is immutable, which is what makes it indexable.
+
+**An image is an attachment, not a URL.** A presigned URL expires, so storing
+one would fill a description with dead images within the hour. The body holds
+`data-attachment-id` and nothing else; the server mints a fresh URL per read,
+batched per page. Two consequences worth having: a `src` from the client is
+*dropped*, so a description can't load a tracking pixel from someone else's
+server — and a pasted screenshot is a task attachment like any other, so it
+turns up in the Files panel with no second mechanism.
+
+Things that will bite:
+
+- **Tiptap's `Image` node silently drops unknown attributes.** `TaskImage`
+  re-declares `data-attachment-id` with `parseHTML`/`renderHTML`; without it
+  the id survives exactly until the first round trip and every picture goes
+  blank.
+- **The editor keeps the URL that `confirm` returned.** The body stores only
+  the id and the server adds `src` on read — so before the first save there is
+  nothing to display, and a freshly pasted screenshot rendered as its own alt
+  text. An upload that worked, looking exactly like one that hadn't. The copy
+  is for the current editing session only; `sanitise()` drops `src` on write,
+  so nothing stale is ever stored.
+- **A toolbar button must `preventDefault` on mousedown.** Otherwise clicking
+  it blurs the editor, the chain's `.focus()` restores it a tick later, and
+  the first character typed afterwards is swallowed — it cost the first letter
+  of every emphasised word.
+- **Old descriptions are plain text and stay that way.** A one-way conversion
+  of everybody's data, to fix rendering, is a trade nobody asked for. `RichText`
+  detects the absence of `<` and renders with `whitespace-pre-wrap`.
+- **No font families and no text colours.** Colour in this product means
+  status; a description that can paint itself red can imitate "blocked". Code
+  blocks are the exception — there the colour carries syntax.
+
+## MCP — somebody's own assistant
+
+Read `app/mcp/server.py`. **Every tool resolves through `services/access.py`,
+as the token's owner** — there is deliberately not a single `select()` in that
+module. A query written there would be a second access path, and the moment
+there are two, one of them is wrong and nobody knows which. `scripts/e2e-mcp.sh`
+proves the refusals: a stranger's token, an org admin against a hidden task,
+and a read-only token against every write.
+
+**Personal access tokens, not OAuth and not the session cookie.** An MCP client
+is not a browser, and a self-hosted installation should not have to run an
+authorisation server to let one person connect one assistant. The token is the
+authority, so it is shown once, SHA-256 at rest, scoped `read`/`write`, and
+revocable from the screen that made it. `require_write` is the single place a
+read-only token is turned away.
+
+Four things cost real time here, all of them non-obvious:
+
+- **There are two classes called `Context` in the SDK.** The tool decorator
+  only recognises `mcp.server.mcpserver.context.Context`; passing the other
+  type-checks fine and then fails at registration with a Pydantic
+  `IsInstanceSchema` error that says nothing about the actual mistake.
+- **`Mount` never matches its own bare path.** Mounting the transport at
+  `/mcp` puts the endpoint at `/mcp/`, and a POST to `/mcp` gets a 307 that
+  the client doesn't follow — surfacing as "Unexpected content type:", the
+  empty body of the redirect. `MCPPath` in `main.py` rewrites the one path.
+- **DNS-rebinding protection defaults to 127.0.0.1.** Behind Caddy the Host is
+  whatever `SITE_URL` says, so every call is refused with "Invalid Host
+  header", which reads like a proxy fault. `SITE_URL` feeds it, as it feeds
+  everything else.
+- **Stateless, on purpose.** A stateful transport hands out a session id and
+  expects the next call to reach the worker that issued it — but uvicorn runs
+  several and nothing is shared. Same reasoning as putting realtime through
+  Redis; here the cheaper answer is to need no session at all.
+
+**A warning about testing it from a shell.** `e2e-mcp.sh` builds every payload
+with `python3 -c json.dumps`, never with escaped quotes inside a shell string.
+The inline form silently mangled the request for the calls with the most
+arguments — the shell passed a fragment, the server correctly answered
+"Parse error", and the harness's own helper swallowed it. It looked exactly
+like MCP was losing writes, and it cost an hour of hunting a bug that was
+never in the product.
+
 ## Self-hosting
 
 The bar from PLAN.md §8, and how each part is held:
@@ -572,6 +702,23 @@ staged and never sent is not on the task.
 removing one from underneath would leave a message pointing at nothing. Delete
 the comment instead. The UI omits the button rather than showing one that 403s.
 
+**Both upload points take a drop** — the task's Files panel and the comment
+composer, via `hooks/use-file-drop.ts`. Three things there are load-bearing:
+
+- **`dragleave` fires when the pointer crosses onto a child**, so the hook
+  counts depth (enter increments, leave decrements, zero means out). Without
+  it the highlight strobes as you move across the panel.
+- **`dragover` must `preventDefault()` on every event**, not just the first,
+  or the browser refuses the drop and the drag just ends.
+- **`main.tsx` cancels `dragover`/`drop` on the window.** Missing a drop
+  target by twenty pixels is the normal case, and the browser's default for a
+  dropped file is to *open* it — throwing away a half-written comment and
+  everything else on the page.
+
+Multiple files upload sequentially: there is one progress bar, and four
+parallel uploads on a phone connection is four slow ones rather than one fast
+one.
+
 **Thumbnails are a worker job** (`tasks/thumbnails.py`, Pillow, 480px max
 edge, EXIF transposed, alpha flattened onto white). `thumbnail_url` being
 `None` is a real answer — the job may not have run yet, or it isn't an image —
@@ -659,6 +806,56 @@ its apps were on other origins. Note `#HttpOnly_` when reading a curl cookie
 jar in a test: skipping every line starting with `#` drops exactly the session
 cookie.
 
+**The board is live too, but coalesced.** It watches `org:<id>` rather than
+every card on it — hundreds of registrations per tab otherwise — and collects
+events for 1.5s before refetching, skipping the refresh entirely while the tab
+is hidden. The task screen refetches immediately, because it is one task and
+one small response; a board is the opposite.
+
+**`updated_at` is "last activity", not "last row update".** A comment, a file,
+a tag, an hour logged — none of those touch the `tasks` row, so the column
+would otherwise answer a question nobody asks. `announce()` stamps it and
+publishes in one call, deliberately: same trigger, same call sites, and
+splitting them means somebody adds a seventh kind of change and remembers one.
+
+**A private note never calls it**, and that is the point — a note nobody else
+can read must not announce itself through a timestamp everybody can see, which
+would leak through the back door exactly what the feature promises to keep.
+Reminders are personal in the same way and are left out for the same reason.
+`scripts/e2e-tasks.sh` asserts both directions.
+
+**Tasks ride the same channel.** Anything that changes a task publishes
+`{"type": "task", "task_id": …}` and the screen refetches — status, priority,
+due date, project, tags, files, grants, time entries, hide/unhide. Three
+things hold it together:
+
+- **`tasks_service.announce()` is called from every mutation, after the
+  commit.** There is no single choke point (tags and files are edited from
+  their own routers, time from `time_tracking`), so the rule is simply "if it
+  writes to a task, it announces". A missing call is a screen that quietly
+  stops updating.
+- **The client never branches on `change`.** It is there for the log. A screen
+  that only refreshes for the kinds it recognises stops refreshing the day
+  somebody adds a sixth one, and nothing fails loudly.
+- **Losing access arrives as a 404.** Hiding a task pings its watchers; their
+  refetch is what discovers the access is gone. That is the no-content rule
+  paying for itself — the event says only "task X moved", so it is safe to
+  send to someone who may no longer read it.
+
+**One socket per tab, refcounted in `use-realtime.ts`.** A task screen has two
+subscribers (the thread and the task), and the socket **lingers 250ms** after
+the last one leaves. That is not a micro-optimisation: effects unmount and
+remount around a render — twice over in StrictMode — and closing on the exact
+moment the count hit zero opened three connections per page and dropped any
+event that landed in the gap. It showed up as a change reaching the other tab
+*most* of the time.
+
+A test for this is easy to write so that it cannot fail. The first version of
+the board test asserted the word "Blocked" appeared — which is a column
+heading, on screen either way. It passed while the board was receiving
+nothing at all. **Assert on the card's column**, and check a live test fails
+when you remove the subscription.
+
 Notification debouncing: a comment notifies only when the recipient has nothing
 unread in that thread already. It fails silently in both directions — too eager
 and a back-and-forth is one email per line, too lazy and the notification
@@ -711,6 +908,16 @@ Things that bite:
 
 Read the `services/search.py` docstring before proposing a search engine.
 
+**Fuzzy matching must be written as an operator.** `word_similarity(q, col) >
+0.3` and `col %> q` are the same test to a reader and completely different to
+the planner: only the operator can be served by the GIN trigram index. Two
+details un-index it again if you get them wrong — the **column goes on the
+left**, and there must be **no `coalesce()`** around it. Measured on 10,000
+tasks: search went from ~450ms to ~80ms. `%>` reads its threshold from
+`pg_trgm.word_similarity_threshold`, which `apply_threshold()` sets per
+transaction; without that call the default 0.6 applies and typo tolerance
+quietly halves.
+
 **The deciding factor is permissions, not scale.** What a person may see is
 computed across five tables. Handing that to Typesense/Meilisearch/Elastic
 means either denormalising an ACL onto every document — where one team-
@@ -725,7 +932,8 @@ nothing to reindex.
 
 `pg_trgm` (migration 0005) supplies both halves: GIN indexes that make
 `ILIKE '%…%'` an index lookup rather than a scan, and `word_similarity()` for
-typo tolerance. Measured at **~20 ms per search** end to end including HTTP.
+typo tolerance. Measured at **~20 ms** on a small database and **~80 ms across 10,000 tasks**,
+end to end including HTTP.
 
 **Revisit when** — genuinely, not never: cross-organisation search (no per-org
 filter to prune with), ranking over message bodies past ~1M documents, or
@@ -881,6 +1089,15 @@ Read these before starting Phase 6.
   `compose.override.yml` pins `SMTP_HOST: mailpit` / `SMTP_PORT: 1025`
   literally — with the indirection, dev inherited the production port 587 and
   every message failed to connect. Anything dev must force, force literally.
+- **A new frontend dependency needs the node_modules *volume* recreated, not
+  just a rebuild.** `compose.override.yml` shadows `/app/node_modules` with a
+  named volume so the container's Linux-native install survives the bind
+  mount — and Docker only seeds a named volume when it is empty. Rebuilding
+  the image changes nothing; Vite then fails with "Failed to resolve import"
+  for a package that is plainly in `package.json`.
+  `docker volume rm ayeayecaptain_web_node_modules` and bring it up again.
+  The API has no equivalent: its venv lives in the image, so a rebuild is
+  enough.
 - **Dev images carry their own tags** (`ayeayecaptain-web-dev`, `-api-dev`, …).
   Base and override build *different Dockerfiles*, and `docker compose up -d`
   reuses an existing image rather than rebuilding — so with one shared tag, a
@@ -908,6 +1125,21 @@ Read these before starting Phase 6.
   per-run name in `scripts/e2e-organisations.sh`.
 - **`noUnusedLocals` is on**, and shadcn sometimes generates an unused `React`
   import. One-line fix when it happens; worth keeping the check.
+- **The whole app is inside an `ErrorBoundary`, and it earned its place.** A
+  render error unmounts the *entire* React tree — not the component, not the
+  screen — leaving a white page with no rail and nothing to click. That is
+  what "the site goes to localhost and shows nothing" means when somebody
+  reports it. `/__crash` is a dev-only route that throws so the boundary can
+  be tested rather than assumed; `import.meta.env.DEV` is a compile-time
+  constant, so it and its component vanish from a production build.
+- **Base UI's `DropdownMenuLabel` must be inside a `DropdownMenuGroup`.** It
+  reads a context only `Menu.Group` provides and *throws* on open otherwise.
+  The organisation switcher had it as a sibling, so the first click anybody
+  ever gave it blanked the product — through a hundred green browser tests,
+  none of which had opened a menu.
+- **The breadcrumb separator is a sibling of the item, not a child.** Both
+  render `<li>`, and nesting them is invalid HTML that React logs on every
+  screen with a breadcrumb.
 - **`EntityPicker` binds Escape in the *capture* phase and stops it there.**
   It is used inside dialogs, which close on Escape themselves; in the bubble
   phase both fire, so dismissing the list also discards the half-typed task
@@ -942,6 +1174,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
+./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 
