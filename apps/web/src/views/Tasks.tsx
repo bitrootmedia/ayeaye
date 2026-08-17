@@ -10,7 +10,7 @@ import {
   SignalIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, api, apiWithHeaders } from "@/api";
 import type { Shell } from "@/App";
@@ -666,6 +666,7 @@ function NewTaskDialog({
   onCreated: () => Promise<void>;
 }) {
   const toast = useToastManager();
+  const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<TaskStatus>("todo");
@@ -694,7 +695,7 @@ function NewTaskDialog({
     if (!title.trim() || busy) return;
     setBusy(true);
     try {
-      await api(`/organisations/${orgId}/tasks`, {
+      const created = await api<Task>(`/organisations/${orgId}/tasks`, {
         method: "POST",
         body: JSON.stringify({
           title: title.trim(),
@@ -710,6 +711,19 @@ function NewTaskDialog({
       setPriority("normal");
       onOpenChange(false);
       await onCreated();
+      // The dialog deliberately doesn't jump to the task it just made — you're
+      // usually adding several in a row — so this is the only way back to it
+      // without hunting through the list. Ten seconds, not the default five:
+      // it's the one toast in the product somebody might read *after* typing
+      // the next task's title rather than the instant it appears.
+      toast.add({
+        title: `Task "${created.title}" was created`,
+        timeout: 10_000,
+        actionProps: {
+          children: "Open",
+          onClick: () => navigate(`/orgs/${orgId}/tasks/${created.id}`),
+        },
+      });
     } catch (err) {
       const detail =
         err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";

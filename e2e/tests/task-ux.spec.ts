@@ -257,3 +257,28 @@ test.describe("the files panel", () => {
     await expect(page.getByText("Nothing attached yet")).toBeVisible();
   });
 });
+
+test.describe("creating a task", () => {
+  test("shows a toast naming it, with a way straight to it", async ({ page }) => {
+    await signUp(page, uniqueEmail("ct"));
+    const orgId = await createOrg(page, `Created ${Date.now()}`);
+    await page.goto(`/orgs/${orgId}/tasks`);
+
+    await page.getByRole("button", { name: "New task" }).first().click();
+    await page.getByLabel("Title").fill("Order the antifoul");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+
+    const createdToast = toast(page, 'Task "Order the antifoul" was created');
+    await expect(createdToast).toBeVisible();
+
+    // Ten seconds, not the library default of five — long enough to still be
+    // there after typing the next task's title, which is the ordinary case
+    // right after creating one.
+    await page.waitForTimeout(6_000);
+    await expect(createdToast).toBeVisible();
+
+    await page.getByRole("button", { name: "Open" }).click();
+    await page.waitForURL(/\/orgs\/[0-9a-f-]+\/tasks\/[0-9a-f-]+$/);
+    await expect(page.getByRole("heading", { name: "Order the antifoul" })).toBeVisible();
+  });
+});

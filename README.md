@@ -118,6 +118,35 @@ bundle contains no domain at all, so the same image runs anywhere.
 share an origin, which is why the session cookie is first-party, why there is no
 CORS to configure, and why you need exactly one DNS record and one certificate.
 
+## Bring your own Postgres or S3
+
+The default runs both in this stack. If you already have a managed database or
+an S3-compatible bucket, answer a few questions instead of hand-editing `.env`:
+
+```bash
+./scripts/setup-interactive.sh
+docker compose up -d
+```
+
+It's the one place this project asks you anything at a prompt —
+`scripts/setup.sh` stays script-friendly for everyone else. Say yes to
+"managed Postgres" or "managed storage" for either piece and it writes the
+right `DATABASE_URL` / `S3_ENDPOINT` and drops that piece from
+`COMPOSE_PROFILES`, so `docker compose up -d` simply never starts a `postgres`
+or `rustfs` container it doesn't need — one command either way, nothing to
+remember to pass.
+
+Two things it can't do for you, because they happen on the other side:
+
+- **SuperTokens needs its own database on the same server**, never the app's.
+  The prompt tells you the one line to run once: `CREATE DATABASE supertokens;`.
+- **A managed bucket is a different origin from your site**, so uploads are no
+  longer same-origin the way the bundled RustFS is. Add a CORS rule on the
+  bucket allowing `PUT`/`GET` from `SITE_URL`, or every upload fails in the
+  browser before it reaches storage. And this product signs storage requests
+  path-style only — real AWS S3 refuses that in any region opened after 2020,
+  so pick a provider or region that still allows it.
+
 ## Email is optional
 
 With `SMTP_HOST` empty the app logs what it would have sent and carries on. That

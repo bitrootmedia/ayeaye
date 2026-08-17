@@ -38,6 +38,15 @@ test("photograph the product", async ({ page }) => {
   const owner = uniqueEmail("shot");
   const mate = uniqueEmail("mate");
 
+  // The front door first: it's the only screen a stranger sees, so it's the
+  // one most worth looking at, and the last one anybody thinks to check.
+  await page.goto("/");
+  await shot(page, "00-landing");
+  await page.evaluate(() => localStorage.setItem("ui-theme", "dark"));
+  await page.reload();
+  await shot(page, "00-landing-dark");
+  await page.evaluate(() => localStorage.setItem("ui-theme", "light"));
+
   await page.goto("/auth?show=signup");
   await page.getByText("Sign Up", { exact: true }).first().waitFor();
   await shot(page, "01-sign-up");

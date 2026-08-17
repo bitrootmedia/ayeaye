@@ -139,7 +139,9 @@ test.describe("loose tasks", () => {
     // page nobody opens.
     await expect(page.getByText(/visible only to you/)).toBeVisible();
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByText("Private note")).toBeVisible();
+    // By role, not by text: creating a task now also raises a toast titled
+    // 'Task "Private note" was created', which matches the same text.
+    await expect(page.getByRole("link", { name: "Private note" })).toBeVisible();
 
     await them.goto(`/orgs/${orgId}/tasks`);
     await expect(them.getByText("Private note")).toHaveCount(0);

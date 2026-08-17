@@ -81,8 +81,8 @@ reminders with a scheduler, the account screen, and an organisation dashboard.
 Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
-Verified by 229 infra-free unit tests, 507 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 114 browser tests in a real Chromium
+Verified by 229 infra-free unit tests, 534 end-to-end checks over HTTP
+(`./scripts/e2e-*.sh`) and 121 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -611,6 +611,82 @@ actually happened in this stack. One is worth repeating: **`/media/` returning
 403 proves RustFS replied; a 200 means the SPA catch-all swallowed the route
 and every attachment is quietly broken.
 
+### Bringing your own Postgres or S3
+
+`docker-compose.yml` is still the ONE file — decision 3 doesn't bend for this.
+`postgres` and `rustfs` each carry a Compose **profile**
+(`local-db`, `local-storage`), read from `COMPOSE_PROFILES` in `.env`, and
+every other service reaches them through `DATABASE_URL` /
+`SUPERTOKENS_DATABASE_URL` / `S3_*` — plain connection details, never a
+hardcoded `postgres` or `rustfs` hostname. Dropping a profile is a `.env`
+change, not a fork of the compose file, and `docker compose up -d` stays the
+one correct command in every configuration.
+
+Two Compose behaviours make this work, and both are non-obvious enough to
+re-break if the file is edited casually:
+
+- **`depends_on` needs `required: false` on the profiled dependency**, not
+  just the profile itself. `api` (always on) naming `postgres` (sometimes
+  absent) as a dependency is otherwise `invalid compose project` even when the
+  profile that would start `postgres` is inactive — Compose refuses to
+  generate the config at all, not just to wait for a container that isn't
+  coming. `required: false` is what turns "wait for it" into "wait for it if
+  it exists."
+- **A required variable (`${VAR:?...}`) is checked for every service in the
+  file, active profile or not.** `postgres`'s own `POSTGRES_PASSWORD` and
+  `rustfs`'s own `RUSTFS_SECRET_KEY` therefore can't be `:?` — a managed
+  deployment that never starts either container would still fail
+  interpolation on a variable it has no reason to set. They're soft-defaulted
+  instead; the vars that actually matter regardless of mode (`DATABASE_URL`,
+  `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`) stay `:?`, because those
+  are read by services that are always on.
+
+**Two separate credential pairs for storage, on purpose.** `S3_ACCESS_KEY` /
+`S3_SECRET_KEY` describe whatever storage the app is actually configured to
+use; `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` are only the bundled
+container's own init credentials. In the default local setup they're the same
+value twice — `scripts/setup.sh` generates one secret and writes it under both
+names — but a managed bucket only ever touches the first pair, and the second
+sits there unused rather than becoming ambiguous about which box it describes.
+
+**`scripts/setup.sh` stays non-interactive**, exactly as before — nothing
+above changes what it writes for the plain default. `scripts/setup-interactive.sh`
+is the new, separate entry point for a person at a terminal who already has a
+connection string to type in; it computes the same variables by asking rather
+than generating. Both are checked against `.env.example` for exact key parity
+— `diagnose.sh`'s "your `.env` is missing variables a newer release expects"
+check depends on that staying true.
+
+**`diagnose.sh` reads `COMPOSE_PROFILES` before judging anything.** Container
+checks, the secret-looks-like-the-example checks, and the Data section all
+skip `postgres`/`rustfs`-shaped questions when that profile is off — a managed
+database was never `.env`'s password to judge, and `docker compose exec
+postgres` on a service that was never asked to exist isn't a health check,
+it's a crash.
+
+## The front door
+
+`views/Landing.tsx` is the **only screen a signed-out visitor can reach**, and
+`Root` in `main.tsx` is what decides that. It sits in front of the whole app
+route, so the pathname test is load-bearing: **only the bare `/` is public**.
+Every deeper URL still falls through to `SessionAuth`, which is what carries
+`redirectToPath` and lands somebody on the page they were actually following
+after they sign in. Drop the test and every "please sign in" becomes a
+marketing page with the original link thrown away.
+
+Two things follow from it being outside the shell:
+
+- **It fetches nothing.** No `/me`, no rail, no session-dependent copy — so it
+  renders with the API down, which is exactly the state a self-hoster is in
+  when they first load it.
+- **It restates no colours**, same rule as the auth screens. Every value comes
+  from the tokens, so it follows dark mode and a palette change on its own. A
+  landing page with its own accent is a second scale, and status owns the only
+  red and the only amber.
+
+Every claim on it is true of the code, deliberately. It is the first thing a
+new person can check you on.
+
 ## The auth screens
 
 SuperTokens' pre-built UI ships its own look, and left alone it is the first
@@ -861,6 +937,60 @@ unread in that thread already. It fails silently in both directions — too eage
 and a back-and-forth is one email per line, too lazy and the notification
 nobody got is the one that mattered — so `scripts/e2e-comments.sh` tests both
 sides of it.
+
+## The day planner
+
+Read the `services/planner.py` docstring. A personal board over the tasks a
+person can see — a pool of open, unplanned work, and five fixed buckets
+(Today, Tomorrow, This week, Next week, Someday, in that urgency-decreasing
+order — the same convention as `STATUS_RANK`/`PRIORITY_RANK`: a fixed set
+ordered by what it means, not by spelling). Deliberately **not on the Task
+model at all** — `planner_entries` is a new, additive table, one row per
+(task, user), and "unplanned" is the absence of a row rather than a sixth
+bucket.
+
+**Yours, or an organisation admin's override — the shape of time entries, not
+notes.** Private notes have no override at all; this isn't that private. An
+admin may view and rearrange *any* member's planner, reusing
+`access.administers_organisation` exactly as everywhere else that escape hatch
+already exists. What the override does **not** do is widen the target's own
+access: every read and write resolves visibility against the *target* user's
+membership and role, never the caller's — an admin cannot place a task into
+someone else's bucket that person couldn't otherwise see (404, the same
+"no access reads as 404" rule as everywhere else), and a task hidden from the
+target disappears from their planner exactly as it disappears from their
+board, admin's view included.
+
+**A `planner_entries` row outlives whatever access justified it**, the same
+as a note or a reminder — nothing deletes it when a grant is revoked or a task
+is hidden. The bucket read has to re-apply `visible_task_ids_stmt` for that
+reason; trusting the join alone would let a hidden task stay visible in its
+own bucket, which for an admin viewing someone else's planner is a real leak,
+not a cosmetic one. This is the one thing `scripts/e2e-planner.sh` has a
+dedicated regression case for, and it's worth re-reading if this file is ever
+touched: removing that re-check makes the test fail, which is the point of it.
+
+No realtime channel, on purpose — like notes and reminders, this is refetch-
+after-mutation, not a socket. `position` is a plain integer, the same
+no-resequencing convention as `Task.position`: the client computes a value
+(the midpoint of its new neighbours, or ±1000 at an end) once per drop, and
+nothing server-side ever renumbers a bucket.
+
+The frontend's drag-and-drop is `@dnd-kit` — the first dependency of its kind
+in this codebase, chosen for a first-class keyboard sensor. That sensor isn't
+a nicety: `e2e/tests/planner.spec.ts` drives the actual reorder through
+keyboard events rather than synthetic pointer movement, because dnd-kit's
+mouse sensor is pointer-event-driven and genuinely flaky to script through
+Playwright's `mouse.move` steps. Two things cost real time writing that test:
+**a bare Space/ArrowRight/Space sequence races dnd-kit's own collision-state
+update**, which lands on the next animation frame rather than synchronously
+with the keydown — a short pause after each key is what the interaction
+actually needs, not a Playwright quirk. And **which bucket a single
+`ArrowRight` lands on is dnd-kit's own spatial collision algorithm**, not a
+product decision worth pinning in a test — asserting "left the pool, landed
+in *some* bucket, survives a reload" is the honest claim; asserting "landed
+in Today specifically" is asserting an implementation detail that has no
+product meaning.
 
 ## Time tracking
 
@@ -1175,6 +1305,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
+./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

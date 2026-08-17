@@ -13,6 +13,7 @@ from app.api.routers import (
     invites,
     notifications,
     organisations,
+    planner,
     reminders,
     structure,
     tasks,
@@ -52,6 +53,11 @@ api_router.include_router(tasks.router)
 
 # Time logged against those tasks, plus the rollups.
 api_router.include_router(time.router)
+
+# A personal day plan over the tasks a person can see. Organisation-scoped
+# like Tasks; the admin escape hatch is time entries' shape, not notes' —
+# see services/planner.py.
+api_router.include_router(planner.router)
 
 # Comment threads on tasks and projects. There is no separate comment system —
 # these ARE the conversations, which is what makes attachments, voice notes and

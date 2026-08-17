@@ -9,6 +9,7 @@ from app.models.conversation import (
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.organisation import Organisation, OrganisationMember
+from app.models.planner import PlannerEntry
 from app.models.presence import Announcement, OutOfOffice
 from app.models.reminder import Reminder
 from app.models.structure import (
@@ -35,6 +36,7 @@ __all__ = [
     "PersonalAccessToken",
     "OutOfOffice",
     "OrganisationMember",
+    "PlannerEntry",
     "Project",
     "ProjectGroup",
     "ProjectMember",

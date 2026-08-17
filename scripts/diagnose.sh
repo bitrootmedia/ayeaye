@@ -54,18 +54,38 @@ else
     *) hard "SITE_URL needs a scheme — Caddy uses it to decide about certificates" ;;
   esac
 
+  # Which of the bundled containers this deployment actually uses. Everything
+  # below has to ask this before treating "postgres isn't running" or
+  # "POSTGRES_PASSWORD looks like the example" as a problem — for a managed
+  # database or bucket, neither is.
+  PROFILES=$(grep -E '^COMPOSE_PROFILES=' .env | cut -d= -f2-)
+  case ",$PROFILES," in *,local-db,*) LOCAL_DB=1 ;; *) LOCAL_DB=0 ;; esac
+  case ",$PROFILES," in *,local-storage,*) LOCAL_STORAGE=1 ;; *) LOCAL_STORAGE=0 ;; esac
+  [ "$LOCAL_DB" = 1 ] && say "database: bundled Postgres" || say "database: managed (DATABASE_URL)"
+  [ "$LOCAL_STORAGE" = 1 ] && say "storage: bundled RustFS" || say "storage: managed (S3_ENDPOINT)"
+
   # Shipping the example values to the internet is the failure this whole
-  # script exists to catch early.
-  for var in POSTGRES_PASSWORD S3_SECRET_KEY SUPERTOKENS_API_KEY; do
-    value=$(grep -E "^$var=" .env | cut -d= -f2-)
+  # script exists to catch early. Only for what's actually load-bearing in
+  # THIS deployment: a managed database's own password was never .env's to
+  # check, and DATABASE_URL / S3_ENDPOINT cover it either way.
+  check_secret() {  # check_secret VAR
+    value=$(grep -E "^$1=" .env | cut -d= -f2-)
     case "$value" in
       *dev-only*|*change-me*|"")
         case "$SITE_URL" in
-          https://*) hard "$var is still an example value on a public site" ;;
-          *) soft "$var is an example value (fine on localhost, not on a domain)" ;;
+          https://*) hard "$1 is still an example value on a public site" ;;
+          *) soft "$1 is an example value (fine on localhost, not on a domain)" ;;
         esac ;;
-      *) good "$var is set to something of your own" ;;
+      *) good "$1 is set to something of your own" ;;
     esac
+  }
+  [ "$LOCAL_DB" = 1 ] && check_secret POSTGRES_PASSWORD
+  [ "$LOCAL_STORAGE" = 1 ] && check_secret RUSTFS_SECRET_KEY
+  check_secret S3_SECRET_KEY
+  check_secret SUPERTOKENS_API_KEY
+  for var in DATABASE_URL SUPERTOKENS_DATABASE_URL S3_ENDPOINT; do
+    value=$(grep -E "^$var=" .env | cut -d= -f2-)
+    [ -n "$value" ] && good "$var is set" || hard "$var is empty — nothing can reach the database or storage"
   done
 fi
 
@@ -73,7 +93,9 @@ head_ "Containers"
 if ! docker compose ps --format '{{.Service}}' >/dev/null 2>&1; then
   hard "cannot talk to this project's containers — is the daemon running?"
 else
-  expected="caddy api worker scheduler web postgres redis supertokens rustfs"
+  expected="caddy api worker scheduler web redis supertokens"
+  [ "${LOCAL_DB:-1}" = 1 ] && expected="$expected postgres"
+  [ "${LOCAL_STORAGE:-1}" = 1 ] && expected="$expected rustfs"
   running=$(docker compose ps --status running --format '{{.Service}}' 2>/dev/null | tr '\n' ' ')
   for service in $expected; do
     case " $running " in
@@ -118,26 +140,37 @@ case "$storage" in
 esac
 
 head_ "Data"
-if docker compose exec -T postgres pg_isready -U "$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2- || echo app)" >/dev/null 2>&1; then
-  good "postgres is accepting connections"
-  # Both databases have to exist. init.sql only runs on an empty data
-  # directory, so a stale volume silently skips creating the second one.
-  dbs=$(docker compose exec -T postgres psql -U app -tAc "select datname from pg_database" 2>/dev/null | tr '\n' ' ')
-  case " $dbs " in
-    *" supertokens "*) good "the supertokens database exists" ;;
-    *) hard "the supertokens database is missing — init.sql only runs on an empty volume" ;;
-  esac
-  version=$(docker compose exec -T postgres psql -U app -d app -tAc "select version_num from alembic_version" 2>/dev/null | tr -d '\r')
-  [ -n "$version" ] && good "schema at $version" || soft "no alembic_version row — has migrate run?"
+if [ "${LOCAL_DB:-1}" = 1 ]; then
+  if docker compose exec -T postgres pg_isready -U "$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2- || echo app)" >/dev/null 2>&1; then
+    good "postgres is accepting connections"
+    # Both databases have to exist. init.sql only runs on an empty data
+    # directory, so a stale volume silently skips creating the second one.
+    dbs=$(docker compose exec -T postgres psql -U app -tAc "select datname from pg_database" 2>/dev/null | tr '\n' ' ')
+    case " $dbs " in
+      *" supertokens "*) good "the supertokens database exists" ;;
+      *) hard "the supertokens database is missing — init.sql only runs on an empty volume" ;;
+    esac
+    version=$(docker compose exec -T postgres psql -U app -d app -tAc "select version_num from alembic_version" 2>/dev/null | tr -d '\r')
+    [ -n "$version" ] && good "schema at $version" || soft "no alembic_version row — has migrate run?"
+  else
+    hard "postgres is not accepting connections"
+  fi
 else
-  hard "postgres is not accepting connections"
+  # Nothing local to reach into — this script is read-only and doesn't carry
+  # a Postgres client of its own, so a managed instance's own health is
+  # between it and its provider. `migrate`'s exit code (Containers, above) is
+  # still the real signal for whether the schema applied.
+  say "database is managed — not checked directly; see migrate's exit code above"
 fi
 
 for volume in postgres_data rustfs_data; do
+  profile_var="LOCAL_DB"; [ "$volume" = "rustfs_data" ] && profile_var="LOCAL_STORAGE"
   if docker volume inspect "ayeayecaptain_$volume" >/dev/null 2>&1; then
     good "volume $volume exists"
-  else
+  elif [ "${!profile_var:-1}" = 1 ]; then
     soft "volume $volume does not exist yet"
+  else
+    good "volume $volume does not exist (storage is managed elsewhere, as configured)"
   fi
 done
 

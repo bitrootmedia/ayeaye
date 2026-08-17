@@ -5,6 +5,7 @@
 # What changes here, and nothing else:
 #   * source is bind-mounted and both Python and Vite reload on save;
 #   * Mailpit catches every outbound email;
+#   * pgweb browses the database at http://localhost:8081;
 #   * Postgres and the API's own port are published, for psql and /docs.
 #
 # What deliberately does NOT change: the single origin. The Vite dev server is
@@ -113,6 +114,38 @@ services:
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
     ports:
       - "9001:9001"
+
+  # A browser for the database at http://localhost:8081, so "what does that row
+  # actually say" doesn't need a psql session. Dev only — this is an
+  # unauthenticated, read-write window onto every table in the installation, and
+  # it is published on the host rather than routed through Caddy for exactly
+  # that reason: it must not be reachable on the product's own hostname, where
+  # someone could arrive at it by guessing a path.
+  #
+  # `sslmode=disable` because Postgres here is on the compose network and the
+  # image doesn't ship a certificate; without it pgweb refuses to connect and
+  # says only "SSL is not enabled on the server".
+  #
+  # It opens on the app database. SuperTokens keeps identity in its own
+  # database on the same server (infra/postgres/init.sql) — to look in there,
+  # change `/${POSTGRES_DB:-app}` to `/supertokens`.
+  #
+  # Only meaningful with the bundled Postgres — there's nothing local to
+  # browse when `local-db` is off, so it shares that profile. `POSTGRES_*`
+  # soft-defaults, not `:?`, for the same reason as the `postgres` service
+  # itself: Compose checks a required var for every service in the file, not
+  # just the ones an active profile actually starts.
+  pgweb:
+    image: sosedoff/pgweb:latest
+    restart: unless-stopped
+    profiles: ["local-db"]
+    environment:
+      PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-unused}@postgres:5432/${POSTGRES_DB:-app}?sslmode=disable
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Catches every outbound email. SMTP on 1025, web UI on 8025 — this is where
   # password resets and, from Phase 1, invites land.

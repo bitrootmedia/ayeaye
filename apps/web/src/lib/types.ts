@@ -219,6 +219,45 @@ export const PRIORITY_RANK: Record<TaskPriority, number> = {
   very_low: 1,
 };
 
+/** Fixed set, urgency-decreasing — same convention as PRIORITY_RANK: ordered
+ *  by what it means, not by spelling. */
+export type PlannerBucket = "today" | "tomorrow" | "this_week" | "next_week" | "someday";
+
+export const PLANNER_BUCKETS: PlannerBucket[] = [
+  "today",
+  "tomorrow",
+  "this_week",
+  "next_week",
+  "someday",
+];
+
+export const PLANNER_BUCKET_LABEL: Record<PlannerBucket, string> = {
+  today: "Today",
+  tomorrow: "Tomorrow",
+  this_week: "This week",
+  next_week: "Next week",
+  someday: "Someday",
+};
+
+export type PlannerTask = {
+  id: string;
+  title: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  is_open: boolean;
+};
+
+export type PlannerEntry = {
+  task: PlannerTask;
+  bucket: PlannerBucket;
+  position: number;
+};
+
+export type PlannerBoard = {
+  pool: PlannerTask[];
+  buckets: Record<PlannerBucket, PlannerEntry[]>;
+};
+
 /**
  * A label in the organisation's shared vocabulary.
  *

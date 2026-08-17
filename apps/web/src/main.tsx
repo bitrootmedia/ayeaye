@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import * as reactRouterDom from "react-router-dom";
 import SuperTokens, { SuperTokensWrapper } from "supertokens-auth-react";
 import EmailPassword from "supertokens-auth-react/recipe/emailpassword";
@@ -18,9 +18,11 @@ import { lastOrg } from "@/lib/current-org";
 import AcceptInvite from "@/views/AcceptInvite";
 import Account from "@/views/Account";
 import Dashboard from "@/views/Dashboard";
+import Landing from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import Organisations from "@/views/Organisations";
 import Notifications from "@/views/Notifications";
+import Planner from "@/views/Planner";
 import Reminders from "@/views/Reminders";
 import ProjectDetail from "@/views/ProjectDetail";
 import Projects from "@/views/Projects";
@@ -79,6 +81,39 @@ function Crash(): React.ReactNode {
   throw new Error("deliberate crash, for testing the error boundary");
 }
 
+/**
+ * What `/` is depends on whether you're anybody yet.
+ *
+ * Signed in it is the shell, exactly as before. Signed out it is the landing
+ * page — the one public screen in the product.
+ *
+ * This is the layout route's element, so it stands in front of every child
+ * route too, which is the reason for the pathname test: a stranger following
+ * a deep link to `/orgs/…` must still hit `SessionAuth` and be sent to sign in
+ * with `redirectToPath` set, so they land where they were going. Only the bare
+ * root is public. Getting that backwards would replace every "please sign in"
+ * with a marketing page and quietly lose the link they arrived on.
+ *
+ * `Landing` renders no `<Outlet>`, so no child route can render underneath it.
+ */
+function Root(): React.ReactNode {
+  const session = Session.useSessionContext();
+  const atRoot = useLocation().pathname === "/";
+
+  // Briefly, on a cold load, before the session context resolves. Rendering
+  // the landing page here instead would flash it at everybody who is already
+  // signed in, on every refresh.
+  if (session.loading) return null;
+
+  if (atRoot && !session.doesSessionExist) return <Landing />;
+
+  return (
+    <SessionAuth>
+      <App />
+    </SessionAuth>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <SuperTokensWrapper>
@@ -96,17 +131,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               follows an invitation usually has no account yet. */}
             <Route path="/invites/:token" element={<AcceptInvite />} />
 
-            {/* App is the shell (rail, header, the /me gate); screens render
-              into its <Outlet>. Real routes rather than local-state nav, so
-              every screen is bookmarkable and Back works. */}
-            <Route
-              path="/"
-              element={
-                <SessionAuth>
-                  <App />
-                </SessionAuth>
-              }
-            >
+            {/* Signed in, this is the shell (rail, header, the /me gate) and
+              screens render into its <Outlet>; signed out, `/` alone is the
+              landing page. Real routes rather than local-state nav, so every
+              screen is bookmarkable and Back works. */}
+            <Route path="/" element={<Root />}>
               <Route index element={<Organisations />} />
               {/* The org's home is the dashboard. The people roster moved to
                 /people — it's a reference screen you visit on purpose, and it
@@ -127,6 +156,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 path="orgs/:orgId/tasks/:taskId"
                 element={<TaskDetail />}
               />
+              <Route path="orgs/:orgId/planner" element={<Planner />} />
               <Route path="orgs/:orgId/time" element={<Time />} />
               <Route path="notifications" element={<Notifications />} />
               {/* Personal and cross-organisation, like the inbox above it. */}

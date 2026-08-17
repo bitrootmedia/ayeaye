@@ -295,8 +295,6 @@ export default function TaskDetail() {
             refreshKey={filesKey}
           />
 
-          <PrivateNote orgId={org.id} taskId={task.id} />
-
           <CommentThread
             orgId={org.id}
             anchor="tasks"
@@ -329,25 +327,40 @@ export default function TaskDetail() {
               </ol>
             </CardContent>
           </Card>
+
+          {/* Last on the page, deliberately: everything above it is shared
+              with somebody by construction, and this is the one card that
+              never is — see components/private-note.tsx. Putting it after
+              History rather than before keeps every card above it in "things
+              anyone with access can see" order. */}
+          <PrivateNote orgId={org.id} taskId={task.id} />
         </div>
 
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Assignment</CardTitle>
+              <CardTitle>Status</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* The four switches somebody actually comes to this panel for,
+                  in the order they're asked about — where it stands, who it's
+                  waiting on, how urgent, and by when. Owner and Project are
+                  assignment, not status, and live in their own card below. */}
               <Field
-                label="Owner"
-                help="Responsible for it, and the only person who can close it."
+                label="Status"
+                help="Status and open/closed are separate — a task can be closed at any status."
               >
                 <EntityPicker
-                  ariaLabel="Owner"
-                  items={people}
-                  value={task.owner?.id ?? null}
-                  disabled={!accessInfo.can_manage}
-                  searchPlaceholder="Find a person…"
-                  onChange={(v) => v && patch({ owner_user_id: v }, "Owner changed")}
+                  ariaLabel="Status"
+                  items={TASK_STATUSES.map((s) => ({
+                    value: s,
+                    label: STATUS_LABEL[s],
+                    icon: <span className={`size-2 rounded-full ${STATUS_DOT[s]}`} />,
+                  }))}
+                  value={task.status}
+                  disabled={!editable}
+                  searchPlaceholder="Filter…"
+                  onChange={(v) => v && patch({ status: v as TaskStatus }, "Status updated")}
                 />
               </Field>
               <Field
@@ -367,23 +380,6 @@ export default function TaskDetail() {
                       { action_required_user_id: v },
                       v ? "They've been notified" : "Cleared",
                     )
-                  }
-                />
-              </Field>
-              <Field
-                label="Project"
-                help="Moving it hands its visibility to the new project — everyone who can see that project can see this."
-              >
-                <EntityPicker
-                  ariaLabel="Project"
-                  items={projectItems}
-                  value={task.project_id}
-                  disabled={!editable}
-                  placeholder="No project"
-                  emptyLabel="No project"
-                  searchPlaceholder="Find a project…"
-                  onChange={(v) =>
-                    patch({ project_id: v }, v ? "Moved" : "Taken out of its project")
                   }
                 />
               </Field>
@@ -416,24 +412,42 @@ export default function TaskDetail() {
                   onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
                 />
               </div>
-              {/* Five options doesn't need a filter, but a card where one
-                  control opens differently from the four above it reads as a
-                  bug. Same component, same behaviour. */}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Assignment</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <Field
-                label="Status"
-                help="Status and open/closed are separate — a task can be closed at any status."
+                label="Owner"
+                help="Responsible for it, and the only person who can close it."
               >
                 <EntityPicker
-                  ariaLabel="Status"
-                  items={TASK_STATUSES.map((s) => ({
-                    value: s,
-                    label: STATUS_LABEL[s],
-                    icon: <span className={`size-2 rounded-full ${STATUS_DOT[s]}`} />,
-                  }))}
-                  value={task.status}
+                  ariaLabel="Owner"
+                  items={people}
+                  value={task.owner?.id ?? null}
+                  disabled={!accessInfo.can_manage}
+                  searchPlaceholder="Find a person…"
+                  onChange={(v) => v && patch({ owner_user_id: v }, "Owner changed")}
+                />
+              </Field>
+              <Field
+                label="Project"
+                help="Moving it hands its visibility to the new project — everyone who can see that project can see this."
+              >
+                <EntityPicker
+                  ariaLabel="Project"
+                  items={projectItems}
+                  value={task.project_id}
                   disabled={!editable}
-                  searchPlaceholder="Filter…"
-                  onChange={(v) => v && patch({ status: v as TaskStatus }, "Status updated")}
+                  placeholder="No project"
+                  emptyLabel="No project"
+                  searchPlaceholder="Find a project…"
+                  onChange={(v) =>
+                    patch({ project_id: v }, v ? "Moved" : "Taken out of its project")
+                  }
                 />
               </Field>
             </CardContent>

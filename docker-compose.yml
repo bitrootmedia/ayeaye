@@ -16,6 +16,16 @@
 #
 # Required values use ${VAR:?...} so a missing .env aborts with an explanation
 # instead of starting eight healthy containers around a broken one.
+#
+# **Postgres and object storage are optional**, via COMPOSE_PROFILES. Every
+# other service reaches them through DATABASE_URL / SUPERTOKENS_DATABASE_URL /
+# S3_* — plain connection details, never a hardcoded `postgres` or `rustfs`
+# hostname — so pointing at a managed instance is a `.env` change, not a fork
+# of this file. `scripts/setup.sh` writes the local-container shape by
+# default; `scripts/setup-interactive.sh` walks through bringing your own.
+# `required: false` on the depends_on entries below is what lets `api` (always
+# on) name `postgres` (sometimes absent) as a dependency without Compose
+# refusing to start at all when the profile that would create it is off.
 
 name: ayeayecaptain
 
@@ -29,16 +39,22 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
-      ACME_EMAIL: ${ACME_EMAIL:?missing .env — run `cp .env.example .env` first}
+      SITE_URL: ${SITE_URL:?missing .env — run ./scripts/setup.sh first}
+      ACME_EMAIL: ${ACME_EMAIL:?missing .env — run ./scripts/setup.sh first}
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data # issued certificates — don't lose this volume
       - caddy_config:/config
     depends_on:
-      - api
-      - web
-      - rustfs
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+      # Absent entirely when object storage is managed elsewhere — see the
+      # `rustfs` service below.
+      rustfs:
+        condition: service_started
+        required: false
 
   # Runs to completion before the API starts, every time. Without it the first
   # `up` points an API at an empty database, because nothing else creates the
@@ -54,10 +70,15 @@ services:
     restart: "no"
     command: uv run alembic upgrade head
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
     depends_on:
+      # Absent entirely when DATABASE_URL points at a managed instance — see
+      # the `postgres` service below. Compose can't wait on a container that
+      # was never asked to exist, and a managed database's uptime isn't this
+      # stack's problem to gate startup on.
       postgres:
         condition: service_healthy
+        required: false
 
   api:
     build:
@@ -65,18 +86,24 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
       REDIS_URL: redis://redis:6379/0
       SUPERTOKENS_CONNECTION_URI: http://supertokens:3567
-      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?missing .env — run `cp .env.example .env` first}
+      SUPERTOKENS_API_KEY: ${SUPERTOKENS_API_KEY:?missing .env — run ./scripts/setup.sh first}
       # One origin for the SPA, the API and the auth routes. See the Caddyfile.
-      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      SITE_URL: ${SITE_URL:?missing .env — run ./scripts/setup.sh first}
       # Internal for our own calls; presigned URLs are signed against the
-      # public one, because SigV4 covers the Host header. It defaults to
-      # SITE_URL, which is right whenever Caddy fronts /media/*.
-      S3_ENDPOINT: http://rustfs:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      # public one, because SigV4 covers the Host header. Both point at the
+      # bundled RustFS by default; a managed S3-compatible provider replaces
+      # them with its own endpoint and a public one that is NOT the site
+      # origin — which means its bucket needs a CORS rule allowing SITE_URL,
+      # something the bundled setup never has to think about.
+      S3_ENDPOINT: ${S3_ENDPOINT:?missing .env — run ./scripts/setup.sh first}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-media}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run ./scripts/setup.sh first}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run ./scripts/setup.sh first}
       # Leave SMTP_HOST empty to disable email entirely — a supported
       # configuration, not a broken one. See PLAN.md §2.4.
       SMTP_HOST: ${SMTP_HOST:-}
@@ -90,6 +117,7 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
       supertokens:
@@ -105,16 +133,19 @@ services:
     restart: unless-stopped
     command: uv run taskiq worker app.tasks:broker
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
       REDIS_URL: redis://redis:6379/0
       PYTHONPATH: /app/src
-      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      SITE_URL: ${SITE_URL:?missing .env — run ./scripts/setup.sh first}
       # The worker reaches storage too — it makes the thumbnails. Same image as
       # `api`, but a separate environment block, so anything the API needs and
       # the worker also uses has to be repeated here.
-      S3_ENDPOINT: http://rustfs:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      S3_ENDPOINT: ${S3_ENDPOINT:?missing .env — run ./scripts/setup.sh first}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-media}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run ./scripts/setup.sh first}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run ./scripts/setup.sh first}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -126,6 +157,7 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
 
@@ -145,10 +177,10 @@ services:
     restart: unless-stopped
     command: uv run taskiq scheduler app.tasks:scheduler
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/${POSTGRES_DB:-app}
+      DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
       REDIS_URL: redis://redis:6379/0
       PYTHONPATH: /app/src
-      SITE_URL: ${SITE_URL:?missing .env — run `cp .env.example .env` first}
+      SITE_URL: ${SITE_URL:?missing .env — run ./scripts/setup.sh first}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -164,12 +196,26 @@ services:
   # Object storage for comment attachments. Not published to the host — Caddy
   # proxies /media/* to it, which is also what makes uploads same-origin and
   # therefore free of CORS entirely.
+  #
+  # Only started when `local-storage` is in COMPOSE_PROFILES (the default —
+  # see .env.example). Leave it out and `api`/`worker` talk to whatever
+  # S3_ENDPOINT names instead; this service and its volume simply never exist.
+  # Its own credentials are deliberately a SEPARATE pair from S3_ACCESS_KEY /
+  # S3_SECRET_KEY: those describe whatever storage the app is CONFIGURED to
+  # use, which in the managed case is a provider this container has nothing to
+  # do with.
   rustfs:
     image: rustfs/rustfs:latest
     restart: unless-stopped
+    profiles: ["local-storage"]
     environment:
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?missing .env — run `cp .env.example .env` first}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?missing .env — run `cp .env.example .env` first}
+      # Soft-defaulted, not required: this only matters when `local-storage`
+      # is active, and both setup scripts always fill in a real secret then.
+      # A hard requirement here would fail interpolation for a deployment
+      # that never starts this service at all — Compose checks `:?` for every
+      # service in the file, active profile or not.
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
       # No console in production; the S3 API is all the app needs.
@@ -180,18 +226,33 @@ services:
 
   # --- data ------------------------------------------------------------------
 
+  # Only started when `local-db` is in COMPOSE_PROFILES (the default — see
+  # .env.example). Leave it out and every other service reaches Postgres
+  # through DATABASE_URL / SUPERTOKENS_DATABASE_URL instead; this container and
+  # its volume simply never exist. Its own credentials are POSTGRES_USER /
+  # POSTGRES_PASSWORD / POSTGRES_DB, used ONLY to initialise this container —
+  # a managed instance has its own, already-created, and doesn't need these.
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
+    profiles: ["local-db"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}
+      # Soft-defaulted, not required: this only matters when `local-db` is
+      # active, and both setup scripts always fill in a real password then.
+      # A hard requirement here would fail interpolation for a deployment
+      # that never starts this service at all — Compose checks `:?` for every
+      # service in the file, active profile or not. DATABASE_URL below is
+      # what everything else actually connects with, and that stays required.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unused}
       POSTGRES_DB: ${POSTGRES_DB:-app}
     volumes:
       # PG18+ images keep data in a version subdirectory, so the volume mounts
       # at /var/lib/postgresql — NOT .../data as it did up to 17.
       - postgres_data:/var/lib/postgresql
-      # Creates the separate `supertokens` database on first boot.
+      # Creates the separate `supertokens` database on first boot. Only runs
+      # against THIS container's own empty data directory — a managed instance
+      # needs `CREATE DATABASE supertokens;` run against it once, by hand.
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app}"]
@@ -218,9 +279,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      POSTGRESQL_CONNECTION_URI: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:?missing .env — run `cp .env.example .env` first}@postgres:5432/supertokens
-      API_KEYS: ${SUPERTOKENS_API_KEY:?missing .env — run `cp .env.example .env` first}
+      POSTGRESQL_CONNECTION_URI: ${SUPERTOKENS_DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
+      API_KEYS: ${SUPERTOKENS_API_KEY:?missing .env — run ./scripts/setup.sh first}
     healthcheck:
       # The image doesn't reliably ship curl or wget, so this speaks raw HTTP
       # over bash's /dev/tcp. A wget-based check reports unhealthy forever
