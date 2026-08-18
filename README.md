@@ -179,9 +179,13 @@ Three things it can't do for you, because they happen on the other side:
 
 If uploads aren't working, `./scripts/diagnose.sh` checks your actual
 credentials, endpoint, bucket and (for DigitalOcean specifically) region and
-addressing style the same way the app does, and checks the bucket's CORS
-separately from that — the ways this half of the setup has actually gone
-wrong, and the hardest to tell apart from a browser console alone.
+addressing style the same way the app does, checks the bucket's CORS
+separately from that, and — for a managed bucket — actually **uploads a real
+file, reads it back, and deletes it again**, because a bucket policy that
+allows listing but not writing looks completely healthy right up until
+someone tries to attach a file. That's the one thing this script does that
+isn't read-only, and it's the only way to answer "do uploads work" instead of
+"does everything upstream of uploads look fine."
 
 ## Email is optional
 

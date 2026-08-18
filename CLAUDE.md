@@ -632,6 +632,30 @@ always points at `rustfs:9000`, which is dead code once storage is managed —
 without the gate, a correctly-configured managed deployment reported a false
 warning for a route nothing was ever supposed to serve.
 
+**HeadBucket passing doesn't mean uploads work — a real upload is the only
+thing that proves a real upload works.** Confirmed twice on the same real
+deployment: `HeadBucket` only exercises list/read-level permission, and a
+bucket policy that grants that but not `PutObject` answers it 200 and then
+refuses every real upload — the browser's actual failure mode. Worse,
+`HeadBucket` in this script goes through `internal_client()`, but the browser
+never touches that client at all; every real upload is signed by
+`public_client()` against `S3_PUBLIC_ENDPOINT`, a different setting that can
+be wrong in ways `HeadBucket` against the internal one would never surface.
+So for managed storage only (gated on `LOCAL_STORAGE`, same reasoning as the
+CORS check — this signs against `S3_PUBLIC_ENDPOINT` and PUTs to it from
+inside the `api` container exactly like a browser would from the internet;
+for the bundled RustFS, `S3_PUBLIC_ENDPOINT` defaults to `SITE_URL`, and
+`http://localhost` from inside a container reaches the container itself, not
+Caddy — a false failure that has nothing to do with storage) it does the real
+three-step thing: `presigned_put()`, an actual `PUT` over the network via
+`urllib` (no new dependency — `boto3` signs, it doesn't have to be what sends
+the bytes), a `head_object()` read-back, then deletes what it wrote. This is
+the **one check in the script that isn't read-only**, and it's the only way
+to actually answer "do uploads work" rather than "does something upstream of
+uploads look fine." A 403 here with a 200 on `HeadBucket` above is a specific,
+actionable diagnosis (list-but-not-write policy) that neither check alone
+would have named.
+
 ### Bringing your own Postgres or S3
 
 `docker-compose.yml` is still the ONE file — decision 3 doesn't bend for this.

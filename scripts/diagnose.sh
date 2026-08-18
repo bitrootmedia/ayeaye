@@ -203,8 +203,10 @@ try:
 except Exception as e:
     print('FAIL: ' + repr(e))
 " 2>&1)
+  BUCKET_OK=0
   case "$result" in
-    OK) good "bucket '$S3_BUCKET_VAL' reachable at $S3_ENDPOINT_VAL with these credentials" ;;
+    OK) good "bucket '$S3_BUCKET_VAL' reachable at $S3_ENDPOINT_VAL with these credentials"
+        BUCKET_OK=1 ;;
     *403*|*Forbidden*)
       hard "bucket '$S3_BUCKET_VAL' answered 403 — S3_ACCESS_KEY/S3_SECRET_KEY are wrong, or the bucket policy denies this key"
       say  "$result" ;;
@@ -219,6 +221,75 @@ except Exception as e:
       hard "bucket check failed"
       say  "$result" ;;
   esac
+
+  # Only for managed storage: this signs against S3_PUBLIC_ENDPOINT and PUTs
+  # to it from inside the api container, exactly like a browser would from
+  # the internet. For the bundled RustFS, S3_PUBLIC_ENDPOINT defaults to
+  # SITE_URL (http://localhost) — correct for a *browser*, but "localhost"
+  # from inside a container means the container itself, not Caddy, so this
+  # check would fail for a reason that has nothing to do with storage. Local
+  # storage already has two working checks above (HeadBucket, the /media/
+  # probe through Caddy) that don't have that problem.
+  if [ "$BUCKET_OK" = 1 ] && [ "${LOCAL_STORAGE:-1}" = 0 ]; then
+    # HeadBucket only proves the bucket is *listable* — a policy that grants
+    # read but not write answers it 200 and then refuses every real upload.
+    # This is the actual thing that fails for a person: presign a PUT with
+    # public_client() (the exact call a browser's upload ticket gets, against
+    # S3_PUBLIC_ENDPOINT, not the internal one HeadBucket used above), PUT
+    # real bytes to it over the network the way the browser would, read the
+    # object back, then delete it. Not read-only, unlike the rest of this
+    # script — a real upload is the only way to prove uploads work, and it
+    # cleans up after itself.
+    upload=$(docker compose exec -T -e PYTHONPATH=/app/src api uv run python -c "
+import os
+from app.storage import s3
+
+key = 'diagnose-probe/' + os.urandom(8).hex()
+body = b'ayeayecaptain diagnose probe'
+try:
+    url = s3.presigned_put(key, 'text/plain', expires=60)
+except Exception as e:
+    print('PRESIGN_FAIL: ' + repr(e)); raise SystemExit
+
+import urllib.error
+import urllib.request
+req = urllib.request.Request(url, data=body, method='PUT', headers={'Content-Type': 'text/plain'})
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        put_status = resp.status
+except urllib.error.HTTPError as e:
+    print(f'PUT_FAIL: HTTP {e.code} — ' + e.read(500).decode('utf-8', 'replace')); raise SystemExit
+except Exception as e:
+    print('PUT_FAIL: ' + repr(e)); raise SystemExit
+
+import asyncio
+head = asyncio.run(s3.head_object(key))
+asyncio.run(s3.delete_object(key))
+if head is None:
+    print(f'READBACK_FAIL: PUT returned {put_status} but the object cannot be read back')
+else:
+    print(f'OK: {put_status}, {head.get(\"ContentLength\")} bytes read back and cleaned up')
+" 2>&1)
+    case "$upload" in
+      OK:*) good "a real upload round-trip works — ${upload#OK: }" ;;
+      *PRESIGN_FAIL*)
+        hard "could not even build a presigned PUT URL"
+        say  "$upload" ;;
+      *"HTTP 403"*)
+        hard "storage refused the actual upload with 403, even though HeadBucket succeeded"
+        say  "the bucket policy allows listing but not writing for this key — check PutObject permission"
+        say  "$upload" ;;
+      *PUT_FAIL*)
+        hard "the real upload PUT failed"
+        say  "$upload" ;;
+      *READBACK_FAIL*)
+        hard "$upload"
+        say  "the PUT succeeded but a HEAD right after can't find the object — check the provider isn't routing reads and writes differently (e.g. a CDN in front of S3_ENDPOINT)" ;;
+      *)
+        hard "upload round-trip check failed"
+        say  "$upload" ;;
+    esac
+  fi
 fi
 
 if [ "${LOCAL_STORAGE:-1}" = 0 ]; then
