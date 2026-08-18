@@ -611,6 +611,27 @@ actually happened in this stack. One is worth repeating: **`/media/` returning
 403 proves RustFS replied; a 200 means the SPA catch-all swallowed the route
 and every attachment is quietly broken.
 
+**The Storage section reuses the app's own code to test itself.** Rather than
+reimplementing an S3 client in bash, it `docker compose exec`s into `api` and
+calls `storage.s3.internal_client().head_bucket(...)` with `PYTHONPATH=/app/src`
+— the exact endpoint, credentials and signing the app uses for every upload
+ticket. A wrong `S3_ACCESS_KEY`, a nonexistent bucket and an unreachable
+endpoint come back as three distinguishable botocore exceptions (403, 404,
+`EndpointConnectionError`), which is a five-second answer to a question that
+otherwise surfaces as an opaque `SignatureDoesNotMatch` in a browser console
+with no indication which of the three is wrong. The CORS preflight check only
+runs when storage is managed — same-origin uploads through the bundled RustFS
+need no CORS at all, so running it there would be testing something that
+doesn't apply and can't fail. It sends the literal request a browser sends
+before a presigned PUT (`OPTIONS` with `Origin`/`Access-Control-Request-*`)
+against `S3_PUBLIC_ENDPOINT`, because a provider that doesn't recognise the
+origin typically doesn't error — it just omits `Access-Control-Allow-Origin`,
+which is invisible unless something goes looking for it. And the old
+`/media/*` reachability probe is now gated on `LOCAL_STORAGE`: that Caddy rule
+always points at `rustfs:9000`, which is dead code once storage is managed —
+without the gate, a correctly-configured managed deployment reported a false
+warning for a route nothing was ever supposed to serve.
+
 ### Bringing your own Postgres or S3
 
 `docker-compose.yml` is still the ONE file — decision 3 doesn't bend for this.

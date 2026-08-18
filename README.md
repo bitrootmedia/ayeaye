@@ -171,6 +171,12 @@ Three things it can't do for you, because they happen on the other side:
   path-style only — real AWS S3 refuses that in any region opened after 2020,
   so pick a provider or region that still allows it.
 
+If uploads aren't working, `./scripts/diagnose.sh` checks your actual
+credentials, endpoint and bucket the same way the app does, and checks the
+bucket's CORS separately from that — the two most common ways this half of
+the setup goes wrong, and the two hardest to tell apart from a browser
+console alone.
+
 ## Email is optional
 
 With `SMTP_HOST` empty the app logs what it would have sent and carries on. That

@@ -144,17 +144,87 @@ probe() {  # $1=label $2=url
 BASE="${SITE_URL:-http://localhost}"
 probe "health probe" "$BASE/health"
 probe "the app"      "$BASE/"
-# Storage is the one probe where 403 is the RIGHT answer: S3 refuses an
-# anonymous bucket listing, which proves RustFS itself replied. A 200 here
-# would mean the SPA catch-all swallowed /media/* and every attachment is
-# quietly broken.
-storage=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/media/" 2>/dev/null)
-case "$storage" in
-  403|404) good "storage → $storage (S3 is answering)" ;;
-  200)     hard "storage → 200, which means the SPA is answering /media/*, not RustFS" ;;
-  000)     hard "storage unreachable ($BASE/media/)" ;;
-  *)       soft "storage → $storage" ;;
-esac
+if [ "${LOCAL_STORAGE:-1}" = 1 ]; then
+  # Storage is the one probe where 403 is the RIGHT answer: S3 refuses an
+  # anonymous bucket listing, which proves RustFS itself replied. A 200 here
+  # would mean the SPA catch-all swallowed /media/* and every attachment is
+  # quietly broken.
+  storage=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$BASE/media/" 2>/dev/null)
+  case "$storage" in
+    403|404) good "storage → $storage (S3 is answering)" ;;
+    200)     hard "storage → 200, which means the SPA is answering /media/*, not RustFS" ;;
+    000)     hard "storage unreachable ($BASE/media/)" ;;
+    *)       soft "storage → $storage" ;;
+  esac
+else
+  # Caddy's /media/* rule always points at rustfs:9000 — dead code once
+  # storage is managed, not a health signal. Uploads reach the provider
+  # directly, at S3_PUBLIC_ENDPOINT, never through SITE_URL at all.
+  say "storage is managed — SITE_URL/media/* isn't wired to it; see Storage below"
+fi
+
+head_ "Storage"
+S3_ENDPOINT_VAL=$(grep -E '^S3_ENDPOINT=' .env 2>/dev/null | cut -d= -f2-)
+S3_BUCKET_VAL=$(grep -E '^S3_BUCKET=' .env 2>/dev/null | cut -d= -f2- || echo media)
+if ! docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx api; then
+  soft "api isn't running — can't check bucket access from here"
+else
+  # The exact call the app itself makes at startup (ensure_bucket) and before
+  # every upload ticket — same endpoint, same credentials, same signing. If
+  # this fails, the browser's presigned PUT was never going to work either,
+  # and the error here says which of endpoint/credentials/bucket is wrong
+  # instead of a browser console full of an opaque SignatureDoesNotMatch.
+  result=$(docker compose exec -T -e PYTHONPATH=/app/src api uv run python -c "
+from app.core.config import settings
+from app.storage.s3 import internal_client
+try:
+    internal_client().head_bucket(Bucket=settings.s3_bucket)
+    print('OK')
+except Exception as e:
+    print('FAIL: ' + repr(e))
+" 2>&1)
+  case "$result" in
+    OK) good "bucket '$S3_BUCKET_VAL' reachable at $S3_ENDPOINT_VAL with these credentials" ;;
+    *403*|*Forbidden*)
+      hard "bucket '$S3_BUCKET_VAL' answered 403 — S3_ACCESS_KEY/S3_SECRET_KEY are wrong, or the bucket policy denies this key"
+      say  "$result" ;;
+    *404*)
+      hard "bucket '$S3_BUCKET_VAL' answered 404 — it doesn't exist at this endpoint, or S3_BUCKET is misspelled"
+      say  "$result" ;;
+    *EndpointConnectionError*|*"Could not connect"*)
+      hard "could not reach $S3_ENDPOINT_VAL from inside the api container"
+      say  "check S3_ENDPOINT — a typo, a firewall, or a provider that needs a different port"
+      say  "$result" ;;
+    *)
+      hard "bucket check failed"
+      say  "$result" ;;
+  esac
+fi
+
+if [ "${LOCAL_STORAGE:-1}" = 0 ]; then
+  S3_PUBLIC_VAL=$(grep -E '^S3_PUBLIC_ENDPOINT=' .env 2>/dev/null | cut -d= -f2-)
+  S3_PUBLIC_VAL="${S3_PUBLIC_VAL:-$S3_ENDPOINT_VAL}"
+  # Same-origin uploads (the bundled RustFS, fronted by Caddy on SITE_URL)
+  # need no CORS at all — that's the whole reason this check only runs for a
+  # managed bucket, which is a genuinely different origin from SITE_URL.
+  # A real preflight, not a guess: this is the exact request the browser
+  # sends before the presigned PUT, and providers that don't recognise the
+  # origin answer it with no Access-Control-* headers at all rather than an
+  # error, which is invisible unless you go looking for it.
+  cors=$(curl -sk -D - -o /dev/null --max-time 5 -X OPTIONS \
+    "$S3_PUBLIC_VAL/$S3_BUCKET_VAL/diagnose-probe" \
+    -H "Origin: $SITE_URL" \
+    -H "Access-Control-Request-Method: PUT" \
+    -H "Access-Control-Request-Headers: content-type" 2>/dev/null)
+  if [ -z "$cors" ]; then
+    hard "could not reach $S3_PUBLIC_VAL for a CORS preflight check"
+  elif echo "$cors" | grep -qi "^access-control-allow-origin:"; then
+    good "bucket CORS allows PUT from $SITE_URL"
+  else
+    hard "bucket has no CORS rule for $SITE_URL — uploads will fail in the browser before reaching storage"
+    say  "add a CORS rule on the bucket allowing PUT/GET from $SITE_URL"
+  fi
+fi
 
 head_ "Data"
 if [ "${LOCAL_DB:-1}" = 1 ]; then
