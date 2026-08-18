@@ -54,6 +54,23 @@ else
     *) hard "SITE_URL needs a scheme — Caddy uses it to decide about certificates" ;;
   esac
 
+  # compose.override.yml is committed — that's what makes local dev a plain
+  # `git clone` — but Compose auto-loads it whenever it's present, and on a
+  # real domain that runs the Vite dev server instead of the built app,
+  # publishes Postgres's port to the internet, and turns on the RustFS/pgweb
+  # dev consoles. This has actually happened: the symptom isn't a blank page,
+  # it's Vite itself refusing the request with "Blocked request. This host
+  # (…) is not allowed" — which reads like an app bug and is actually Vite
+  # correctly refusing to serve a domain it was never told to trust.
+  case "$SITE_URL" in
+    http://localhost*) ;;
+    *)
+      if [ -f compose.override.yml ]; then
+        hard "compose.override.yml exists AND SITE_URL is a real domain — the dev stack is what's running"
+        say  "rm compose.override.yml && docker compose up -d"
+      fi ;;
+  esac
+
   # Which of the bundled containers this deployment actually uses. Everything
   # below has to ask this before treating "postgres isn't running" or
   # "POSTGRES_PASSWORD looks like the example" as a problem — for a managed

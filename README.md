@@ -97,7 +97,24 @@ lands.
 
 Point an A record at the machine **first** — Caddy asks Let's Encrypt for a
 certificate on startup, and it can't get one for a name that doesn't resolve
-here. Then:
+here. If you got here by cloning this repo onto the server, **remove the dev
+override before you bring the stack up**:
+
+```bash
+rm compose.override.yml
+```
+
+`compose.override.yml` is committed — that's what makes local development a
+plain `git clone` — but Compose auto-loads it whenever it's present, and it
+runs the Vite dev server instead of the built app, publishes Postgres's own
+port to the internet, and turns on the RustFS/pgweb dev consoles. Left in
+place on a real domain, the symptom isn't a blank page: it's the Vite dev
+server itself refusing the request — `Blocked request. This host ("…") is not
+allowed` — because its dev-only host checks have no reason to trust a domain
+they've never heard of. That is Vite doing its job, not a bug to route around;
+delete the file rather than adding the domain to `vite.config.ts`.
+
+Then:
 
 ```bash
 ./scripts/setup.sh --site https://tasks.example.com --email you@example.com
@@ -136,8 +153,15 @@ right `DATABASE_URL` / `S3_ENDPOINT` and drops that piece from
 or `rustfs` container it doesn't need — one command either way, nothing to
 remember to pass.
 
-Two things it can't do for you, because they happen on the other side:
+Three things it can't do for you, because they happen on the other side:
 
+- **A managed Postgres instance has to be version 18 or later.** Every table's
+  primary key is generated with `uuidv7()`, a Postgres 18 builtin — not an
+  extension, not something the app can polyfill. Against an older instance,
+  `docker compose up -d` runs `migrate` and it exits 1 the first time it tries
+  to create a table; the log says so, but it's easy to mistake for a
+  connection problem when everything else about the setup looks right. Check
+  your provider's version before pointing `DATABASE_URL` at it.
 - **SuperTokens needs its own database on the same server**, never the app's.
   The prompt tells you the one line to run once: `CREATE DATABASE supertokens;`.
 - **A managed bucket is a different origin from your site**, so uploads are no

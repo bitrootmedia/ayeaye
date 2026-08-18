@@ -664,6 +664,31 @@ database was never `.env`'s password to judge, and `docker compose exec
 postgres` on a service that was never asked to exist isn't a health check,
 it's a crash.
 
+**A managed Postgres instance has to be version 18 or later**, confirmed the
+hard way on a real deployment. `uuidv7()` is a Postgres 18 builtin — see
+"UUIDv7 primary keys" below — and there's no polyfill for it. Against an older
+instance the failure isn't at connection time: `migrate` connects fine, logs
+its two boilerplate INFO lines, and then exits 1 the moment the first
+`CREATE TABLE` tries to call a function that doesn't exist. That reads exactly
+like a connection problem and isn't one. README's "Bring your own Postgres or
+S3" says so now; `diagnose.sh` can't check a version it has no client to ask
+for, so the `migrate exited $code` hard-failure — already there — is the
+actual signal, and it points at `docker compose logs migrate`.
+
+**`compose.override.yml` is committed, and that's the trap on a real
+deployment.** It's what makes local dev a plain `git clone`, but Compose
+auto-loads it whenever it's present — including on a server somebody reached
+by cloning this same repo. Also confirmed the hard way: the symptom isn't the
+"site dark, no reverse proxy" story decision 3 tells about the reference
+project — Caddy is a base-file service and still comes up — it's the *Vite
+dev server* refusing the request outright, `Blocked request. This host (…) is
+not allowed`, because its dev-only host allowlist has never heard of a real
+domain. Deleting the file, not adding the domain to `vite.config.ts`'s
+`allowedHosts`, is the fix — the dev stack also publishes Postgres's own port
+to the internet and turns on the RustFS/pgweb consoles, none of which belong
+on a public box. `diagnose.sh` now checks for exactly this combination
+(the file present, `SITE_URL` not localhost) and says so.
+
 ## The front door
 
 `views/Landing.tsx` is the **only screen a signed-out visitor can reach**, and
