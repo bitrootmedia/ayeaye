@@ -43,7 +43,13 @@ export const AUTH_STYLE = `
 
   [data-supertokens~="headerSubtitle"],
   [data-supertokens~="secondaryText"],
-  [data-supertokens~="privacyPolicyAndTermsAndConditions"] {
+  [data-supertokens~="privacyPolicyAndTermsAndConditions"],
+  /* "Not registered yet?" / "Already have an account?" carry BOTH attributes
+     on one element, and SuperTokens' own stylesheet has a same-or-higher
+     specificity rule for that exact combination with a hardcoded light-theme
+     grey — our single-attribute rules above lose to it. Matching the same
+     combination is what actually wins. */
+  [data-supertokens~="headerSubtitle"][data-supertokens~="secondaryText"] {
     color: var(--muted-foreground);
     /* Theirs layers an opacity on top of the colour, which lands well under
        the contrast floor once the background is dark. */

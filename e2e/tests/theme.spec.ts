@@ -54,6 +54,37 @@ test.describe("the auth screens wear the product's clothes", () => {
     expect(dark).toBe(true);
   });
 
+  test("\"Already have an account?\" is readable in dark mode", async ({ page }) => {
+    // That element carries BOTH data-supertokens="headerSubtitle" and
+    // "secondaryText", and SuperTokens' own stylesheet has a same-or-higher
+    // specificity rule for that exact combination with a hardcoded
+    // light-theme grey — our single-attribute rules lose to it unless we
+    // match the combination too. Without that, this renders at ~rgb(54,54,54)
+    // on a ~oklch(0.234) dark card: functionally invisible.
+    await page.goto("/auth?show=signup");
+    await page.evaluate(() => localStorage.setItem("ui-theme", "dark"));
+    await page.reload();
+    await page.getByText("Sign Up", { exact: true }).first().waitFor();
+
+    const { text, mutedForeground } = await page.evaluate(() => {
+      const root = (document.querySelector("#supertokens-root") as HTMLElement & {
+        shadowRoot: ShadowRoot;
+      }).shadowRoot;
+      const el = root.querySelector(
+        '[data-supertokens~="headerSubtitle"][data-supertokens~="secondaryText"]',
+      )!;
+      return {
+        text: getComputedStyle(el).color,
+        mutedForeground: getComputedStyle(document.documentElement)
+          .getPropertyValue("--muted-foreground")
+          .trim(),
+      };
+    });
+
+    expect(text).toContain("oklch");
+    expect(text.replace(/\s+/g, "")).toBe(mutedForeground.replace(/\s+/g, ""));
+  });
+
   test("the SuperTokens styling hooks still exist", async ({ page }) => {
     // A canary for the upgrade that renames one of these: the screen would
     // quietly revert to stock rather than break, which is exactly the kind of

@@ -82,7 +82,7 @@ Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
 Verified by 229 infra-free unit tests, 534 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 121 browser tests in a real Chromium
+(`./scripts/e2e-*.sh`) and 124 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -677,15 +677,32 @@ marketing page with the original link thrown away.
 Two things follow from it being outside the shell:
 
 - **It fetches nothing.** No `/me`, no rail, no session-dependent copy — so it
-  renders with the API down, which is exactly the state a self-hoster is in
-  when they first load it.
+  renders instantly and works with the API down.
 - **It restates no colours**, same rule as the auth screens. Every value comes
   from the tokens, so it follows dark mode and a palette change on its own. A
   landing page with its own accent is a second scale, and status owns the only
   red and the only amber.
 
-Every claim on it is true of the code, deliberately. It is the first thing a
-new person can check you on.
+**Deliberately just a headline and the two ways in — no feature list, no
+pitch, no self-hosting sales copy.** `BRAND.tagline` ("Just another take on
+the to-do app.") is the whole page; it's doing self-aware comedy on purpose,
+not undersizing a marketing effort. Someone who found a to-do app already
+knows what a to-do app is, and a wall of feature cards before they've signed
+up is exactly the kind of thing the tagline is joking about. If a future pass
+adds sections back, keep the tagline honest about it.
+
+**The sign-in/sign-up/reset screens carry the same header and footer.** They
+are SuperTokens' own routes — `getSuperTokensRoutesForReactRouterDom` hands
+back a flat list of `<Route>`s with their own absolute paths, so they can't be
+nested under a layout route the way `orgs/:orgId/*` is under `Root`.
+`AuthChrome` in `main.tsx` wraps the whole `<Routes>` tree instead and checks
+the pathname against `AUTH_BASE_PATH`; everywhere else it's a no-op
+passthrough, since the app shell already supplies its own chrome. `Header`,
+`Footer` and `Wordmark` are exported from `views/Landing.tsx` for exactly this
+reuse — a second copy would drift from the first the next time either
+changes. `Wordmark` is a link to `/`, deliberately: without it `/auth` was a
+dead end with no way back except the browser's own Back button, which doesn't
+exist if it's the tab's first page.
 
 ## The auth screens
 

@@ -18,6 +18,7 @@ export const BRAND = {
   name: "ayeayecaptain",
   /** For anywhere the domain is shown rather than linked. */
   domain: "ayeayecaptain.io",
-  /** One line, used wherever the product introduces itself. */
-  tagline: "Projects and tasks, on your own server.",
+  /** One line, used wherever the product introduces itself. Deliberately not
+   *  a pitch — see views/Landing.tsx for why. */
+  tagline: "Just another take on the to-do app.",
 } as const;

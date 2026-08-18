@@ -18,7 +18,7 @@ import { lastOrg } from "@/lib/current-org";
 import AcceptInvite from "@/views/AcceptInvite";
 import Account from "@/views/Account";
 import Dashboard from "@/views/Dashboard";
-import Landing from "@/views/Landing";
+import Landing, { Footer, Header } from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import Organisations from "@/views/Organisations";
 import Notifications from "@/views/Notifications";
@@ -82,6 +82,32 @@ function Crash(): React.ReactNode {
 }
 
 /**
+ * The landing page's header and footer, around the sign-in/sign-up/reset
+ * screens and nowhere else.
+ *
+ * Those screens are SuperTokens' own routes — `getSuperTokensRoutesForReactRouterDom`
+ * hands back a flat list of `<Route>`s with their own absolute paths, so they
+ * can't be nested under a layout route the way `orgs/:orgId/*` is under
+ * `Root`. Wrapping the whole `<Routes>` tree in a pathname check instead
+ * sidesteps that: everywhere else this is a no-op passthrough, since the app
+ * shell (`App.tsx`) already supplies its own chrome.
+ *
+ * Without this, `/auth` was a dead end — no way back to `/` except the
+ * browser's own Back button, which doesn't exist if it's the tab's first page.
+ */
+function AuthChrome({ children }: { children: React.ReactNode }): React.ReactNode {
+  const onAuthPages = useLocation().pathname.startsWith(AUTH_BASE_PATH);
+  if (!onAuthPages) return children;
+  return (
+    <div className="flex min-h-dvh flex-col">
+      <Header />
+      <div className="flex-1">{children}</div>
+      <Footer />
+    </div>
+  );
+}
+
+/**
  * What `/` is depends on whether you're anybody yet.
  *
  * Signed in it is the shell, exactly as before. Signed out it is the landing
@@ -121,57 +147,59 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           only place that can still show something is above all of it. */}
       <ErrorBoundary>
         <BrowserRouter>
-          <Routes>
-            {/* Sign in, sign up, forgot password and reset password. */}
-            {getSuperTokensRoutesForReactRouterDom(reactRouterDom, [
-              EmailPasswordPreBuiltUI,
-            ])}
+          <AuthChrome>
+            <Routes>
+              {/* Sign in, sign up, forgot password and reset password. */}
+              {getSuperTokensRoutesForReactRouterDom(reactRouterDom, [
+                EmailPasswordPreBuiltUI,
+              ])}
 
-            {/* Outside the shell and outside SessionAuth on purpose: whoever
-              follows an invitation usually has no account yet. */}
-            <Route path="/invites/:token" element={<AcceptInvite />} />
+              {/* Outside the shell and outside SessionAuth on purpose: whoever
+                follows an invitation usually has no account yet. */}
+              <Route path="/invites/:token" element={<AcceptInvite />} />
 
-            {/* Signed in, this is the shell (rail, header, the /me gate) and
-              screens render into its <Outlet>; signed out, `/` alone is the
-              landing page. Real routes rather than local-state nav, so every
-              screen is bookmarkable and Back works. */}
-            <Route path="/" element={<Root />}>
-              <Route index element={<Organisations />} />
-              {/* The org's home is the dashboard. The people roster moved to
-                /people — it's a reference screen you visit on purpose, and it
-                was only the landing page by accident of being built first. */}
-              <Route path="orgs/:orgId" element={<Dashboard />} />
-              <Route
-                path="orgs/:orgId/people"
-                element={<OrganisationDetail />}
-              />
-              <Route path="orgs/:orgId/structure" element={<Teams />} />
-              <Route path="orgs/:orgId/projects" element={<Projects />} />
-              <Route
-                path="orgs/:orgId/projects/:projectId"
-                element={<ProjectDetail />}
-              />
-              <Route path="orgs/:orgId/tasks" element={<Tasks />} />
-              <Route
-                path="orgs/:orgId/tasks/:taskId"
-                element={<TaskDetail />}
-              />
-              <Route path="orgs/:orgId/planner" element={<Planner />} />
-              <Route path="orgs/:orgId/time" element={<Time />} />
-              <Route path="notifications" element={<Notifications />} />
-              {/* Personal and cross-organisation, like the inbox above it. */}
-              <Route path="reminders" element={<Reminders />} />
-              <Route path="account" element={<Account />} />
-              {/* A route that throws, so the error boundary can be tested
-                  rather than assumed. **Dev only** — `import.meta.env.DEV` is
-                  a compile-time constant, so this and the component below are
-                  removed from a production build entirely.
-                  A boundary nobody exercises is a boundary that has quietly
-                  stopped working, and it only gets discovered on the day it
-                  was needed. */}
-              {import.meta.env.DEV && <Route path="__crash" element={<Crash />} />}
-            </Route>
-          </Routes>
+              {/* Signed in, this is the shell (rail, header, the /me gate) and
+                screens render into its <Outlet>; signed out, `/` alone is the
+                landing page. Real routes rather than local-state nav, so every
+                screen is bookmarkable and Back works. */}
+              <Route path="/" element={<Root />}>
+                <Route index element={<Organisations />} />
+                {/* The org's home is the dashboard. The people roster moved to
+                  /people — it's a reference screen you visit on purpose, and it
+                  was only the landing page by accident of being built first. */}
+                <Route path="orgs/:orgId" element={<Dashboard />} />
+                <Route
+                  path="orgs/:orgId/people"
+                  element={<OrganisationDetail />}
+                />
+                <Route path="orgs/:orgId/structure" element={<Teams />} />
+                <Route path="orgs/:orgId/projects" element={<Projects />} />
+                <Route
+                  path="orgs/:orgId/projects/:projectId"
+                  element={<ProjectDetail />}
+                />
+                <Route path="orgs/:orgId/tasks" element={<Tasks />} />
+                <Route
+                  path="orgs/:orgId/tasks/:taskId"
+                  element={<TaskDetail />}
+                />
+                <Route path="orgs/:orgId/planner" element={<Planner />} />
+                <Route path="orgs/:orgId/time" element={<Time />} />
+                <Route path="notifications" element={<Notifications />} />
+                {/* Personal and cross-organisation, like the inbox above it. */}
+                <Route path="reminders" element={<Reminders />} />
+                <Route path="account" element={<Account />} />
+                {/* A route that throws, so the error boundary can be tested
+                    rather than assumed. **Dev only** — `import.meta.env.DEV` is
+                    a compile-time constant, so this and the component below are
+                    removed from a production build entirely.
+                    A boundary nobody exercises is a boundary that has quietly
+                    stopped working, and it only gets discovered on the day it
+                    was needed. */}
+                {import.meta.env.DEV && <Route path="__crash" element={<Crash />} />}
+              </Route>
+            </Routes>
+          </AuthChrome>
         </BrowserRouter>
       </ErrorBoundary>
     </SuperTokensWrapper>

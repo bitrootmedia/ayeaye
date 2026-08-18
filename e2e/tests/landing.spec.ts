@@ -10,9 +10,7 @@ test.describe("the landing page", () => {
   test("a stranger at the root gets a way in, not a login wall", async ({ page }) => {
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(
-      "on your own server",
-    );
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("to-do app");
 
     // The account CTA has to land on the sign-up tab, not on sign-in with a
     // link to find. `?show=signup` is SuperTokens' own query parameter, so
@@ -20,6 +18,18 @@ test.describe("the landing page", () => {
     await page.getByRole("link", { name: "Create an account" }).click();
     await page.waitForURL(/\/auth\?show=signup/);
     await expect(page.getByText("Sign Up", { exact: true }).first()).toBeVisible();
+  });
+
+  test("the auth screens carry the header and footer home", async ({ page }) => {
+    // Those screens are SuperTokens' own routes, not nested under Root — see
+    // AuthChrome in main.tsx. Without it /auth was a dead end: no rail, no
+    // link back to "/", nothing but the browser's own Back button.
+    await page.goto("/auth");
+    await page.getByText("Sign In", { exact: true }).first().waitFor();
+
+    await page.getByRole("link", { name: "ayeayecaptain" }).first().click();
+    await page.waitForURL("/");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("to-do app");
   });
 
   test("a deep link while signed out still asks you to sign in", async ({ page }) => {
