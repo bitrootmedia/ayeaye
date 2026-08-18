@@ -626,11 +626,29 @@ doesn't apply and can't fail. It sends the literal request a browser sends
 before a presigned PUT (`OPTIONS` with `Origin`/`Access-Control-Request-*`)
 against `S3_PUBLIC_ENDPOINT`, because a provider that doesn't recognise the
 origin typically doesn't error — it just omits `Access-Control-Allow-Origin`,
-which is invisible unless something goes looking for it. And the old
-`/media/*` reachability probe is now gated on `LOCAL_STORAGE`: that Caddy rule
-always points at `rustfs:9000`, which is dead code once storage is managed —
-without the gate, a correctly-configured managed deployment reported a false
-warning for a route nothing was ever supposed to serve.
+which is invisible unless something goes looking for it.
+
+**The CORS probe's own URL has to respect `S3_ADDRESSING_STYLE`, or it tests
+the wrong URL and reports the wrong thing — found on a real deployment
+immediately after adding addressing style, because the two were written in
+different sessions and this one wasn't updated to match.** With `virtual`
+(DigitalOcean Spaces), the bucket belongs in the *host*
+(`bucket.region.digitaloceanspaces.com`), not appended to the path. A
+path-style probe against a virtual-hosted-only endpoint gets a response with
+no `Access-Control-*` headers regardless of what the bucket's actual CORS
+rule says — which looks *exactly* like a missing CORS rule and isn't one, so
+someone who correctly configured CORS sees this script insist they hadn't.
+The fix mirrors the addressing logic by hand in bash (`bucket.host` vs
+`host/bucket`) rather than asking boto3 for it, because there's no
+unauthenticated-URL-only helper worth reaching for to save four lines.
+Anywhere this codebase builds an object URL outside `storage/s3.py` itself is
+a candidate for this exact bug; this was the one place it had happened.
+
+And the old `/media/*` reachability probe is now gated on `LOCAL_STORAGE`:
+that Caddy rule always points at `rustfs:9000`, which is dead code once
+storage is managed — without the gate, a correctly-configured managed
+deployment reported a false warning for a route nothing was ever supposed to
+serve.
 
 **HeadBucket passing doesn't mean uploads work — a real upload is the only
 thing that proves a real upload works.** Confirmed twice on the same real

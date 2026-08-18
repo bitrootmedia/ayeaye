@@ -295,6 +295,24 @@ fi
 if [ "${LOCAL_STORAGE:-1}" = 0 ]; then
   S3_PUBLIC_VAL=$(grep -E '^S3_PUBLIC_ENDPOINT=' .env 2>/dev/null | cut -d= -f2-)
   S3_PUBLIC_VAL="${S3_PUBLIC_VAL:-$S3_ENDPOINT_VAL}"
+  ADDR_STYLE=$(grep -E '^S3_ADDRESSING_STYLE=' .env 2>/dev/null | cut -d= -f2-)
+  ADDR_STYLE="${ADDR_STYLE:-path}"
+  # The object URL has to be addressed the same way boto3 actually builds it
+  # (see S3_ADDRESSING_STYLE), or this probes a URL nothing is listening on
+  # as a bucket and reports "no CORS rule" for a request that never reached
+  # the bucket's CORS evaluation at all. Confirmed on a real DigitalOcean
+  # deployment: with `virtual`, the bucket belongs in the HOST
+  # (bucket.region.digitaloceanspaces.com), not appended to the path — a
+  # path-style probe against that endpoint gets a response with no
+  # Access-Control-* headers regardless of what the bucket's CORS rule says,
+  # which looks identical to a missing CORS rule and isn't one.
+  if [ "$ADDR_STYLE" = "virtual" ]; then
+    SCHEME="${S3_PUBLIC_VAL%%://*}"
+    HOST_PART="${S3_PUBLIC_VAL#*://}"
+    PROBE_URL="${SCHEME}://${S3_BUCKET_VAL}.${HOST_PART}/diagnose-probe"
+  else
+    PROBE_URL="$S3_PUBLIC_VAL/$S3_BUCKET_VAL/diagnose-probe"
+  fi
   # Same-origin uploads (the bundled RustFS, fronted by Caddy on SITE_URL)
   # need no CORS at all — that's the whole reason this check only runs for a
   # managed bucket, which is a genuinely different origin from SITE_URL.
@@ -303,12 +321,12 @@ if [ "${LOCAL_STORAGE:-1}" = 0 ]; then
   # origin answer it with no Access-Control-* headers at all rather than an
   # error, which is invisible unless you go looking for it.
   cors=$(curl -sk -D - -o /dev/null --max-time 5 -X OPTIONS \
-    "$S3_PUBLIC_VAL/$S3_BUCKET_VAL/diagnose-probe" \
+    "$PROBE_URL" \
     -H "Origin: $SITE_URL" \
     -H "Access-Control-Request-Method: PUT" \
     -H "Access-Control-Request-Headers: content-type" 2>/dev/null)
   if [ -z "$cors" ]; then
-    hard "could not reach $S3_PUBLIC_VAL for a CORS preflight check"
+    hard "could not reach $PROBE_URL for a CORS preflight check"
   elif echo "$cors" | grep -qi "^access-control-allow-origin:"; then
     good "bucket CORS allows PUT from $SITE_URL"
   else
