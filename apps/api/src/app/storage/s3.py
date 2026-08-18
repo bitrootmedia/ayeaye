@@ -13,11 +13,27 @@ means the browser needs no CORS at all to upload, which removes the entire
 class of preflight problems the reference project had to work around on the
 client.
 
-**Path-style addressing throughout.** There is no wildcard DNS for
+**Path-style addressing by default.** There is no wildcard DNS for
 `<bucket>.host`, and it makes the object URL literally `/<bucket>/<key>` — so
 with the bucket named `media`, Caddy forwards `/media/*` through untouched.
 Stripping the prefix would invalidate every signature, which is why the Caddy
-rule is `handle` and not `handle_path`.
+rule is `handle` and not `handle_path`. That reasoning is specific to the
+bundled RustFS behind Caddy on the site's own origin — a managed bucket is
+never reached through `/media/*` at all, uploads go straight to
+`S3_PUBLIC_ENDPOINT` — so `S3_ADDRESSING_STYLE` exists to let a managed
+provider differ.
+
+**DigitalOcean Spaces requires virtual-hosted addressing.** Their own docs are
+explicit that path-style isn't supported for regular operations, only
+`https://<space>.<region>.digitaloceanspaces.com`, with the bucket in the
+*host*, not the path — `S3_ADDRESSING_STYLE=virtual` is for exactly this.
+Traced back from a real deployment where it surfaced as nothing more specific
+than "that file didn't upload": it isn't a signature error or a permissions
+error, it's DO's origin not recognising a bucket-in-the-path request as
+addressing a bucket at all. **DigitalOcean also requires `S3_REGION=us-east-1`
+regardless of where the Space actually is** — the real region lives only in
+the endpoint hostname (`fra1`, `nyc3`, …); passing it as the SigV4 region too
+produces a signature DO's origin computes differently and rejects.
 
 boto3 is synchronous. Presigning is pure local HMAC with no I/O, so it is safe
 inline; anything that actually talks to RustFS goes through a thread so it
@@ -36,11 +52,13 @@ from app.core.config import settings
 
 logger = logging.getLogger("app.storage")
 
-_CONFIG = Config(
-    signature_version="s3v4",
-    s3={"addressing_style": "path"},
-    retries={"max_attempts": 3, "mode": "standard"},
-)
+
+def _config() -> Config:
+    return Config(
+        signature_version="s3v4",
+        s3={"addressing_style": settings.s3_addressing_style},
+        retries={"max_attempts": 3, "mode": "standard"},
+    )
 
 
 def _client(endpoint: str):
@@ -50,7 +68,7 @@ def _client(endpoint: str):
         aws_access_key_id=settings.s3_access_key,
         aws_secret_access_key=settings.s3_secret_key,
         region_name=settings.s3_region,
-        config=_CONFIG,
+        config=_config(),
     )
 
 

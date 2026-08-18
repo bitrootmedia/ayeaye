@@ -104,6 +104,26 @@ else
     value=$(grep -E "^$var=" .env | cut -d= -f2-)
     [ -n "$value" ] && good "$var is set" || hard "$var is empty — nothing can reach the database or storage"
   done
+
+  # DigitalOcean Spaces, confirmed on a real deployment: it requires
+  # virtual-hosted addressing (their own docs say path-style isn't supported
+  # for regular operations) and the literal region us-east-1 regardless of
+  # where the Space actually is. Get either wrong and the failure is a plain
+  # upload error with nothing in it to say why — this is the two-line answer
+  # to that hour of confusion.
+  S3_ENDPOINT_CHECK=$(grep -E '^S3_ENDPOINT=' .env | cut -d= -f2-)
+  case "$S3_ENDPOINT_CHECK" in
+    *digitaloceanspaces.com*)
+      style=$(grep -E '^S3_ADDRESSING_STYLE=' .env | cut -d= -f2-)
+      [ "$style" = "virtual" ] \
+        && good "S3_ADDRESSING_STYLE is virtual, as DigitalOcean Spaces requires" \
+        || hard "DigitalOcean Spaces endpoint but S3_ADDRESSING_STYLE=${style:-path} — set it to virtual"
+      region=$(grep -E '^S3_REGION=' .env | cut -d= -f2-)
+      [ "$region" = "us-east-1" ] \
+        && good "S3_REGION is us-east-1, as DigitalOcean Spaces requires (regardless of the Space's real region)" \
+        || hard "DigitalOcean Spaces endpoint but S3_REGION=$region — DigitalOcean ignores this and expects the literal string us-east-1; the real region belongs only in S3_ENDPOINT"
+      ;;
+  esac
 fi
 
 head_ "Containers"

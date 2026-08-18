@@ -710,6 +710,25 @@ to the internet and turns on the RustFS/pgweb consoles, none of which belong
 on a public box. `diagnose.sh` now checks for exactly this combination
 (the file present, `SITE_URL` not localhost) and says so.
 
+**DigitalOcean Spaces needed a real code change, not just a `.env` fix —
+confirmed on a real deployment where the symptom was a plain "that file
+didn't upload," nothing more specific.** `storage/s3.py` hardcoded
+`addressing_style: "path"` unconditionally, because that's what makes
+`/media/<key>` a literal, Caddy-forwardable path for the bundled RustFS. But
+that reasoning is specific to same-origin storage behind Caddy — a managed
+bucket is never reached through `/media/*` at all — and DigitalOcean's own
+docs are explicit that path-style isn't supported for regular operations,
+only virtual-hosted (`https://<space>.<region>.digitaloceanspaces.com`, bucket
+in the host). `S3_ADDRESSING_STYLE` (default `path`, unchanged for everyone
+else) is what lets a managed provider override it. The second, independent
+DigitalOcean requirement — `S3_REGION` has to be the literal string
+`us-east-1` regardless of where the Space actually is, because the real
+region lives only in the endpoint hostname — is env-only and easy to get
+backwards precisely because "region" reads like the field where your actual
+region goes. `scripts/setup-interactive.sh` detects a `digitaloceanspaces.com`
+endpoint and sets both correctly rather than asking; `diagnose.sh` checks both
+independently of that, in case someone configured `.env` by hand.
+
 ## The front door
 
 `views/Landing.tsx` is the **only screen a signed-out visitor can reach**, and

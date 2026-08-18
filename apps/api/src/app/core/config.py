@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # literally /media/<key>, so Caddy forwards it untouched. Stripping the
     # prefix would invalidate every signature.
     s3_bucket: str = "media"
+    # `path` is right for the bundled RustFS and most S3-compatible providers.
+    # DigitalOcean Spaces is the confirmed exception — see storage/s3.py.
+    s3_addressing_style: str = "path"
 
     # Presigned URL lifetimes. Short for reading — the URL is a bearer token
     # until it expires — and longer for upload, so a big file on a slow

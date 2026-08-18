@@ -167,15 +167,21 @@ Three things it can't do for you, because they happen on the other side:
 - **A managed bucket is a different origin from your site**, so uploads are no
   longer same-origin the way the bundled RustFS is. Add a CORS rule on the
   bucket allowing `PUT`/`GET` from `SITE_URL`, or every upload fails in the
-  browser before it reaches storage. And this product signs storage requests
-  path-style only — real AWS S3 refuses that in any region opened after 2020,
-  so pick a provider or region that still allows it.
+  browser before it reaches storage.
+- **`S3_ADDRESSING_STYLE` defaults to `path`**, right for most providers and
+  for real AWS S3 in any region opened before September 2020. **DigitalOcean
+  Spaces is the confirmed exception**: set it to `virtual`, and separately set
+  `S3_REGION=us-east-1` literally, regardless of where the Space actually is —
+  the real region only ever goes in `S3_ENDPOINT`. Get either wrong against
+  DigitalOcean and the failure is a plain upload error with nothing in it to
+  say why. `scripts/setup-interactive.sh` sets both for you automatically when
+  it recognises a `digitaloceanspaces.com` endpoint.
 
 If uploads aren't working, `./scripts/diagnose.sh` checks your actual
-credentials, endpoint and bucket the same way the app does, and checks the
-bucket's CORS separately from that — the two most common ways this half of
-the setup goes wrong, and the two hardest to tell apart from a browser
-console alone.
+credentials, endpoint, bucket and (for DigitalOcean specifically) region and
+addressing style the same way the app does, and checks the bucket's CORS
+separately from that — the ways this half of the setup has actually gone
+wrong, and the hardest to tell apart from a browser console alone.
 
 ## Email is optional
 
@@ -312,6 +318,11 @@ docker compose logs -f api
 - **You changed `infra/postgres/init.sql` and it had no effect.** It only runs
   on an empty data directory. `docker compose down -v` first — that deletes
   your data.
+- **`git pull` refuses with a conflict on `compose.override.yml`.** It's
+  committed for local dev and meant to be absent on a real server (see [Put it
+  on a domain](#put-it-on-a-domain)) — if you deleted it here, a later release
+  that also touches that file collides with your deletion. Delete it again
+  after the pull and carry on; it was never meant to exist on this machine.
 
 ## Developing
 

@@ -139,13 +139,33 @@ S3_REGION="us-east-1"
 S3_BUCKET="media"
 S3_ACCESS_KEY=""
 S3_SECRET_KEY=""
+S3_ADDRESSING_STYLE="path"
 RUSTFS_ACCESS_KEY=""
 RUSTFS_SECRET_KEY=""
 
 if [ "$S3_CHOICE" = "2" ]; then
   S3_ENDPOINT=$(ask "Endpoint URL (e.g. https://s3.<region>.amazonaws.com)" "")
   S3_PUBLIC_ENDPOINT=$(ask "Public endpoint, if different (blank = same as above)" "$S3_ENDPOINT")
-  S3_REGION=$(ask "Region" "$S3_REGION")
+  case "$S3_ENDPOINT$S3_PUBLIC_ENDPOINT" in
+    *digitaloceanspaces.com*)
+      # Confirmed against a real deployment: DigitalOcean Spaces needs
+      # virtual-hosted addressing (their own docs say path-style isn't
+      # supported for regular operations) AND the literal region us-east-1
+      # regardless of where the Space actually is — the real region lives
+      # only in the endpoint hostname. Get either wrong and the failure is a
+      # plain upload error with nothing in it to say why, so this is set for
+      # you rather than asked.
+      S3_REGION="us-east-1"
+      S3_ADDRESSING_STYLE="virtual"
+      echo
+      echo "DigitalOcean Spaces detected — region set to us-east-1 and"
+      echo "addressing style set to virtual-hosted. Both are DigitalOcean's own"
+      echo "requirement, not this product's default; leave them as set."
+      ;;
+    *)
+      S3_REGION=$(ask "Region" "$S3_REGION")
+      ;;
+  esac
   S3_BUCKET=$(ask "Bucket name" "$S3_BUCKET")
   S3_ACCESS_KEY=$(ask "Access key" "")
   S3_SECRET_KEY=$(ask_secret "Secret key (hidden)")
@@ -156,9 +176,10 @@ if [ "$S3_CHOICE" = "2" ]; then
   echo "    longer the same origin as $SITE_URL — add a CORS rule on the"
   echo "    bucket allowing PUT and GET from that origin, or every upload"
   echo "    fails before it reaches storage."
-  echo "  - this product signs path-style requests only. Most S3-compatible"
-  echo "    providers support that; real AWS S3 does NOT in any region opened"
-  echo "    after September 2020."
+  echo "  - this product signs path-style requests by default. Most"
+  echo "    S3-compatible providers support that; real AWS S3 does NOT in any"
+  echo "    region opened after September 2020, and DigitalOcean Spaces never"
+  echo "    does (handled above if that's what you entered)."
 else
   PROFILES+=("local-storage")
   S3_ENDPOINT="http://rustfs:9000"
@@ -230,6 +251,7 @@ S3_REGION=$S3_REGION
 S3_BUCKET=$S3_BUCKET
 S3_ACCESS_KEY=$S3_ACCESS_KEY
 S3_SECRET_KEY=$S3_SECRET_KEY
+S3_ADDRESSING_STYLE=$S3_ADDRESSING_STYLE
 RUSTFS_ACCESS_KEY=$RUSTFS_ACCESS_KEY
 RUSTFS_SECRET_KEY=$RUSTFS_SECRET_KEY
 
