@@ -327,11 +327,26 @@ if [ "${LOCAL_STORAGE:-1}" = 0 ]; then
     -H "Access-Control-Request-Headers: content-type" 2>/dev/null)
   if [ -z "$cors" ]; then
     hard "could not reach $PROBE_URL for a CORS preflight check"
-  elif echo "$cors" | grep -qi "^access-control-allow-origin:"; then
-    good "bucket CORS allows PUT from $SITE_URL"
-  else
+  elif ! echo "$cors" | grep -qi "^access-control-allow-origin:"; then
     hard "bucket has no CORS rule for $SITE_URL — uploads will fail in the browser before reaching storage"
     say  "add a CORS rule on the bucket allowing PUT/GET from $SITE_URL"
+  # The origin being allowed is necessary but not sufficient: every real
+  # upload sends a Content-Type, and Content-Type is only a CORS "simple
+  # header" for a few specific values (form-urlencoded, multipart, text/plain)
+  # — for an actual image, PDF, or anything else this product uploads, the
+  # browser preflights it and the origin's own Allowed Headers rule has to
+  # name it (or wildcard `*`), completely separately from Allowed Origins.
+  # A CORS rule that permits the origin but not this header still breaks
+  # every real file, and it's the more commonly forgotten half — provider UIs
+  # ask for Allowed Origins/Methods prominently and Allowed Headers as an
+  # afterthought.
+  elif echo "$cors" | grep -qi "^access-control-allow-headers:.*\*" \
+    || echo "$cors" | grep -qi "^access-control-allow-headers:.*content-type"; then
+    good "bucket CORS allows PUT from $SITE_URL, including the Content-Type header"
+  else
+    hard "bucket CORS allows the origin but not the Content-Type header — real uploads (anything but plain text) will still fail"
+    say  "add content-type to the bucket's Allowed Headers, or wildcard it to *"
+    say  "$(echo "$cors" | grep -i '^access-control-allow-headers:' || echo '(no Access-Control-Allow-Headers in the response at all)')"
   fi
 fi
 

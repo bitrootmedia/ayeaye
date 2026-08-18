@@ -650,6 +650,21 @@ storage is managed — without the gate, a correctly-configured managed
 deployment reported a false warning for a route nothing was ever supposed to
 serve.
 
+**Allowed Origins is not the whole CORS rule, and checking only that half was
+a real gap the moment someone asked "should I also allow headers?".**
+`Access-Control-Allow-Origin` alone is what the check verified; it never
+looked at `Access-Control-Allow-Headers`. `Content-Type` is a CORS "simple"
+header for exactly three values (`application/x-www-form-urlencoded`,
+`multipart/form-data`, `text/plain`) — every real upload this product
+handles (an image, a PDF, a voice note) has neither, so the browser
+preflights it, and a bucket that allows the origin but not the header still
+fails every one of those uploads with nothing CORS-shaped in the console to
+point at. The check now fails specifically on that combination — origin
+allowed, header not — rather than reporting success on half the requirement.
+Confirmed against a throwaway local HTTP server standing in for three
+provider responses (both headers present, origin only, neither), because
+there was no live external bucket handy to prove the distinction against.
+
 **HeadBucket passing doesn't mean uploads work — a real upload is the only
 thing that proves a real upload works.** Confirmed twice on the same real
 deployment: `HeadBucket` only exercises list/read-level permission, and a

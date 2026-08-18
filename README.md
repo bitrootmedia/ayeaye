@@ -166,8 +166,14 @@ Three things it can't do for you, because they happen on the other side:
   The prompt tells you the one line to run once: `CREATE DATABASE supertokens;`.
 - **A managed bucket is a different origin from your site**, so uploads are no
   longer same-origin the way the bundled RustFS is. Add a CORS rule on the
-  bucket allowing `PUT`/`GET` from `SITE_URL`, or every upload fails in the
-  browser before it reaches storage.
+  bucket allowing `PUT`/`GET` from `SITE_URL`, **and allow the `content-type`
+  header** (or wildcard Allowed Headers to `*`) — Content-Type is only a
+  CORS "simple" header for a couple of specific values, so a real image or
+  PDF still triggers a preflight, and Allowed Origins by itself lets that
+  preflight fail with nothing in the browser console pointing at CORS at
+  all. This is the half of the CORS rule people forget, because provider UIs
+  usually put Allowed Origins and Methods front and centre and Allowed
+  Headers as an afterthought.
 - **`S3_ADDRESSING_STYLE` defaults to `path`**, right for most providers and
   for real AWS S3 in any region opened before September 2020. **DigitalOcean
   Spaces is the confirmed exception**: set it to `virtual`, and separately set

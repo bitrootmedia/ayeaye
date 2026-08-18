@@ -175,7 +175,9 @@ if [ "$S3_CHOICE" = "2" ]; then
   echo "  - uploads go straight from the browser to storage, and it's no"
   echo "    longer the same origin as $SITE_URL — add a CORS rule on the"
   echo "    bucket allowing PUT and GET from that origin, or every upload"
-  echo "    fails before it reaches storage."
+  echo "    fails before it reaches storage. Allow the content-type header"
+  echo "    too (or wildcard headers to *) — it's the half people forget,"
+  echo "    and without it every upload still fails except plain text."
   echo "  - this product signs path-style requests by default. Most"
   echo "    S3-compatible providers support that; real AWS S3 does NOT in any"
   echo "    region opened after September 2020, and DigitalOcean Spaces never"
@@ -272,7 +274,9 @@ if [ "$DB_CHOICE" = "2" ]; then
 fi
 if [ "$S3_CHOICE" = "2" ]; then
   echo "Before \`docker compose up -d\`, on your bucket: a CORS rule allowing"
-  echo "PUT and GET from $SITE_URL."
+  echo "PUT and GET from $SITE_URL, with content-type in Allowed Headers (or"
+  echo "Allowed Headers wildcarded to *) — Allowed Origins alone still fails"
+  echo "every upload except plain text."
 fi
 echo
 echo "Next:"
