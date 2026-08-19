@@ -22,6 +22,7 @@ import Landing, { Footer, Header } from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import Organisations from "@/views/Organisations";
 import Notifications from "@/views/Notifications";
+import NotFound from "@/views/NotFound";
 import Planner from "@/views/Planner";
 import Reminders from "@/views/Reminders";
 import ProjectDetail from "@/views/ProjectDetail";
@@ -197,6 +198,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                     stopped working, and it only gets discovered on the day it
                     was needed. */}
                 {import.meta.env.DEV && <Route path="__crash" element={<Crash />} />}
+                {/* Catches everything else. Without a wildcard here, a URL
+                    matching no route above matches nothing in the tree at
+                    all — not even Root — and renders a blank page: no rail,
+                    no message, nothing to click. */}
+                <Route path="*" element={<NotFound />} />
               </Route>
             </Routes>
           </AuthChrome>

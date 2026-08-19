@@ -92,4 +92,20 @@ test.describe("the shell", () => {
     await page.getByRole("button", { name: "Start again" }).click();
     await expect(page.getByRole("button", { name: "Log out" })).toBeVisible({ timeout: 15_000 });
   });
+
+  test("an unknown URL shows a way home, not a blank page", async ({ page }) => {
+    // Without a wildcard route, a URL matching nothing in the tree matches
+    // nothing at all — not even Root — and the whole page renders blank: no
+    // rail, no message, nothing to click. That's the bug this pins.
+    await signUp(page, uniqueEmail("sh"));
+    await page.goto("/this-page-does-not-exist");
+
+    // The shell is still here — this is a 404 inside the app, not instead of it.
+    await appIsAlive(page);
+    await expect(page.getByText("Nothing here")).toBeVisible();
+
+    await page.getByRole("button", { name: "Take me home" }).click();
+    await page.waitForURL("/");
+    await appIsAlive(page);
+  });
 });

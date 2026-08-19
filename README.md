@@ -220,8 +220,10 @@ The secret is shown **once**. Only a hash is stored, so there is no screen
 that could show it to you again, and a database backup is not a list of live
 credentials.
 
-**2. Point your client at it.** The token screen has a copy button for this
-exact line:
+**2. Point your client at it — with the Claude Code CLI, not the claude.ai
+website or desktop app's "Add custom connector."** That UI only knows how to
+add a server through OAuth, and this one deliberately has no OAuth server to
+add — see below. The token screen has a copy button for this exact line:
 
 ```bash
 claude mcp add --transport http ayeayecaptain https://tasks.example.com/mcp \
@@ -243,6 +245,15 @@ through the same permission rules as the web app, as you. It cannot see a
 project nobody shared with you, cannot read anybody's private notes, cannot see
 a task somebody hid, and cannot invite people. Revoking a token from the same
 screen takes effect on the next call.
+
+**"Couldn't register with ayeaye's sign-in service"?** That's the claude.ai
+website or desktop app's connector UI, not the CLI — it only knows how to add
+a server via OAuth, and offers "add an OAuth Client ID" as the fix. There is
+no client ID to add: this server has no authorisation server at all, by
+design, so a person can connect their own assistant to their own self-hosted
+install without also standing up an OAuth provider. Use `claude mcp add`
+above instead — it authenticates with the static Bearer token directly and
+never attempts OAuth discovery.
 
 ## Back it up
 

@@ -82,7 +82,7 @@ Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
 Verified by 229 infra-free unit tests, 534 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 124 browser tests in a real Chromium
+(`./scripts/e2e-*.sh`) and 125 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -572,6 +572,23 @@ Four things cost real time here, all of them non-obvious:
   expects the next call to reach the worker that issued it — but uvicorn runs
   several and nothing is shared. Same reasoning as putting realtime through
   Redis; here the cheaper answer is to need no session at all.
+- **The claude.ai web/desktop "Add custom connector" UI cannot connect to
+  this server, full stop — and the error it gives ("Couldn't register with
+  ayeaye's sign-in service… add an OAuth Client ID") looks like a config
+  problem on our side and isn't one.** That UI unconditionally attempts
+  OAuth Dynamic Client Registration against whatever URL it's given, even
+  when the server advertises no OAuth metadata at all — a reported,
+  currently-open limitation on Anthropic's side
+  ([anthropics/claude-ai-mcp#457](https://github.com/anthropics/claude-ai-mcp/issues/457),
+  [#112](https://github.com/anthropics/claude-ai-mcp/issues/112)), not
+  something a server can opt out of. The "add an OAuth Client ID" fallback it
+  offers doesn't help either — there is no client ID, because there is no
+  authorisation server, on purpose (the point above). The Claude Code CLI's
+  `claude mcp add --header "Authorization: Bearer …"` is the one client path
+  that actually skips OAuth discovery and uses the static token, which is why
+  that's the only command README's "Your own assistant" section shows —
+  don't add a second one for the web connector, because there isn't a working
+  one to add.
 
 **A warning about testing it from a shell.** `e2e-mcp.sh` builds every payload
 with `python3 -c json.dumps`, never with escaped quotes inside a shell string.
@@ -825,6 +842,23 @@ reuse — a second copy would drift from the first the next time either
 changes. `Wordmark` is a link to `/`, deliberately: without it `/auth` was a
 dead end with no way back except the browser's own Back button, which doesn't
 exist if it's the tab's first page.
+
+**An unmatched URL needs a wildcard route, or the page is blank — not just
+without content, `Root` itself never renders.** `<Route path="/" element={<Root />}>`
+with children only matches a path its children actually cover; a URL none of
+them declare doesn't match the parent either, so nothing in the tree renders
+at all — no rail, no header, nothing to click, which is a worse failure than
+a 404 page because there's no indication anything is even running. `views/NotFound.tsx`
+is the last child under `Root`, on `path="*"`, and being the *last* child
+matters no more than any other route here (React Router tries children in
+order, and a wildcard placed earlier would swallow paths meant for routes
+declared after it — this one just happens to be declared last because
+everything above it is declared first). It renders inside the same `Root` →
+`SessionAuth` → `App` chain as everything else, so signed out it asks for a
+sign-in first (with `redirectToPath` carrying the bad URL, exactly like any
+other deep link) and only signed in does it actually show "Nothing here" —
+inside the shell, rail and header intact, because it's a 404 *inside* the
+app, not instead of it.
 
 ## The auth screens
 
