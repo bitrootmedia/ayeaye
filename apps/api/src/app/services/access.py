@@ -512,15 +512,19 @@ def visible_tasks_stmt(
     return stmt
 
 
-def my_critical_tasks_stmt(*, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:
-    """Open, critical, and yours — either you own it or you're asked to act.
+def my_priority_tasks_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, priority: str
+) -> Select:
+    """Open, at the given priority, and yours — either you own it or you're
+    asked to act.
 
-    The dashboard's escalation list. Deliberately narrower than
-    `visible_tasks_stmt`'s `owner_user_id=`/`action_required_user_id=`
-    filters, which AND against a single route: this ORs the two, because
-    "critical work that's mine, either way" is one question, not two lists to
-    stitch together client-side. `level > NO_ACCESS` is still here for the
-    same reason it's in every builder in this module — ownership and
+    The dashboard's escalation lists — one call per priority shown (Critical,
+    Urgent), because they're separate cards, not one list split client-side.
+    Deliberately narrower than `visible_tasks_stmt`'s
+    `owner_user_id=`/`action_required_user_id=` filters, which AND against a
+    single route: this ORs the two, because "work at this priority that's
+    mine, either way" is one question. `level > NO_ACCESS` is still here for
+    the same reason it's in every builder in this module — ownership and
     action-required both already resolve to a real level, so the OR below is
     a display filter layered on access already proven, not a second access
     decision.
@@ -531,7 +535,7 @@ def my_critical_tasks_stmt(*, user_id: uuid.UUID, org_id: uuid.UUID, org_role: s
         .where(
             Task.organisation_id == org_id,
             level > NO_ACCESS,
-            Task.priority == "critical",
+            Task.priority == priority,
             Task.closed_at.is_(None),
             or_(Task.owner_user_id == user_id, Task.action_required_user_id == user_id),
         )

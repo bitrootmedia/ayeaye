@@ -55,7 +55,7 @@ class AnnouncementOut(BaseModel):
     created_at: datetime
 
 
-class CriticalTaskOut(BaseModel):
+class PriorityTaskOut(BaseModel):
     id: str
     title: str
     status: str
@@ -64,8 +64,9 @@ class CriticalTaskOut(BaseModel):
     due_on: date | None
     is_owner: bool
     # The one that actually needs you, as opposed to work of yours that's
-    # merely critical. Mutually exclusive in practice with `waiting_on` being
-    # set: if it's yours to act on, there's nobody else to wait for.
+    # merely at this priority. Mutually exclusive in practice with
+    # `waiting_on` being set: if it's yours to act on, there's nobody else to
+    # wait for.
     is_action_required: bool
     # Who the owner is waiting on — set only when the caller owns the task,
     # somebody's been asked, and it isn't the caller. `None` covers both
@@ -78,11 +79,13 @@ class DashboardOut(BaseModel):
     announcements: list[AnnouncementOut]
     away: list[AbsenceOut]
     can_announce: bool
-    # Open, critical, and mine — either I own it or I'm asked to act. Not
-    # "critical in the organisation": an admin sees everything already, and
-    # mailing them every critical task in the company is exactly the
-    # notification-fatigue mistake the comment socket avoids elsewhere.
-    critical: list[CriticalTaskOut]
+    # Open and mine — either I own it or I'm asked to act — one list per
+    # priority shown, each its own card. Not "critical/urgent in the
+    # organisation": an admin sees everything already, and mailing them every
+    # critical task in the company is exactly the notification-fatigue
+    # mistake the comment socket avoids elsewhere.
+    critical: list[PriorityTaskOut]
+    urgent: list[PriorityTaskOut]
 
 
 def _person(user) -> PersonOut | None:
@@ -128,9 +131,11 @@ async def delete_absence(absence_id: uuid.UUID, user: CurrentUser, db: DbSession
     await presence_service.remove_absence(db, user, absence_id)
 
 
-async def _critical_tasks(db: DbSession, ctx: OrgContext, user: User) -> list[CriticalTaskOut]:
-    stmt = access_service.my_critical_tasks_stmt(
-        user_id=user.id, org_id=ctx.organisation.id, org_role=ctx.role
+async def _priority_tasks(
+    db: DbSession, ctx: OrgContext, user: User, *, priority: str
+) -> list[PriorityTaskOut]:
+    stmt = access_service.my_priority_tasks_stmt(
+        user_id=user.id, org_id=ctx.organisation.id, org_role=ctx.role, priority=priority
     )
     tasks = [t for t, _level in (await db.execute(stmt)).all()]
 
@@ -165,7 +170,7 @@ async def _critical_tasks(db: DbSession, ctx: OrgContext, user: User) -> list[Cr
             else None
         )
         out.append(
-            CriticalTaskOut(
+            PriorityTaskOut(
                 id=str(t.id),
                 title=t.title,
                 status=t.status,
@@ -193,7 +198,8 @@ async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
     today = datetime.now(ZoneInfo(user.timezone or "UTC")).date()
     away = await presence_service.away_in_org(db, ctx, today=today)
     notices = await presence_service.announcements(db, ctx, today=today)
-    critical = await _critical_tasks(db, ctx, user)
+    critical = await _priority_tasks(db, ctx, user, priority="critical")
+    urgent = await _priority_tasks(db, ctx, user, priority="urgent")
     return DashboardOut(
         announcements=[
             AnnouncementOut(
@@ -209,6 +215,7 @@ async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
         away=[_absence(a, today=today, person=who) for a, who in away],
         can_announce=presence_service.can_announce(ctx.role),
         critical=critical,
+        urgent=urgent,
     )
 
 

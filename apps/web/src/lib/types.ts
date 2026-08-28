@@ -376,10 +376,10 @@ export type Announcement = {
   created_at: string;
 };
 
-/** Open, critical, and mine — either I own it or I'm asked to act.
+/** Open, at one priority, and mine — either I own it or I'm asked to act.
  *  `is_action_required` and `waiting_on` are the distinction the dashboard
  *  exists to draw: one needs me, the other needs someone else. */
-export type CriticalTask = {
+export type PriorityTask = {
   id: string;
   title: string;
   status: string;
@@ -398,7 +398,8 @@ export type DashboardData = {
   away: Absence[];
   /** Resolved server-side — admins write, everyone reads. */
   can_announce: boolean;
-  critical: CriticalTask[];
+  critical: PriorityTask[];
+  urgent: PriorityTask[];
 };
 
 /** A personal access token. The secret is only ever in the create response. */

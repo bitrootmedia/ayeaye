@@ -1,5 +1,6 @@
 import {
   ArrowRightIcon,
+  ArrowUpIcon,
   ClockIcon,
   MegaphoneIcon,
   PinIcon,
@@ -24,7 +25,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import { personName, type CriticalTask, type DashboardData, type TaskStatus } from "@/lib/types";
+import { personName, type DashboardData, type PriorityTask, type TaskStatus } from "@/lib/types";
 
 /**
  * The organisation's landing screen.
@@ -83,21 +84,18 @@ export default function Dashboard() {
         }
       />
 
-      {data.critical.length > 0 && (
-        <Card role="region" aria-label="Critical tasks" className="mb-4">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TriangleAlertIcon className="size-4 text-status-blocker" />
-              Critical
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {data.critical.map((t) => (
-              <CriticalRow key={t.id} orgId={org.id} task={t} />
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      <PriorityCard
+        label="Critical"
+        icon={<TriangleAlertIcon className="size-4 text-status-blocker" />}
+        tasks={data.critical}
+        orgId={org.id}
+      />
+      <PriorityCard
+        label="Urgent"
+        icon={<ArrowUpIcon className="size-4 text-status-review" />}
+        tasks={data.urgent}
+        orgId={org.id}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card role="region" aria-label="Announcements">
@@ -217,12 +215,48 @@ function AwayRow({ absence }: { absence: DashboardData["away"][number] }) {
 }
 
 /**
- * One critical, open task the caller has a stake in — the distinction the
- * section exists to draw. "Your action" is shape, not colour (an
+ * One priority's escalation card — Critical and Urgent are the same shape,
+ * just a different filter server-side, so this is the one place that shape
+ * is written down rather than two near-identical cards drifting apart.
+ * Empty renders nothing: a card for the priority you have none of at is
+ * clutter, not reassurance.
+ */
+function PriorityCard({
+  label,
+  icon,
+  tasks,
+  orgId,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  tasks: PriorityTask[];
+  orgId: string;
+}) {
+  if (tasks.length === 0) return null;
+  return (
+    <Card role="region" aria-label={`${label} tasks`} className="mb-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {icon}
+          {label}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {tasks.map((t) => (
+          <PriorityRow key={t.id} orgId={orgId} task={t} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One open task at that priority the caller has a stake in — the distinction
+ * the card exists to draw. "Your action" is shape, not colour (an
  * `ArrowRightIcon`, no red): status already owns the only red in the product,
  * and a second red badge here would mean it stops meaning "this needs you".
  */
-function CriticalRow({ orgId, task }: { orgId: string; task: CriticalTask }) {
+function PriorityRow({ orgId, task }: { orgId: string; task: PriorityTask }) {
   return (
     <Link
       to={`/orgs/${orgId}/tasks/${task.id}`}
