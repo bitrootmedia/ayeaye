@@ -1,10 +1,20 @@
-import { MegaphoneIcon, PinIcon, PlaneIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  ArrowRightIcon,
+  ClockIcon,
+  MegaphoneIcon,
+  PinIcon,
+  PlaneIcon,
+  PlusIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { useOutletContext, useParams } from "react-router-dom";
+import { Link, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +24,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import { personName, type DashboardData } from "@/lib/types";
+import { personName, type CriticalTask, type DashboardData, type TaskStatus } from "@/lib/types";
 
 /**
  * The organisation's landing screen.
@@ -72,6 +82,22 @@ export default function Dashboard() {
           )
         }
       />
+
+      {data.critical.length > 0 && (
+        <Card role="region" aria-label="Critical tasks" className="mb-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TriangleAlertIcon className="size-4 text-status-blocker" />
+              Critical
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {data.critical.map((t) => (
+              <CriticalRow key={t.id} orgId={org.id} task={t} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card role="region" aria-label="Announcements">
@@ -187,6 +213,41 @@ function AwayRow({ absence }: { absence: DashboardData["away"][number] }) {
       </span>
       {absence.note && <span className="text-xs text-muted-foreground">{absence.note}</span>}
     </div>
+  );
+}
+
+/**
+ * One critical, open task the caller has a stake in — the distinction the
+ * section exists to draw. "Your action" is shape, not colour (an
+ * `ArrowRightIcon`, no red): status already owns the only red in the product,
+ * and a second red badge here would mean it stops meaning "this needs you".
+ */
+function CriticalRow({ orgId, task }: { orgId: string; task: CriticalTask }) {
+  return (
+    <Link
+      to={`/orgs/${orgId}/tasks/${task.id}`}
+      className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm hover:bg-accent/50"
+    >
+      <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+      <StatusBadge status={task.status as TaskStatus} />
+      {task.project_name && (
+        <span className="truncate text-xs text-muted-foreground">{task.project_name}</span>
+      )}
+      {task.due_on && (
+        <span className="font-mono text-xs text-muted-foreground">due {task.due_on}</span>
+      )}
+      {task.is_action_required ? (
+        <Badge variant="outline" className="gap-1.5">
+          <ArrowRightIcon className="size-3" />
+          Your action
+        </Badge>
+      ) : (
+        <Badge variant="outline" className="gap-1.5 text-muted-foreground">
+          <ClockIcon className="size-3" />
+          {task.waiting_on ? `Waiting on ${personName(task.waiting_on)}` : "Unassigned"}
+        </Badge>
+      )}
+    </Link>
   );
 }
 

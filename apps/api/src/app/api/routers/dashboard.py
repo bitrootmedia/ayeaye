@@ -11,11 +11,15 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
+from app.models import Project, User
 from app.schemas.structure import PersonOut
+from app.services import access as access_service
 from app.services import presence as presence_service
 from app.services import reminders as reminders_service
+from app.services.organisations import OrgContext
 
 router = APIRouter(tags=["dashboard"])
 
@@ -51,10 +55,34 @@ class AnnouncementOut(BaseModel):
     created_at: datetime
 
 
+class CriticalTaskOut(BaseModel):
+    id: str
+    title: str
+    status: str
+    project_id: str | None
+    project_name: str | None
+    due_on: date | None
+    is_owner: bool
+    # The one that actually needs you, as opposed to work of yours that's
+    # merely critical. Mutually exclusive in practice with `waiting_on` being
+    # set: if it's yours to act on, there's nobody else to wait for.
+    is_action_required: bool
+    # Who the owner is waiting on — set only when the caller owns the task,
+    # somebody's been asked, and it isn't the caller. `None` covers both
+    # "nobody's been asked yet" and "it's on me" (`is_action_required` already
+    # says the second one).
+    waiting_on: PersonOut | None
+
+
 class DashboardOut(BaseModel):
     announcements: list[AnnouncementOut]
     away: list[AbsenceOut]
     can_announce: bool
+    # Open, critical, and mine — either I own it or I'm asked to act. Not
+    # "critical in the organisation": an admin sees everything already, and
+    # mailing them every critical task in the company is exactly the
+    # notification-fatigue mistake the comment socket avoids elsewhere.
+    critical: list[CriticalTaskOut]
 
 
 def _person(user) -> PersonOut | None:
@@ -100,6 +128,58 @@ async def delete_absence(absence_id: uuid.UUID, user: CurrentUser, db: DbSession
     await presence_service.remove_absence(db, user, absence_id)
 
 
+async def _critical_tasks(db: DbSession, ctx: OrgContext, user: User) -> list[CriticalTaskOut]:
+    stmt = access_service.my_critical_tasks_stmt(
+        user_id=user.id, org_id=ctx.organisation.id, org_role=ctx.role
+    )
+    tasks = [t for t, _level in (await db.execute(stmt)).all()]
+
+    project_ids = {t.project_id for t in tasks if t.project_id}
+    project_names: dict = {}
+    if project_ids:
+        rows = (
+            await db.execute(select(Project.id, Project.name).where(Project.id.in_(project_ids)))
+        ).all()
+        project_names = {pid: name for pid, name in rows}
+
+    # Only for tasks the caller owns, where somebody else has been asked —
+    # the same set `waiting_on` gets filled in for below.
+    waiting_ids = {
+        t.action_required_user_id
+        for t in tasks
+        if t.owner_user_id == user.id
+        and t.action_required_user_id
+        and t.action_required_user_id != user.id
+    }
+    waiting_people: dict = {}
+    if waiting_ids:
+        rows = (await db.execute(select(User).where(User.id.in_(waiting_ids)))).scalars().all()
+        waiting_people = {u.id: u for u in rows}
+
+    out = []
+    for t in tasks:
+        is_owner = t.owner_user_id == user.id
+        waiting_for = (
+            waiting_people.get(t.action_required_user_id)
+            if is_owner and t.action_required_user_id and t.action_required_user_id != user.id
+            else None
+        )
+        out.append(
+            CriticalTaskOut(
+                id=str(t.id),
+                title=t.title,
+                status=t.status,
+                project_id=str(t.project_id) if t.project_id else None,
+                project_name=project_names.get(t.project_id) if t.project_id else None,
+                due_on=t.due_on,
+                is_owner=is_owner,
+                is_action_required=t.action_required_user_id == user.id,
+                waiting_on=_person(waiting_for),
+            )
+        )
+    return out
+
+
 # --- the organisation's -----------------------------------------------------------
 
 
@@ -107,12 +187,13 @@ async def delete_absence(absence_id: uuid.UUID, user: CurrentUser, db: DbSession
 async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
     """What you need to know before you ask anyone for anything.
 
-    One request rather than three: it is the landing screen, and three
-    round-trips to render one page is three chances to show it half-built.
+    One request rather than several: it is the landing screen, and rendering
+    it in stages looks broken.
     """
     today = datetime.now(ZoneInfo(user.timezone or "UTC")).date()
     away = await presence_service.away_in_org(db, ctx, today=today)
     notices = await presence_service.announcements(db, ctx, today=today)
+    critical = await _critical_tasks(db, ctx, user)
     return DashboardOut(
         announcements=[
             AnnouncementOut(
@@ -127,6 +208,7 @@ async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
         ],
         away=[_absence(a, today=today, person=who) for a, who in away],
         can_announce=presence_service.can_announce(ctx.role),
+        critical=critical,
     )
 
 

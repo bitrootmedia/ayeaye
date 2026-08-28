@@ -512,6 +512,38 @@ def visible_tasks_stmt(
     return stmt
 
 
+def my_critical_tasks_stmt(*, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:
+    """Open, critical, and yours — either you own it or you're asked to act.
+
+    The dashboard's escalation list. Deliberately narrower than
+    `visible_tasks_stmt`'s `owner_user_id=`/`action_required_user_id=`
+    filters, which AND against a single route: this ORs the two, because
+    "critical work that's mine, either way" is one question, not two lists to
+    stitch together client-side. `level > NO_ACCESS` is still here for the
+    same reason it's in every builder in this module — ownership and
+    action-required both already resolve to a real level, so the OR below is
+    a display filter layered on access already proven, not a second access
+    decision.
+    """
+    level = task_level_expression(user_id, org_role)
+    return (
+        select(Task, level.label("level_rank"))
+        .where(
+            Task.organisation_id == org_id,
+            level > NO_ACCESS,
+            Task.priority == "critical",
+            Task.closed_at.is_(None),
+            or_(Task.owner_user_id == user_id, Task.action_required_user_id == user_id),
+        )
+        # Yours to act on, first — that's the one with a clock on it.
+        .order_by(
+            case((Task.action_required_user_id == user_id, 0), else_=1),
+            Task.position,
+            Task.id,
+        )
+    )
+
+
 def paged_tasks_stmt(*, limit: int, offset: int, **kwargs) -> Select:
     """One page of the list, **and the size of the whole thing**, in one query.
 
