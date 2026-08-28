@@ -1443,11 +1443,37 @@ Read these before starting Phase 6.
 - **The breadcrumb separator is a sibling of the item, not a child.** Both
   render `<li>`, and nesting them is invalid HTML that React logs on every
   screen with a breadcrumb.
-- **`EntityPicker` binds Escape in the *capture* phase and stops it there.**
-  It is used inside dialogs, which close on Escape themselves; in the bubble
-  phase both fire, so dismissing the list also discards the half-typed task
-  behind it. Escape must close the innermost thing. Pinned by a test in
-  `e2e/tests/task-ux.spec.ts`.
+- **`EntityPicker`'s list is a `Popover.Portal`, not a plain `absolute` div —
+  and that isn't a style choice, it's the fix for a real bug.** The original
+  hand-rolled version positioned its list `absolute` inside the field's own
+  wrapper, which every `Card` clips: `Card`'s base classes carry
+  `overflow-hidden` unconditionally (for rounding cover images to its
+  corners), so any picker whose list would extend past its card's own bottom
+  edge — Priority and Project on the task screen, reliably, because they
+  aren't the first field in their card — had that list silently cut off.
+  Status and Owner, the first field in each of their cards, mostly didn't,
+  which is exactly the kind of intermittent, position-dependent symptom that
+  reads as "sometimes" until someone maps it to card position. Portaling to
+  `document.body` escapes that ancestor chain entirely, and
+  `Popover.Positioner` is what supplies `--anchor-width` / `--available-height`
+  (the same primitives `DropdownMenuContent` already uses) — for free, that
+  also fixes the picker running off the bottom of the viewport on a short
+  screen, which the old version never handled either.
+- **Base UI's own dismissal replaced two hand-rolled `document` listeners,
+  and correctly, not just more concisely.** The picker used to bind its own
+  `mousedown` (click-away) and capture-phase `keydown` (Escape, stopped
+  before it could also close an enclosing dialog) listeners directly on
+  `document`. Once the list is portaled, that click-away check breaks in a
+  new way: a click *inside* the now-elsewhere-in-the-DOM list reads as
+  "outside" the field's own wrapper and would close the picker before the
+  click's own handler ever registered the choice. `Popover`'s built-in
+  dismissal (`useDismiss`, floating-ui's nested-floating-tree logic) already
+  solves both — outside-click detection that correctly excludes its own
+  portaled content, and Escape that closes only the innermost floating
+  layer — which is the same "innermost thing closes first" behavior the
+  hand-rolled capture-phase trick existed to fabricate. Confirmed, not
+  assumed: `e2e/tests/task-ux.spec.ts`'s "Escape closes the list, not the
+  dialog behind it" still passes unchanged.
 
 ## Running and testing
 
