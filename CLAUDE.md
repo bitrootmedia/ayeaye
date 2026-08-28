@@ -554,6 +554,20 @@ authority, so it is shown once, SHA-256 at rest, scoped `read`/`write`, and
 revocable from the screen that made it. `require_write` is the single place a
 read-only token is turned away.
 
+**`attach_file` is the one place a file's bytes pass through the API**, and
+that is a deliberate, narrow exception to Attachments' "browser → storage
+directly" rule below — an MCP client has no browser and no direct route to
+the bucket, so the three-step handshake collapses into one call: create the
+`pending` row, write the bytes with `s3.put_object_bytes` (the same primitive
+the thumbnail worker uses — same class of caller, not a browser subject to
+its own bandwidth), then run the *same* `confirm()` the browser path runs, so
+the real size and the real content-type still win over whatever was declared.
+Base64 costs roughly a third more than the file's own size, both on the wire
+and in the calling assistant's context, which is the reason this isn't
+positioned as a bulk-transfer channel — it exists for what someone would
+plausibly paste into a chat, not for shipping a phone video through an LLM's
+context window.
+
 Four things cost real time here, all of them non-obvious:
 
 - **There are two classes called `Context` in the SDK.** The tool decorator
@@ -895,7 +909,9 @@ The button label is literally the string "SIGN UP"; that is their copy, not a
 
 Read `services/attachments.py`. The bytes go **browser → storage directly**
 and never pass through the API — a phone video must not occupy a worker for two
-minutes — and that forces the three-step shape:
+minutes — and that forces the three-step shape. (`app/mcp/server.py`'s
+`attach_file` is the one deliberate exception, for a caller that isn't a
+browser and has no route to the bucket of its own — see the MCP section.)
 
 1. ticket (access checked, type validated, `pending` row, presigned PUT);
 2. the browser PUTs to storage;

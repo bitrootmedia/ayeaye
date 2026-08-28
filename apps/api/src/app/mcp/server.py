@@ -29,6 +29,8 @@ fraction of the tokens of the same data as JSON — with the id kept on every
 row so a follow-up call can address it.
 """
 
+import base64
+import binascii
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
@@ -43,9 +45,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 from pydantic import Field
 
+from app.core.config import settings
 from app.db import SessionLocal
 from app.models import PersonalAccessToken, User
 from app.models.task import PRIORITIES, STATUSES
+from app.services import attachments as attachments_service
 from app.services import organisations as organisations_service
 from app.services import projects as projects_service
 from app.services import reminders as reminders_service
@@ -53,6 +57,7 @@ from app.services import search as search_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 from app.services import tokens as tokens_service
+from app.storage import s3
 
 mcp = MCPServer(
     name="ayeayecaptain",
@@ -395,6 +400,69 @@ async def comment(ctx: Context, organisation_id: str, task_id: str, body: str) -
         except Exception as exc:
             raise Denied("No such task, or you can't comment on it.") from exc
     return "Posted."
+
+
+@mcp.tool()
+async def attach_file(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    filename: Annotated[str, Field(description="e.g. screenshot.png")],
+    content_type: Annotated[
+        str, Field(description="MIME type, e.g. image/png. Codec parameters are stripped.")
+    ],
+    content_base64: Annotated[str, Field(description="The file's bytes, base64-encoded.")],
+) -> str:
+    """Attach a file to a task's Files panel, as you.
+
+    The bytes travel in this call, unlike the browser: a browser uploads
+    straight to storage and the API never sees the bytes, because a phone
+    video shouldn't occupy a worker for two minutes. An assistant has no
+    browser and no direct route to the bucket, so this is the one place in
+    the product where a file passes through the API — deliberately, and only
+    here. Keep it to things you'd actually paste into a chat (a screenshot, a
+    short recording, a PDF); base64 costs about a third more than the file's
+    own size, both over the wire and in this conversation's context.
+
+    Same rules as everywhere else a file lands: the type has to be one this
+    product accepts, there's a size ceiling, and you need write access on the
+    task — attaching changes what the task *is*, which is a stricter bar than
+    commenting on it.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    try:
+        raw = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise Denied("That doesn't look like valid base64.") from exc
+    if not raw:
+        raise Denied("That file is empty.")
+    if len(raw) > settings.attachment_max_bytes:
+        limit = settings.attachment_max_bytes // (1024 * 1024)
+        raise Denied(f"That file is larger than {limit}MB.")
+
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+
+        attachment, _upload_url = await attachments_service.create(
+            db, user, filename=filename, content_type=content_type, task=tctx.task
+        )
+        # Steps 2 and 3 of the usual handshake, done server-side: write the
+        # bytes ourselves rather than handing back a presigned URL nobody here
+        # can PUT to, then run the same confirm the browser path runs — the
+        # real size and the real content-type win over whatever was declared.
+        await s3.put_object_bytes(attachment.storage_key, raw, attachment.content_type)
+        ready = await attachments_service.confirm(db, attachment, user)
+        await tasks_service.announce(db, tctx.task, "file_added")
+    return (
+        f"Attached [{ready.id}] {ready.filename} ({ready.size_bytes} bytes) "
+        f"to [{tctx.task.id}] {tctx.task.title}"
+    )
 
 
 def _require_write(token: PersonalAccessToken) -> None:
