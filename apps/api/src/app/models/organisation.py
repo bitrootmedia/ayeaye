@@ -28,7 +28,12 @@ ROLE_RANK = {ROLE_MEMBER: 0, ROLE_ADMIN: 1, ROLE_OWNER: 2}
 # rather than a copy between tables with a window in the middle.
 STATUS_INVITED = "invited"
 STATUS_ACTIVE = "active"
-STATUSES = (STATUS_INVITED, STATUS_ACTIVE)
+# A suspended member — reversible, unlike removal. `context_for` only ever
+# resolves an `active` membership, so a disabled row simply stops matching it:
+# every organisation-scoped route 404s for that person until an admin flips it
+# back, with no second check anywhere else to keep in sync.
+STATUS_DISABLED = "disabled"
+STATUSES = (STATUS_INVITED, STATUS_ACTIVE, STATUS_DISABLED)
 
 
 class Organisation(Base):
@@ -68,14 +73,15 @@ class Organisation(Base):
 class OrganisationMember(Base):
     """Membership *and* pending invitation, in one row.
 
-    Three shapes, and the constraints below allow exactly these:
+    Four shapes, and the constraints below allow exactly these:
 
-    | status    | user_id | invited_email | meaning                              |
-    |-----------|---------|---------------|--------------------------------------|
-    | `invited` | NULL    | set           | invited someone with no account yet  |
-    | `invited` | set     | set           | invited someone who already has one, |
-    |           |         |               | or they signed up and it bound       |
-    | `active`  | set     | maybe         | a member                             |
+    | status     | user_id | invited_email | meaning                              |
+    |------------|---------|---------------|--------------------------------------|
+    | `invited`  | NULL    | set           | invited someone with no account yet  |
+    | `invited`  | set     | set           | invited someone who already has one, |
+    |            |         |               | or they signed up and it bound       |
+    | `active`   | set     | maybe         | a member                             |
+    | `disabled` | set     | maybe         | a member, suspended                  |
 
     **An invite never joins anyone automatically.** It is attached to the
     account (so they see it) and stays `invited` until they accept. The
@@ -84,17 +90,23 @@ class OrganisationMember(Base):
     something into your account. Requiring one click closes that.
 
     The exception is the invite link — clicking it *is* the acceptance.
+
+    **`disabled` is a pause, not a departure.** Only an active member can be
+    disabled, so it always has a `user_id` already — see
+    `services/organisations.py`'s `disable_member`/`enable_member` for the
+    reasoning about why this doesn't reassign what they own the way removal
+    does.
     """
 
     __tablename__ = "organisation_members"
     __table_args__ = (
         CheckConstraint(f"role IN {ROLES!r}", name="ck_org_members_role"),
         CheckConstraint(f"status IN {STATUSES!r}", name="ck_org_members_status"),
-        # An active member is a person. Without this, a bug could leave a
-        # membership with nobody in it and every access query would skip it
-        # silently rather than failing loudly.
+        # An active or disabled member is a person. Without this, a bug could
+        # leave a membership with nobody in it and every access query would
+        # skip it silently rather than failing loudly.
         CheckConstraint(
-            "status <> 'active' OR user_id IS NOT NULL",
+            "status NOT IN ('active', 'disabled') OR user_id IS NOT NULL",
             name="ck_org_members_active_has_user",
         ),
         # An invitation is addressed to an email. That address is how it binds

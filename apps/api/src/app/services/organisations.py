@@ -21,6 +21,12 @@ Four rules, and they should not be re-derived anywhere else:
 Beyond those, an **org admin can do anything** inside their organisation. That
 is the escape hatch that keeps a self-hosted product operable, and it is a
 membership role — not an account attribute and not a policy engine.
+
+`disable_member`/`enable_member` are a fifth capability, not a fifth rule —
+they reuse rules 2 through 4 exactly as written (you cannot disable someone
+above you, and you cannot disable the last owner) rather than re-deriving
+them. See `disable_member`'s own docstring for why it is not `remove_member`
+in miniature.
 """
 
 import re
@@ -40,6 +46,7 @@ from app.models.organisation import (
     ROLE_RANK,
     ROLES,
     STATUS_ACTIVE,
+    STATUS_DISABLED,
     STATUS_INVITED,
 )
 
@@ -62,7 +69,7 @@ def role_at_least(role: str, minimum: str) -> bool:
 
 
 def can_manage_members(role: str) -> bool:
-    """Invite, remove, and change roles."""
+    """Invite, remove, change roles, and disable or enable."""
     return role_at_least(role, ROLE_ADMIN)
 
 
@@ -390,6 +397,73 @@ async def remove_member(
     # is what makes re-inviting the same person work.
     await db.delete(member)
     await db.commit()
+
+
+async def disable_member(
+    db: AsyncSession, ctx: OrgContext, member: OrganisationMember
+) -> OrganisationMember:
+    """Suspend a member's access without touching what they own.
+
+    Deliberately not `remove_member` in miniature. Removal reassigns every
+    project and task the person owns because the row is about to stop
+    existing — a thing with no owner is a thing nobody can administer.
+    Disabling is a pause, not a departure: their work stays theirs, exactly
+    where it was, for the admin who re-enables them (or `remove_member`
+    later, if it comes to that) to find again. The whole effect is flipping
+    `status` — `context_for` only ever resolves an `active` membership, so
+    every organisation-scoped route 404s for this person from the next
+    request on, with nothing else to keep in sync.
+
+    **No separate self-block, on purpose.** `remove_member` lets you act on
+    yourself (that's how leaving works) and relies on rule 4 alone to stop
+    the one case that matters — the last owner. Disabling reuses the exact
+    same shape: rank and last-owner are the only rules, so a plain admin can
+    disable their own admin access same as they could leave outright, and a
+    lone owner disabling themselves is caught by the check below, not by a
+    rule invented just for this endpoint.
+    """
+    ctx.require(can_manage_members(ctx.role), "only an admin or owner can disable a member")
+    ctx.require(
+        can_act_on_member(ctx.role, member.role), "you cannot disable someone above you"
+    )
+
+    if member.status != STATUS_ACTIVE:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT, detail="that person is not an active member"
+        )
+
+    # Same rule 4 as removal, and for the same reason: an organisation with no
+    # active owner is one nobody can administer, and disabling has the
+    # identical effect on `count_active_owners` that removing does.
+    if member.role == ROLE_OWNER and await count_active_owners(db, ctx.organisation.id) <= 1:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="this is the last owner — appoint another owner first",
+        )
+
+    member.status = STATUS_DISABLED
+    await db.commit()
+    await db.refresh(member)
+    return member
+
+
+async def enable_member(
+    db: AsyncSession, ctx: OrgContext, member: OrganisationMember
+) -> OrganisationMember:
+    """Reverse a disable. The member's role, and everything they own, were
+    never touched — this just makes `context_for` find them again."""
+    ctx.require(can_manage_members(ctx.role), "only an admin or owner can enable a member")
+    ctx.require(
+        can_act_on_member(ctx.role, member.role), "you cannot enable someone above you"
+    )
+    if member.status != STATUS_DISABLED:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT, detail="that person is not disabled"
+        )
+    member.status = STATUS_ACTIVE
+    await db.commit()
+    await db.refresh(member)
+    return member
 
 
 async def _reassign_everything_owned_by(

@@ -24,14 +24,26 @@ export function RoleBadge({ role, className }: { role: Role; className?: string 
   );
 }
 
-/** Only rendered for `invited`. An active member's status is the absence of
- *  this badge — a row saying "Active" on every line is noise. */
+/** Only rendered for `invited` or `disabled`. An active member's status is
+ *  the absence of this badge — a row saying "Active" on every line is noise. */
 export function PendingBadge({ status }: { status: MemberStatus }) {
-  if (status !== "invited") return null;
-  return (
-    <Badge variant="outline" className="gap-1.5 text-muted-foreground">
-      <span className="size-1.5 shrink-0 rounded-full bg-status-review" />
-      Invited
-    </Badge>
-  );
+  if (status === "invited") {
+    return (
+      <Badge variant="outline" className="gap-1.5 text-muted-foreground">
+        <span className="size-1.5 shrink-0 rounded-full bg-status-review" />
+        Invited
+      </Badge>
+    );
+  }
+  if (status === "disabled") {
+    // Muted, not red — this isn't a task status and doesn't compete with the
+    // product's one red (blocker) for what "needs you" means.
+    return (
+      <Badge variant="outline" className="gap-1.5 text-muted-foreground">
+        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
+        Disabled
+      </Badge>
+    );
+  }
+  return null;
 }

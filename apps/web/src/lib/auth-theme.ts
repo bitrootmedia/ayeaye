@@ -41,6 +41,15 @@ export const AUTH_STYLE = `
     color: var(--foreground);
   }
 
+  /* The body text of every "it worked" screen across every recipe — "a reset
+     email has been sent", "your password has been updated", email
+     verification, TOTP, the lot. SuperTokens ships this with no colour rule
+     of its own, which is invisible rather than merely low-contrast: it
+     defaults to near-black text on what is, in dark mode, a near-black card. */
+  [data-supertokens~="primaryText"] {
+    color: var(--foreground);
+  }
+
   [data-supertokens~="headerSubtitle"],
   [data-supertokens~="secondaryText"],
   [data-supertokens~="privacyPolicyAndTermsAndConditions"],

@@ -12,7 +12,7 @@
  */
 
 export type Role = "member" | "admin" | "owner";
-export type MemberStatus = "invited" | "active";
+export type MemberStatus = "invited" | "active" | "disabled";
 
 export const ROLE_RANK: Record<Role, number> = { member: 0, admin: 1, owner: 2 };
 

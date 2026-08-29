@@ -1115,6 +1115,15 @@ Three things learned doing it, all pinned by `e2e/tests/theme.spec.ts`:
   box around it.
 - **They layer an opacity on secondary text**, which lands under the contrast
   floor once the background is dark. `opacity: 1` alongside the colour.
+- **`primaryText` — the body of every "it worked" screen across every
+  recipe** ("a reset email has been sent", "your password has been updated",
+  email verification, TOTP — grep `data-supertokens~="primaryText"` across
+  the SDK and it is the same class everywhere — ships with no colour rule of
+  its own. That is invisible, not merely low-contrast: it defaults to
+  near-black text on what is, in dark mode, a near-black card. One rule
+  (`color: var(--foreground)`) fixes every recipe at once, which is also why
+  it was worth finding rather than patching just the reset-password screen
+  that surfaced it.
 
 The selectors are SuperTokens' own `data-supertokens` hooks — the documented
 styling surface, but still someone else's markup. A test asserts the hooks
@@ -1632,8 +1641,29 @@ Two structural choices worth not undoing:
 **Membership and invitations are one table.** `organisation_members` holds both;
 the difference is `status`. Binding an invitation at signup is then one UPDATE
 rather than a copy between tables with a window in the middle. The model
-docstring has the three legal row shapes and the CHECK constraints that allow
-exactly those.
+docstring has the four legal row shapes and the CHECK constraints that allow
+exactly those — `invited`, `active`, and now `disabled`.
+
+**Disabling a member reuses `context_for`'s own gate rather than adding a
+second check.** `context_for` only ever resolves an `active` membership; a
+`disabled` row just stops matching it, so every organisation-scoped route
+404s for that person from the next request on, with nothing else anywhere
+in the codebase that needs to know the status exists. `disable_member`/
+`enable_member` (`services/organisations.py`) reuse rules 2 through 4
+exactly as written — rank, and the last-owner check — rather than
+introducing a fifth rule. **Deliberately not `remove_member` in miniature**:
+removal reassigns every project and task the person owns, because the row
+is about to stop existing and a thing with no owner is a thing nobody can
+administer. Disabling is a pause, not a departure — their work stays
+exactly where it was, for the admin who re-enables them to find again.
+
+**No separate self-block, on purpose.** `remove_member` already lets you act
+on yourself (that's how leaving works), protected only by the last-owner
+rule. Disabling copies that shape rather than inventing a "you can't disable
+yourself" rule that doesn't exist anywhere else in this module: a plain
+admin can disable their own access same as they could leave outright, and a
+lone owner disabling themselves is caught by the ordinary last-owner check,
+not a bespoke one.
 
 **An invitation never joins anyone automatically.** Signing up with an invited
 address *attaches* the invitation (`user_id` set, still `invited`) and it

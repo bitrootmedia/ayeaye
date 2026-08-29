@@ -1,9 +1,11 @@
 import {
+  BanIcon,
   BuildingIcon,
   LinkIcon,
   MailIcon,
   RefreshCwIcon,
   Trash2Icon,
+  UserCheckIcon,
   UserPlusIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -86,6 +88,11 @@ export default function OrganisationDetail() {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [inviting, setInviting] = useState(false);
   const [lastInvite, setLastInvite] = useState<InviteCreated | null>(null);
+  // A real member (active or disabled) is a person whose projects and tasks
+  // get reassigned on removal — an outstanding invitation never had any of
+  // that, so revoking one stays instant below rather than routing through
+  // this.
+  const [confirmRemove, setConfirmRemove] = useState<Member | null>(null);
 
   const loadMembers = useCallback(async () => {
     if (!orgId) return;
@@ -304,6 +311,27 @@ export default function OrganisationDetail() {
                               </Button>
                             </>
                           )}
+                          {mayAct && member.status !== "invited" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={member.status === "disabled" ? "Enable" : "Disable"}
+                              onClick={() =>
+                                act(
+                                  () =>
+                                    api(
+                                      `/organisations/${org.id}/members/${member.id}/${
+                                        member.status === "disabled" ? "enable" : "disable"
+                                      }`,
+                                      { method: "POST" },
+                                    ),
+                                  member.status === "disabled" ? "Enabled" : "Disabled",
+                                )
+                              }
+                            >
+                              {member.status === "disabled" ? <UserCheckIcon /> : <BanIcon />}
+                            </Button>
+                          )}
                           {(mayAct || isMe) && (
                             <Button
                               variant="ghost"
@@ -315,18 +343,22 @@ export default function OrganisationDetail() {
                                     ? "Revoke invitation"
                                     : "Remove"
                               }
-                              onClick={() =>
-                                act(async () => {
-                                  await api(
-                                    `/organisations/${org.id}/members/${member.id}`,
-                                    { method: "DELETE" },
+                              onClick={() => {
+                                // A pending invitation has no real presence
+                                // yet — nothing to reassign, nothing at risk
+                                // — so revoking one stays a single click.
+                                if (member.status === "invited") {
+                                  void act(
+                                    () =>
+                                      api(`/organisations/${org.id}/members/${member.id}`, {
+                                        method: "DELETE",
+                                      }),
+                                    "Invitation revoked",
                                   );
-                                  if (isMe) {
-                                    forgetOrg(org.id);
-                                    navigate("/");
-                                  }
-                                }, isMe ? "You've left" : "Removed")
-                              }
+                                  return;
+                                }
+                                setConfirmRemove(member);
+                              }}
                             >
                               <Trash2Icon />
                             </Button>
@@ -356,6 +388,52 @@ export default function OrganisationDetail() {
           await loadMembers();
         }}
       />
+
+      <Dialog
+        open={confirmRemove !== null}
+        onOpenChange={(open) => !open && setConfirmRemove(null)}
+      >
+        <DialogContent>
+          {confirmRemove && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {confirmRemove.user_id === me?.id
+                    ? "Leave this organisation?"
+                    : `Remove ${confirmRemove.display_name || confirmRemove.email}?`}
+                </DialogTitle>
+                <DialogDescription>
+                  {confirmRemove.user_id === me?.id
+                    ? "You lose access immediately. Any project or task you own here is reassigned to another owner — re-inviting yourself later doesn't undo that."
+                    : "They lose access immediately. Any project or task they own is reassigned to another owner. You can invite them again later, but this doesn't undo by itself."}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    const member = confirmRemove;
+                    const isSelf = member.user_id === me?.id;
+                    setConfirmRemove(null);
+                    void act(async () => {
+                      await api(`/organisations/${org.id}/members/${member.id}`, {
+                        method: "DELETE",
+                      });
+                      if (isSelf) {
+                        forgetOrg(org.id);
+                        navigate("/");
+                      }
+                    }, isSelf ? "You've left" : "Removed");
+                  }}
+                >
+                  {confirmRemove.user_id === me?.id ? "Leave" : "Remove"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -162,6 +162,23 @@ async def remove_member(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
     await orgs_service.remove_member(db, ctx, member)
 
 
+@router.post("/{org_id}/members/{member_id}/disable", response_model=MemberOut)
+async def disable_member(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
+    """Suspend a member's access. Reversible — see `services/organisations.py`
+    for why this is not the same operation as removing them."""
+    member = await orgs_service.get_member(db, ctx.organisation.id, member_id)
+    updated = await orgs_service.disable_member(db, ctx, member)
+    return _member_out(updated, None, None, show_invite_url=False)
+
+
+@router.post("/{org_id}/members/{member_id}/enable", response_model=MemberOut)
+async def enable_member(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
+    """Reverse a disable."""
+    member = await orgs_service.get_member(db, ctx.organisation.id, member_id)
+    updated = await orgs_service.enable_member(db, ctx, member)
+    return _member_out(updated, None, None, show_invite_url=False)
+
+
 @router.post("/{org_id}/members/{member_id}/invite-link", response_model=MemberOut)
 async def reissue_invite_link(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
     """Mint a fresh link for an outstanding invitation, invalidating the old one.

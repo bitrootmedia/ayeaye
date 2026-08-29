@@ -98,7 +98,9 @@ export async function inviteMember(
 export async function createProject(page: Page, orgId: string, name: string): Promise<string> {
   await page.goto(`/orgs/${orgId}/projects`);
   await page.getByRole("button", { name: "New project" }).first().click();
-  await page.getByLabel("Name").fill(name);
+  // Scoped to the dialog: getByLabel matches on substring, and the page
+  // behind it also has a "Filter by name" field once the list has one.
+  await page.getByRole("dialog").getByLabel("Name").fill(name);
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("link", { name: new RegExp(name) })).toBeVisible();
   await page.getByRole("link", { name: new RegExp(name) }).click();

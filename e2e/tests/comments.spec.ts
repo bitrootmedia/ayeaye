@@ -25,7 +25,9 @@ const box = (page: Page) => page.getByLabel("Write a comment");
 
 async function comment(page: Page, text: string) {
   await box(page).fill(text);
-  await page.getByRole("button", { name: "Comment" }).click();
+  // Exact: the composer also has a "Switch action required with this
+  // comment" trigger, and role-name matching is substring by default.
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
   await expect(box(page)).toHaveValue("");
 }
 

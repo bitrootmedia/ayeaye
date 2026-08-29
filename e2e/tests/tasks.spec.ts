@@ -125,7 +125,9 @@ test.describe("action required", () => {
     await them.goto(`/orgs/${orgId}/tasks`);
     await expect(them.getByText("Check the rigging")).toHaveCount(0);
 
-    await page.getByLabel("Action required").click();
+    // Exact: the comment composer also has a "Switch action required with
+    // this comment" trigger, and role-name matching is substring by default.
+    await page.getByRole("button", { name: "Action required", exact: true }).click();
     await page.getByRole("option", { name: helper }).click();
     await expect(page.getByText("They've been notified")).toBeVisible();
 
@@ -152,7 +154,9 @@ test.describe("action required", () => {
 
     await createTask(page, orgId, "Hoist the sails");
     await openTask(page, orgId, "Hoist the sails");
-    await page.getByLabel("Action required").click();
+    // Exact: the comment composer also has a "Switch action required with
+    // this comment" trigger, and role-name matching is substring by default.
+    await page.getByRole("button", { name: "Action required", exact: true }).click();
     await page.getByRole("option", { name: helper }).click();
     await expect(page.getByText("They've been notified")).toBeVisible();
 
