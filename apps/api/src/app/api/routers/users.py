@@ -35,12 +35,15 @@ class MeOut(BaseModel):
     # name. Not the same thing as an organisation announcement, which has an
     # author and an audience.
     status_message: str | None
+    # Opt-out, default on — see the column's own comment in models/user.py.
+    daily_summary_enabled: bool
 
 
 class MeUpdate(BaseModel):
     display_name: str | None = None
     timezone: str | None = None
     status_message: str | None = Field(default=None, max_length=140)
+    daily_summary_enabled: bool | None = None
 
 
 class PasswordChange(BaseModel):
@@ -56,6 +59,7 @@ def _me(user) -> MeOut:
         display_name=user.display_name,
         timezone=user.timezone,
         status_message=user.status_message,
+        daily_summary_enabled=user.daily_summary_enabled,
     )
 
 

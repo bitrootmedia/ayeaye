@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, String, func, text
+from sqlalchemy import Boolean, Date, DateTime, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +53,19 @@ class User(Base):
     # thing as an organisation announcement: this is one person's answer to
     # "what are you on with", and it has no author but you.
     status_message: Mapped[str | None] = mapped_column(String(140), nullable=True)
+
+    # Opt-out, not opt-in: the whole point of a daily digest is that nobody
+    # has to remember to go looking, so a setting nobody finds defaulting to
+    # off would mean almost nobody ever sees one. See tasks/daily_summary.py.
+    daily_summary_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    # The claim for the digest sweep — a date, not a timestamp, because the
+    # question is "did they get today's" and a date is the whole answer. Same
+    # discipline as `Reminder.notified_ahead_at`: the sweep's UPDATE sets this
+    # in the same statement that selects who's due, so a restart or two
+    # schedulers racing sends one digest, not two.
+    last_daily_summary_sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

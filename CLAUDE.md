@@ -460,10 +460,12 @@ already documents for its own bucket read.
 
 ## The scheduler
 
-A tenth container, `taskiq scheduler app.tasks:scheduler`, running one hourly
-job. It earns its place because a reminder has to arrive whether or not anybody
-has the app open: a loop inside the API dies on every reload in dev and fires
-twice the day somebody runs two replicas.
+A tenth container, `taskiq scheduler app.tasks:scheduler`, running three
+hourly jobs — `sweep_reminders` (:05), `sweep_deadlines` (:15) and
+`sweep_daily_summaries` (:25), staggered so they don't all land on the same
+tick and compete for it. It earns its place because a reminder has to arrive
+whether or not anybody has the app open: a loop inside the API dies on every
+reload in dev and fires twice the day somebody runs two replicas.
 
 It only **enqueues** — the work happens in the worker, so a slow sweep can't
 delay the next tick. `LabelScheduleSource` reads the cadence off the task's own
@@ -471,7 +473,50 @@ delay the next tick. `LabelScheduleSource` reads the cadence off the task's own
 in a config file that can disagree with it.
 
 Everything it triggers must be idempotent regardless. That is a rule about the
-jobs, not about the scheduler, and it is why the reminder claim exists.
+jobs, not about the scheduler, and it is why the reminder claim exists — and
+why `services/deadlines.py` and `services/daily_summary.py` copy it rather
+than inventing their own.
+
+**The deadline sweep** (`services/deadlines.py`, `tasks/deadlines.py`)
+notifies whoever's on the hook — the owner, and action-required if that's a
+different person — the day before an open task's due date, once. Same
+conditional-`UPDATE`-as-claim shape as `reminders.claim`
+(`Task.deadline_notified_at IS NULL`), and the same `<=` rather than `==` on
+the date so a sweep that missed its slot still catches up instead of skipping
+the notification forever. **Whose "tomorrow"?** A task can have two
+interested people in two timezones; the **owner's** decides, because they're
+the one accountable for the date — the same reasoning that makes them, not
+action-required, the one who can close the task. `tasks_service.update()`
+clears the claim whenever `due_on` changes, for the identical reason
+`reminders.update_one` clears its own stamps on a move: without it,
+rescheduling a task leaves it permanently silent about its new date.
+
+**The daily digest** (`services/daily_summary.py`, `tasks/daily_summary.py`)
+sends what's planned for today (the Planner's Today bucket) and what closed
+yesterday (tasks the person owns, closed in their local yesterday), once per
+organisation with something to report, around each person's local 7am.
+**Opt-out, default on** (`users.daily_summary_enabled`) — the point of a
+digest nobody has to remember to check is defeated by a setting defaulting to
+off that almost nobody would ever find. The claim
+(`users.last_daily_summary_sent_on`, a date, not a timestamp — the question
+is "did they get today's") is gated on the **hour** as well as the day,
+which neither reminders nor the deadline sweep need: a digest that could
+arrive at 3am is not a digest anybody reads, so `claim()` checks
+`datetime.now(tz).hour == SUMMARY_HOUR` in Python before it ever runs the
+UPDATE. **One notification per organisation, never one merged across all of
+them** — a digest links somewhere, the Planner is scoped to one organisation
+like everything else that isn't the notification inbox, and there is no
+sensible single landing page for "your day across three organisations." An
+organisation with nothing to report that day is skipped rather than sent an
+empty one.
+
+**Both new notification kinds needed a migration, not just a Python
+constant** — `notifications.kind` is a closed set enforced by a `CHECK`
+constraint (migration 0004, extended in 0013 and again in 0019), and
+`test_notification_kinds_are_a_closed_set` pins `NOTIFICATION_KINDS` against
+exactly that set so the two can't drift. Adding a kind in Python without the
+matching `ALTER` raises an `IntegrityError` at the worst possible moment —
+while notifying somebody.
 
 ## The dashboard, and what belongs to a person
 
@@ -1467,6 +1512,13 @@ Read these before starting Phase 6.
 
 ## Gotchas in what exists now
 
+- **The notification inbox's body span had no `whitespace-pre-wrap`, and it
+  took the daily digest to notice.** Every notification before it was
+  effectively one line, so the missing wrap was invisible; a digest body with
+  real line breaks (`Planned for today:\n- …\n\nDone yesterday:\n- …`)
+  rendered as one run-on sentence. Same fix as a comment or an announcement
+  body — `views/Notifications.tsx`'s body `<span>` needed the class everyone
+  else already has.
 - **`.env` beats a `${VAR:-default}` in the override.** `:-` only applies when
   the variable is *unset*, and `.env` is production-shaped. That is why
   `compose.override.yml` pins `SMTP_HOST: mailpit` / `SMTP_PORT: 1025`

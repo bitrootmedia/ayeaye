@@ -28,6 +28,7 @@ export default function Account() {
   const toast = useToastManager();
   const [displayName, setDisplayName] = useState(me?.display_name ?? "");
   const [status, setStatus] = useState(me?.status_message ?? "");
+  const [dailySummary, setDailySummary] = useState(me?.daily_summary_enabled ?? true);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -35,7 +36,11 @@ export default function Account() {
     try {
       await api("/me", {
         method: "PATCH",
-        body: JSON.stringify({ display_name: displayName, status_message: status }),
+        body: JSON.stringify({
+          display_name: displayName,
+          status_message: status,
+          daily_summary_enabled: dailySummary,
+        }),
       });
       await reload();
       toast.add({ title: "Saved" });
@@ -86,6 +91,20 @@ export default function Account() {
               <p className="text-xs text-muted-foreground">
                 A line about what you&rsquo;re on with. Yours to set, and anyone you work with
                 can see it.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={dailySummary}
+                  onChange={(e) => setDailySummary(e.target.checked)}
+                />
+                Daily summary
+              </label>
+              <p className="text-xs text-muted-foreground">
+                A morning nudge, per organisation, with what&rsquo;s planned for today and what
+                closed yesterday. On by default; turn it off here any time.
               </p>
             </div>
             <Button onClick={save} disabled={saving}>

@@ -226,6 +226,16 @@ class Task(Base):
 
     due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # A claim, not an audit trail — same discipline as `Reminder.notified_
+    # ahead_at`. Set by one conditional UPDATE in the deadline sweep so a
+    # restart or two schedulers racing fires the notification once, not
+    # twice. `services/tasks.py` clears it whenever `due_on` changes, which is
+    # what makes rescheduling actually notify again instead of staying silent
+    # forever about a date that no longer means anything.
+    deadline_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Manual ordering within a board column. Ties break on `id`, which is
     # UUIDv7 and therefore creation order — so an untouched board is
     # chronological without anyone having to set this.

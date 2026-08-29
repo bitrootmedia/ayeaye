@@ -102,7 +102,13 @@ export default function Notifications() {
                   {item.title}
                 </span>
                 {item.body && (
-                  <span className="block text-sm text-muted-foreground">{item.body}</span>
+                  // `whitespace-pre-wrap`, so the line breaks the daily
+                  // digest sends survive — the same as a comment or an
+                  // announcement. Every other body here has been one line so
+                  // far, which is exactly how this went unnoticed.
+                  <span className="block text-sm whitespace-pre-wrap text-muted-foreground">
+                    {item.body}
+                  </span>
                 )}
               </span>
               <span className="shrink-0 font-mono text-xs text-muted-foreground">

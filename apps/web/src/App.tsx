@@ -59,6 +59,8 @@ export type Me = {
   /** A line you set about what you're on with, shown to colleagues. Not an
    *  organisation announcement — that has an author and an audience. */
   status_message: string | null;
+  /** Opt-out, default on — see `models/user.py`'s own comment for why. */
+  daily_summary_enabled: boolean;
 };
 
 /**

@@ -280,9 +280,10 @@ def test_event_kinds_cover_every_workflow_change():
 
 
 def test_notification_kinds_are_a_closed_set():
-    """Pinned against the CHECK constraint in migration 0004. Adding a kind in
-    Python without the migration raises an IntegrityError at the worst possible
-    moment — while notifying somebody."""
+    """Pinned against the CHECK constraint in migration 0004 (extended in
+    0013 and 0019). Adding a kind in Python without the matching migration
+    raises an IntegrityError at the worst possible moment — while notifying
+    somebody."""
     assert set(NOTIFICATION_KINDS) == {
         "task_action_required",
         "task_owner_changed",
@@ -293,4 +294,11 @@ def test_notification_kinds_are_a_closed_set():
         # read differently in an inbox, so they are two kinds.
         "reminder_soon",
         "reminder_due",
+        # The deadline sweep: a not-closed task due tomorrow. Only ever one
+        # kind — there is no "due today" nudge the way reminders have both.
+        "task_deadline_tomorrow",
+        # The daily digest: today's plan and yesterday's done, always
+        # together in one notification, so there's nothing for a second kind
+        # to distinguish.
+        "daily_summary",
     }

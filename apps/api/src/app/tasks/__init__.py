@@ -10,6 +10,8 @@ from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
 
 from app.tasks import (
+    daily_summary,  # noqa: F401  registers sweep_daily_summaries
+    deadlines,  # noqa: F401  registers sweep_deadlines
     invites,  # noqa: F401  registers send_invite_email
     notifications,  # noqa: F401  registers send_notification_email
     reminders,  # noqa: F401  registers sweep_reminders
@@ -25,4 +27,13 @@ from app.tasks.broker import broker
 # work still happens in the worker, so a slow sweep can't delay the next one.
 scheduler = TaskiqScheduler(broker=broker, sources=[LabelScheduleSource(broker)])
 
-__all__ = ["broker", "scheduler", "invites", "notifications", "reminders", "thumbnails"]
+__all__ = [
+    "broker",
+    "scheduler",
+    "daily_summary",
+    "deadlines",
+    "invites",
+    "notifications",
+    "reminders",
+    "thumbnails",
+]

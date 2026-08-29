@@ -95,6 +95,7 @@ async def update_profile(
     display_name: str | None = None,
     timezone: str | None = None,
     status_message: str | None = None,
+    daily_summary_enabled: bool | None = None,
 ) -> User:
     if display_name is not None:
         user.display_name = display_name.strip() or None
@@ -102,6 +103,8 @@ async def update_profile(
         user.timezone = _valid_timezone(timezone)
     if status_message is not None:
         user.status_message = status_message.strip()[:140] or None
+    if daily_summary_enabled is not None:
+        user.daily_summary_enabled = daily_summary_enabled
     await db.commit()
     await db.refresh(user)
     return user

@@ -517,6 +517,10 @@ async def update(
             now=fields["due_on"].isoformat() if fields["due_on"] else None,
         )
         task.due_on = fields["due_on"]
+        # Moved to a new date, so the old firing no longer applies — the same
+        # reason `reminders.update_one` clears its own stamps on a move. Without
+        # this, rescheduling a task stays permanently silent about its new date.
+        task.deadline_notified_at = None
 
     if "position" in fields:
         task.position = int(fields["position"])

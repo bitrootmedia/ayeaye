@@ -30,6 +30,15 @@ KIND_PROJECT_SHARED = "project_shared"
 # scanning it should be able to tell "coming" from "here" without reading.
 KIND_REMINDER_SOON = "reminder_soon"
 KIND_REMINDER_DUE = "reminder_due"
+# The deadline sweep: a not-closed task due tomorrow. One kind, not two like
+# reminders — there is no "due today" nudge here, only the day-before one, so
+# there's nothing a second kind would need to distinguish.
+KIND_DEADLINE_TOMORROW = "task_deadline_tomorrow"
+# The daily digest: what's planned for today and what closed yesterday,
+# across every organisation with something to say. One kind covers both
+# halves — they always arrive together in a single notification, never
+# separately, so there's nothing for two kinds to distinguish either.
+KIND_DAILY_SUMMARY = "daily_summary"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_TASK_OWNER,
@@ -38,6 +47,8 @@ NOTIFICATION_KINDS = (
     KIND_PROJECT_SHARED,
     KIND_REMINDER_SOON,
     KIND_REMINDER_DUE,
+    KIND_DEADLINE_TOMORROW,
+    KIND_DAILY_SUMMARY,
 )
 
 
