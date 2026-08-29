@@ -69,6 +69,11 @@ class ProjectOut(BaseModel):
     # The caller's resolved level: read | write | owner. The UI branches on
     # this and never re-derives it.
     access: str
+    # Open tasks, and open tasks that are critical/urgent/high combined — the
+    # caller's own visibility, same as everything else here. See
+    # access.project_task_stats_stmt.
+    open_task_count: int = 0
+    important_task_count: int = 0
 
 
 class GrantIn(BaseModel):

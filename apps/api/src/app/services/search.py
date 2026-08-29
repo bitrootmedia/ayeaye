@@ -327,7 +327,7 @@ async def search(
                     kind=row.kind,
                     id=str(row.id),
                     title=row.title,
-                    subtitle=_snippet(row.subtitle, q),
+                    subtitle=snippet(row.subtitle, q),
                     context=row.context,
                     score=float(row.score or 0),
                     inactive=bool(row.inactive),
@@ -340,7 +340,7 @@ async def search(
     return hits
 
 
-def _snippet(text: str | None, q: str, width: int = 90) -> str | None:
+def snippet(text: str | None, q: str, width: int = 90) -> str | None:
     """A short window around the match, so a hit in a long description shows
     *why* it matched rather than the first line of unrelated text."""
     if not text:
@@ -356,4 +356,14 @@ def _snippet(text: str | None, q: str, width: int = 90) -> str | None:
     return ("…" if start else "") + body[start:end].strip() + ("…" if end < len(body) else "")
 
 
-__all__ = ["Hit", "search", "normalise", "tasks_stmt", "projects_stmt", "notes_stmt"]
+__all__ = [
+    "Hit",
+    "MIN_FUZZY_LENGTH",
+    "apply_threshold",
+    "search",
+    "normalise",
+    "snippet",
+    "tasks_stmt",
+    "projects_stmt",
+    "notes_stmt",
+]

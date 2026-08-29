@@ -114,6 +114,7 @@ class DashboardOut(BaseModel):
     # mistake the comment socket avoids elsewhere.
     critical: list[DashboardTaskOut]
     urgent: list[DashboardTaskOut]
+    high: list[DashboardTaskOut]
     due_soon: list[DashboardTaskOut]
     # The caller's own bookmarks — see services/pins.py. Nobody else's
     # dashboard shows these, the same way nobody else's shows their planner.
@@ -314,6 +315,7 @@ async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
     notices = await presence_service.announcements(db, ctx, today=today)
     critical = await _priority_tasks(db, ctx, user, priority="critical", today=today)
     urgent = await _priority_tasks(db, ctx, user, priority="urgent", today=today)
+    high = await _priority_tasks(db, ctx, user, priority="high", today=today)
     due_soon = await _due_soon_tasks(db, ctx, user, today=today)
     pinned = await _pinned_tasks(db, ctx, user, today=today)
     recent = await _recent_tasks(db, ctx, user)
@@ -333,6 +335,7 @@ async def dashboard(ctx: CurrentOrg, user: CurrentUser, db: DbSession):
         can_announce=presence_service.can_announce(ctx.role),
         critical=critical,
         urgent=urgent,
+        high=high,
         due_soon=due_soon,
         pinned=pinned,
         recent=recent,

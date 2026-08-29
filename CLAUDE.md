@@ -631,9 +631,15 @@ dashboard looks two weeks ahead.
 exist: the first is one person's answer to "what are you on with", the second
 has an author and an audience.
 
-**Critical, Urgent, Due soon and Pinned are the same question at four
-filters, and `access.my_priority_tasks_stmt`/`my_due_soon_tasks_stmt` say so
-by staying siblings.** Each is "open, and mine" — either I own it or I'm
+**Critical, Urgent, High priority, Due soon and Pinned are the same question
+at five filters, and `access.my_priority_tasks_stmt`/`my_due_soon_tasks_stmt`
+say so by staying siblings.** High priority is `my_priority_tasks_stmt(
+priority="high")` — the identical builder Critical and Urgent already call,
+not a new statement — and the identical scope too: yours, unbounded, no "top
+N" cap. A request to cap it at ten was traded for staying consistent with
+the two cards already there, so a future fourth priority card is one more
+call to a function that already exists, not a new thing to build. Each is
+"open, and mine" — either I own it or I'm
 asked to act — ORed rather than the list view's usual AND filters, because
 "work that's mine, either way" is one question, not two lists stitched
 together client-side. `pins.my_pinned_tasks_stmt` is the odd one out only in
@@ -666,6 +672,39 @@ to the caller's own stake.
 on a shared machine must not be enough to lock its owner out of their account.
 SuperTokens owns the password policy and its rejection is passed straight
 through; restating it here would be two rules that can disagree.
+
+## The Projects list: stats, filtering, table view
+
+`GET /projects` carries two counts per project now —
+`open_task_count` and `important_task_count` — from
+`access.project_task_stats_stmt`, one `GROUP BY` over every project in the
+organisation rather than one query per card. **Grouped over *task*
+visibility, not project visibility.** Those are different sets: a project
+grant doesn't override a hidden task, and a task-level grant can reach
+further than the project's own — so counting by `task_level_expression`
+rather than by "projects I can see" is what keeps the number from leaking
+what's on a project beyond what the rest of the product already shows. Only
+`list_projects` populates real numbers; `create_project`/`get_project`/
+`update_project` send the schema's `0`/`0` default, the same scope choice
+`_recurrence_for` made for the task list — accurate where the feature
+actually lives, not threaded through every endpoint that touches the model.
+
+**"Important" merges critical, urgent and high into one number, on
+purpose.** The three-way breakdown already exists — it's the dashboard's own
+Critical/Urgent/High cards — and repeating it here on an already-dense card
+would be the same information twice, differently shaped. Muted, not
+coloured: status still owns the product's only red and only amber, and this
+number is a sum across three priority levels, not an instance of either.
+
+**The name filter is client-side**, unlike the task list's server-side
+one. "Everything you can see" was never paginated to begin with — it's one
+full fetch already — so narrowing what's already on screen doesn't earn a
+round trip the way filtering a paged list does. The **view toggle does**
+live in the URL (`?view=table`), same reasoning as the task board/list
+toggle: a view somebody arrived at is one they can send a colleague. The
+table is a real `<table>`, the first one in the product — the task list's
+own "list" view is div rows, not semantic markup, and there was no reason
+to match that when the ask was specifically a table.
 
 ## Rich task descriptions
 
@@ -1084,6 +1123,45 @@ rather than breaking it, and that is exactly the regression nobody notices.
 The button label is literally the string "SIGN UP"; that is their copy, not a
 `text-transform`, and it is not worth overriding.
 
+## Login history
+
+Read `models/login_event.py` and `services/login_history.py`. Every
+successful sign-in is recorded — IP, user agent, timestamp — with
+**deliberately no UI reading it yet**. The data exists so a screen built
+later starts with history already in it, rather than starting the clock
+the day someone finally asks for one.
+
+**Not foreign-keyed to `users`, on purpose.** The local `users` row is
+created lazily on first authenticated request
+(`services/users.get_or_create`) — on a brand-new signup, that hasn't
+happened yet at the exact moment a session is created. Keying on
+`supertokens_user_id` instead (already assigned by then, indexed, joinable
+to `users.supertokens_user_id` whenever something reads this) sidesteps the
+ordering problem rather than working around it.
+
+**Hooked into `create_new_session`, not the emailpassword sign-in API.** A
+session is created exactly once per successful sign-in, regardless of which
+recipe did the authenticating — so this covers Google sign-in for free the
+day that's added (see the "social login" reconnaissance elsewhere in this
+file), instead of needing a second override the day it lands. `security/
+authn.py`'s override calls the original implementation first and records
+*after* — a failed sign-in never reaches this code at all, so there's
+nothing to distinguish success from failure here; SuperTokens already did
+that filtering by not calling `create_new_session` for a rejected password.
+
+**Must never fail a sign-in**, the identical contract
+`notifications.notify()` already has: a login event is a side effect of
+something that already succeeded, so a database hiccup recording it must
+not turn a working sign-in into a 500. `record()` catches broadly and logs
+a warning rather than raising.
+
+**The IP is read from `X-Forwarded-For`, not the socket peer.** Single
+origin means Caddy fronts every request, so the raw connection's client is
+always Caddy's own container — `get_request_from_user_context(user_context)`
+(a SuperTokens SDK helper, not something built here) is what recovers the
+underlying request from inside a `functions` override at all, and
+`X-Forwarded-For` off *that* is what recovers the visitor behind it.
+
 ## Attachments
 
 Read `services/attachments.py`. The bytes go **browser → storage directly**
@@ -1457,6 +1535,23 @@ returned ids: the engine ranks, the database authorises.
 Adding a searchable kind is one more `*_stmt` in that module returning the same
 shape. Messages and comments (Phase 6) inherit visibility from the task or
 project they hang off, so it's the same `level > NO_ACCESS` test.
+
+**The new-task dialog's duplicate check is `tasks_stmt` called directly, not
+`search()`.** `GET /tasks/similar` reuses the exact same access-scoped
+fuzzy-title statement the search palette uses, skipping the two other kinds
+`search()` also checks — a duplicate task isn't a duplicate project or a
+duplicate note, so there's no reason to fetch either. `snippet()` (formerly
+private, promoted the same way `recurrence.advance` was — a second real
+caller is what that promotion is for) formats the match the identical way a
+palette result reads. **A failed check must never block creating the task**
+— it's a courtesy, not a gate the feature depends on — so the frontend
+treats a network error identically to "nothing similar found" and lets the
+task through. The confirmation itself is click-Create-twice, not a second
+dialog: the first press that finds something shows what it found and stops:
+the *second* press — button now reading "Create anyway" — is the
+confirmation, the same "say it again to mean it" shape as the delete
+dialogs elsewhere, minus the retyping, because a title is not a name someone
+picked on purpose the way a project's is.
 
 On the client, `components/search-palette.tsx`. Three things there are load-
 bearing and easy to delete by accident:

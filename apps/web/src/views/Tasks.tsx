@@ -8,6 +8,7 @@ import {
   ListIcon,
   PlusIcon,
   SignalIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
@@ -62,6 +63,7 @@ import {
   type BoardData,
   type Member,
   type Project,
+  type SearchHit,
   type Tag,
   type Task,
   type TaskPriority,
@@ -673,6 +675,12 @@ function NewTaskDialog({
   const [priority, setPriority] = useState<TaskPriority>("normal");
   const [projectId, setProjectId] = useState<string | null>(defaultProject || null);
   const [busy, setBusy] = useState(false);
+  // Duplicate check: null means "not checked for the current title yet".
+  // Set once a check finds something, and cleared the moment the title
+  // changes again — a stale warning against a title nobody's typing anymore
+  // is worse than no warning at all.
+  const [similar, setSimilar] = useState<SearchHit[] | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     if (open) setProjectId(defaultProject || null);
@@ -692,7 +700,31 @@ function NewTaskDialog({
   }));
 
   const submit = async () => {
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || checking) return;
+    // First press with something to check: run it, show what's similar, and
+    // stop there rather than creating — the same "type it again to mean it"
+    // shape as a delete confirmation, minus the retyping. `similar` already
+    // being populated means this press IS the confirmation.
+    if (similar === null) {
+      setChecking(true);
+      try {
+        const found = await api<{ hits: SearchHit[] }>(
+          `/organisations/${orgId}/tasks/similar?q=${encodeURIComponent(title.trim())}`,
+        );
+        if (found.hits.length > 0) {
+          setSimilar(found.hits);
+          return;
+        }
+        setSimilar([]);
+      } catch {
+        // A failed check must not block creating the task — the check is a
+        // courtesy, not a gate the feature depends on.
+        setSimilar([]);
+      } finally {
+        setChecking(false);
+      }
+    }
+
     setBusy(true);
     try {
       const created = await api<Task>(`/organisations/${orgId}/tasks`, {
@@ -709,6 +741,7 @@ function NewTaskDialog({
       setDescription("");
       setStatus("todo");
       setPriority("normal");
+      setSimilar(null);
       onOpenChange(false);
       await onCreated();
       // The dialog deliberately doesn't jump to the task it just made — you're
@@ -749,10 +782,38 @@ function NewTaskDialog({
               id="task-title"
               autoFocus
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                // A new title hasn't been checked yet — stale duplicates
+                // against the old one would be actively misleading.
+                setSimilar(null);
+              }}
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
           </div>
+          {similar !== null && similar.length > 0 && (
+            <div
+              role="region"
+              aria-label="Possible duplicates"
+              className="space-y-2 rounded-lg border border-status-review/40 bg-status-review/5 p-3"
+            >
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                <TriangleAlertIcon className="size-4 text-status-review" />
+                Similar tasks already exist
+              </p>
+              <ul className="space-y-1">
+                {similar.slice(0, 5).map((hit) => (
+                  <li key={hit.id} className="truncate text-sm text-muted-foreground">
+                    {hit.title}
+                    {hit.inactive && " (closed)"}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground">
+                Press Create again to add this one anyway.
+              </p>
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="task-description">Description</Label>
             <Textarea
@@ -810,8 +871,8 @@ function NewTaskDialog({
         </div>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-          <Button onClick={submit} disabled={busy || !title.trim()}>
-            Create
+          <Button onClick={submit} disabled={busy || checking || !title.trim()}>
+            {similar && similar.length > 0 ? "Create anyway" : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -85,6 +85,22 @@ async def list_visible(
     return [(project, access.level_name(rank) or "") for project, rank in rows]
 
 
+async def task_stats(
+    db: AsyncSession, ctx: OrgContext, user_id: uuid.UUID
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """`{project_id: (open_count, important_count)}` for the whole org, one
+    query. A project with no rows here has zero of both — the caller treats a
+    missing key as `(0, 0)` rather than this returning every project."""
+    rows = (
+        await db.execute(
+            access.project_task_stats_stmt(
+                user_id=user_id, org_id=ctx.organisation.id, org_role=ctx.role
+            )
+        )
+    ).all()
+    return {pid: (open_count, important_count) for pid, open_count, important_count in rows}
+
+
 async def _validate_group(
     db: AsyncSession, ctx: OrgContext, group_id: uuid.UUID | None
 ) -> uuid.UUID | None:

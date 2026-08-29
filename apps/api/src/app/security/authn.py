@@ -8,12 +8,14 @@ no policy engine and no staff tier; PLAN.md §2.1 explains why.
 from typing import Annotated
 
 from fastapi import Depends
-from supertokens_python import InputAppInfo, SupertokensConfig, init
+from supertokens_python import InputAppInfo, SupertokensConfig, get_request_from_user_context, init
 from supertokens_python.asyncio import get_user
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
 from supertokens_python.recipe import emailpassword, session
 from supertokens_python.recipe.session import SessionContainer
 from supertokens_python.recipe.session.framework.fastapi import verify_session
+from supertokens_python.recipe.session.interfaces import RecipeInterface
+from supertokens_python.recipe.session.utils import SessionOverrideConfig
 
 from app.core.config import settings
 from app.security.email import MailerEmailDelivery
@@ -21,6 +23,67 @@ from app.security.email import MailerEmailDelivery
 # The canonical "this request has a valid session" dependency. Declared here so
 # everything shares one instance instead of building its own verifier.
 VerifiedSession = Annotated[SessionContainer, Depends(verify_session())]
+
+
+def _client_ip(request) -> str | None:
+    """The visitor's IP, not Caddy's own. `X-Forwarded-For` is what a
+    reverse proxy sets, and single origin means Caddy fronts every request —
+    the raw socket peer is always Caddy's container, never the visitor."""
+    if request is None:
+        return None
+    forwarded = request.get_header("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    # The underlying Starlette Request, framework-specific — see
+    # `FastApiRequest` in the SDK, which stores it as `.request`.
+    raw = getattr(request, "request", None)
+    if raw is not None and getattr(raw, "client", None):
+        return raw.client.host
+    return None
+
+
+def _override_session_functions(original: RecipeInterface) -> RecipeInterface:
+    """Log every successful sign-in — see `services/login_history.py`.
+
+    Wraps `create_new_session` rather than the emailpassword recipe's own
+    sign-in API: a session is created exactly once per successful sign-in
+    *regardless of recipe*, so this covers Google sign-in for free the day
+    that's added, instead of needing its own override too.
+    """
+    original_create_new_session = original.create_new_session
+
+    async def create_new_session(
+        user_id,
+        recipe_user_id,
+        access_token_payload,
+        session_data_in_database,
+        disable_anti_csrf,
+        tenant_id,
+        user_context,
+    ):
+        session_container = await original_create_new_session(
+            user_id,
+            recipe_user_id,
+            access_token_payload,
+            session_data_in_database,
+            disable_anti_csrf,
+            tenant_id,
+            user_context,
+        )
+        # After the real work, and never allowed to fail it — see
+        # services/login_history.py's own docstring for why.
+        from app.services import login_history as login_history_service
+
+        request = get_request_from_user_context(user_context)
+        await login_history_service.record(
+            supertokens_user_id=user_id,
+            ip_address=_client_ip(request),
+            user_agent=request.get_header("user-agent") if request else None,
+        )
+        return session_container
+
+    original.create_new_session = create_new_session
+    return original
 
 
 def init_auth() -> None:
@@ -49,7 +112,7 @@ def init_auth() -> None:
         ),
         framework="fastapi",
         recipe_list=[
-            session.init(),
+            session.init(override=SessionOverrideConfig(functions=_override_session_functions)),
             emailpassword.init(
                 # Replaces SuperTokens' managed sending service: password-reset
                 # mail goes out through our own SMTP, from our own domain.

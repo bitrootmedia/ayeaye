@@ -1,6 +1,16 @@
-import { ArchiveIcon, FolderIcon, LockIcon, PlusIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  CircleAlertIcon,
+  CircleDotIcon,
+  FolderIcon,
+  LayoutGridIcon,
+  LockIcon,
+  PlusIcon,
+  SearchIcon,
+  TableIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api";
 import type { Shell } from "@/App";
@@ -53,12 +63,24 @@ export default function Projects() {
   const { orgId } = useParams<{ orgId: string }>();
   const { organisations } = useOutletContext<Shell>();
   const toast = useToastManager();
+  const [params, setParams] = useSearchParams();
 
   const org = organisations.find((o) => o.id === orgId) ?? null;
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [creating, setCreating] = useState(false);
+
+  // Both in the URL, same reasoning as the task list: a view somebody
+  // arrived at — filtered, as a table — is one they can send to a colleague.
+  const query = params.get("q") ?? "";
+  const view = params.get("view") === "table" ? "table" : "cards";
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value === null || value === "") next.delete(key);
+    else next.set(key, value);
+    setParams(next, { replace: true });
+  };
 
   const load = useCallback(async () => {
     if (!orgId) return;
@@ -76,10 +98,16 @@ export default function Projects() {
 
   if (!org) return null;
 
+  // Client-side: the visible-to-you list is never large enough to need the
+  // list screen's server-side filtering, and a name filter narrowing what's
+  // already on screen doesn't need a round trip.
+  const q = query.trim().toLowerCase();
+  const filtered = q ? (projects ?? []).filter((p) => p.name.toLowerCase().includes(q)) : projects ?? [];
+
   // Grouped for display only. The API already decided what's visible; this is
   // presentation, not a second pass at access.
   const byGroup = new Map<string, Project[]>();
-  for (const p of projects ?? []) {
+  for (const p of filtered) {
     const key = p.project_group_id ?? UNGROUPED;
     byGroup.set(key, [...(byGroup.get(key) ?? []), p]);
   }
@@ -100,6 +128,24 @@ export default function Projects() {
         description="What you own, and what people have shared with you."
         actions={
           <>
+            <div className="relative">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                aria-label="Filter by name"
+                placeholder="Filter by name…"
+                className="w-48 pl-8"
+                onChange={(e) => setParam("q", e.target.value)}
+              />
+            </div>
+            <Button
+              variant="ghost"
+              aria-label={view === "cards" ? "View as a table" : "View as cards"}
+              onClick={() => setParam("view", view === "cards" ? "table" : null)}
+            >
+              {view === "cards" ? <TableIcon /> : <LayoutGridIcon />}
+              {view === "cards" ? "Table" : "Cards"}
+            </Button>
             <Button variant="ghost" onClick={() => setShowArchived((v) => !v)}>
               <ArchiveIcon />
               {showArchived ? "Hide archived" : "Show archived"}
@@ -135,6 +181,12 @@ export default function Projects() {
             </Button>
           </EmptyContent>
         </Empty>
+      ) : filtered.length === 0 ? (
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          No projects match &ldquo;{query.trim()}&rdquo;.
+        </p>
+      ) : view === "table" ? (
+        <ProjectsTable orgId={org.id} projects={filtered} />
       ) : (
         sections.map((section) => (
           <section key={section.id} className="space-y-3">
@@ -166,6 +218,7 @@ export default function Projects() {
                       </p>
                     )}
                   </div>
+                  <ProjectStats project={project} />
                   <div className="mt-auto flex items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span className="truncate">{personName(project.owner)}</span>
                     <Badge variant="outline" className="shrink-0">
@@ -193,6 +246,80 @@ export default function Projects() {
         }}
       />
     </>
+  );
+}
+
+/** Open tasks, and open-and-important tasks, on this project — the caller's
+ *  own visibility, same as everything else here. Muted, not coloured: this
+ *  merges three priority levels into one number, and status already owns
+ *  the product's only red and only amber. */
+function ProjectStats({ project }: { project: Project }) {
+  if (project.open_task_count === 0 && project.important_task_count === 0) return null;
+  return (
+    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1" title="Open tasks">
+        <CircleDotIcon className="size-3.5" />
+        {project.open_task_count} open
+      </span>
+      {project.important_task_count > 0 && (
+        <span
+          className="flex items-center gap-1"
+          title="Critical, urgent or high priority"
+        >
+          <CircleAlertIcon className="size-3.5" />
+          {project.important_task_count} important
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The same list, as rows instead of cards — better for scanning a lot of
+ *  projects at once, which is exactly when the card grid stops working. */
+function ProjectsTable({ orgId, projects }: { orgId: string; projects: Project[] }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+            <th className="px-3 py-2 font-medium">Name</th>
+            <th className="px-3 py-2 font-medium">Owner</th>
+            <th className="px-3 py-2 font-medium">Access</th>
+            <th className="px-3 py-2 text-right font-medium">Open</th>
+            <th className="px-3 py-2 text-right font-medium">Important</th>
+          </tr>
+        </thead>
+        <tbody>
+          {projects.map((project) => (
+            <tr key={project.id} className="border-b last:border-0 hover:bg-accent/50">
+              <td className="px-3 py-2">
+                <Link
+                  to={`/orgs/${orgId}/projects/${project.id}`}
+                  className="flex min-w-0 items-center gap-2 font-medium hover:underline"
+                >
+                  <span className="min-w-0 truncate">{project.name}</span>
+                  {project.archived && (
+                    <Badge variant="outline" className="shrink-0 text-muted-foreground">
+                      Archived
+                    </Badge>
+                  )}
+                </Link>
+              </td>
+              <td className="px-3 py-2 text-muted-foreground">{personName(project.owner)}</td>
+              <td className="px-3 py-2">
+                <Badge variant="outline">{LEVEL_LABEL[project.access]}</Badge>
+              </td>
+              <td className="px-3 py-2 text-right font-mono text-muted-foreground">
+                {project.open_task_count}
+              </td>
+              <td className="px-3 py-2 text-right font-mono text-muted-foreground">
+                {project.important_task_count > 0 ? project.important_task_count : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

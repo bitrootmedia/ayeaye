@@ -47,8 +47,14 @@ def _team_out(team: Team, count: int) -> TeamOut:
 
 
 def _project_out(
-    project: Project, level: str, *, group_name: str | None, owner: User | None
+    project: Project,
+    level: str,
+    *,
+    group_name: str | None,
+    owner: User | None,
+    stats: dict[uuid.UUID, tuple[int, int]] | None = None,
 ) -> ProjectOut:
+    open_count, important_count = (stats or {}).get(project.id, (0, 0))
     return ProjectOut(
         id=str(project.id),
         name=project.name,
@@ -59,6 +65,8 @@ def _project_out(
         archived=project.archived_at is not None,
         created_at=project.created_at,
         access=level,
+        open_task_count=open_count,
+        important_task_count=important_count,
     )
 
 
@@ -203,12 +211,14 @@ async def list_projects(
     )
     groups = await _group_names(db, ctx.organisation.id)
     owners = await _owners(db, [p for p, _ in visible])
+    stats = await projects_service.task_stats(db, ctx, user.id)
     return [
         _project_out(
             project,
             level,
             group_name=groups.get(project.project_group_id) if project.project_group_id else None,
             owner=owners.get(project.owner_user_id),
+            stats=stats,
         )
         for project, level in visible
     ]

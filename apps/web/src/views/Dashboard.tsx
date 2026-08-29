@@ -3,6 +3,7 @@ import {
   ArrowRightIcon,
   ArrowUpIcon,
   CalendarClockIcon,
+  ChevronUpIcon,
   ClockIcon,
   MegaphoneIcon,
   PinIcon,
@@ -197,6 +198,15 @@ export default function Dashboard() {
         label="Urgent"
         icon={<ArrowUpIcon className="size-4 text-status-review" />}
         tasks={data.urgent}
+        orgId={org.id}
+      />
+      <DashboardCard
+        label="High priority"
+        // Neutral, not a third colour — status owns red and amber, Critical
+        // and Urgent already spend both. High is shape-only, same as
+        // PriorityGlyph's own rule for everything below Urgent.
+        icon={<ChevronUpIcon className="size-4" />}
+        tasks={data.high}
         orgId={org.id}
       />
       <DashboardCard

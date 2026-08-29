@@ -84,6 +84,47 @@ async def search(ctx: CurrentOrg, user: CurrentUser, db: DbSession, q: str = "",
     )
 
 
+@router.get("/tasks/similar", response_model=SearchOut)
+async def similar_tasks(
+    ctx: CurrentOrg, user: CurrentUser, db: DbSession, q: str = "", limit: int = 5
+):
+    """Tasks whose title already looks like this one — the duplicate-check
+    the new-task dialog runs before it actually creates anything.
+
+    Registered before `/tasks/{task_id}`, same reason as `/search` above.
+    Deliberately **tasks only**, not the full multi-kind `search()`: a
+    duplicate task isn't a duplicate project or a duplicate note, and this
+    reuses `search_service.tasks_stmt` directly rather than filtering a mixed
+    result down to one kind. Same access-scoped fuzzy match either way — a
+    task you can't see can't be flagged as a duplicate of one you're about
+    to create, the same as it can't turn up in search.
+    """
+    q = search_service.normalise(q)
+    if len(q) < search_service.MIN_FUZZY_LENGTH:
+        # Too short for a trigram match to mean anything — see
+        # services/search.py's own threshold for why.
+        return SearchOut(query=q, hits=[])
+
+    await search_service.apply_threshold(db)
+    stmt = search_service.tasks_stmt(user_id=user.id, ctx=ctx, q=q, limit=min(limit, 20))
+    rows = (await db.execute(stmt)).all()
+    return SearchOut(
+        query=q,
+        hits=[
+            SearchHitOut(
+                kind=row.kind,
+                id=str(row.id),
+                title=row.title,
+                subtitle=search_service.snippet(row.subtitle, q),
+                context=row.context,
+                score=float(row.score or 0),
+                inactive=bool(row.inactive),
+            )
+            for row in rows
+        ],
+    )
+
+
 def _person(user: User | None) -> PersonOut | None:
     if user is None:
         return None

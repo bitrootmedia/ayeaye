@@ -299,6 +299,35 @@ def visible_project_stmt(
     )
 
 
+def project_task_stats_stmt(*, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:
+    """Open task count, and open-and-important count, per project — one
+    `GROUP BY`, not one query per card in the Projects grid.
+
+    Grouped over **task** visibility (`task_level_expression`), not project
+    visibility: a project you can see is not the same set as the tasks on it
+    you can see (a project grant doesn't override a hidden task, and a task
+    grant can reach further than the project's own). Counting tasks the
+    caller has no route to would make a stat that leaks what's on a project
+    beyond what the rest of the product already shows them.
+
+    "Important" is critical, urgent or high combined into one number rather
+    than three — the card this feeds is already dense, and the three-way
+    split belongs to the dashboard's own Critical/Urgent/High cards, not a
+    repeat of it here.
+    """
+    level = task_level_expression(user_id, org_role)
+    important = Task.priority.in_(("critical", "urgent", "high"))
+    return (
+        select(
+            Task.project_id,
+            func.count().filter(Task.closed_at.is_(None)).label("open_count"),
+            func.count().filter(Task.closed_at.is_(None), important).label("important_count"),
+        )
+        .where(Task.organisation_id == org_id, Task.project_id.isnot(None), level > NO_ACCESS)
+        .group_by(Task.project_id)
+    )
+
+
 # --- tasks ---------------------------------------------------------------------
 
 

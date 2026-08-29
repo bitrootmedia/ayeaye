@@ -6,6 +6,7 @@ from app.models.conversation import (
     Message,
     MessageRead,
 )
+from app.models.login_event import LoginEvent
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.organisation import Organisation, OrganisationMember
@@ -33,6 +34,7 @@ __all__ = [
     "Attachment",
     "Message",
     "MessageRead",
+    "LoginEvent",
     "Notification",
     "Organisation",
     "PersonalAccessToken",

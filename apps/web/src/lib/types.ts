@@ -111,6 +111,13 @@ export type Project = {
   archived: boolean;
   created_at: string;
   access: AccessLevel;
+  /** The caller's own visible tasks on this project — not everyone sees the
+   *  same number. Only accurate on the list; other endpoints send 0/0. */
+  open_task_count: number;
+  /** Open, and critical, urgent or high priority — combined into one number
+   *  rather than three, same reasoning as the field's own docstring in
+   *  access.py. */
+  important_task_count: number;
 };
 
 export type Grant = {
@@ -438,6 +445,7 @@ export type DashboardData = {
   can_announce: boolean;
   critical: DashboardTask[];
   urgent: DashboardTask[];
+  high: DashboardTask[];
   due_soon: DashboardTask[];
   pinned: DashboardTask[];
   recent: RecentTask[];
