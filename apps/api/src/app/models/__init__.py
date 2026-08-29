@@ -15,6 +15,7 @@ from app.models.pin import TaskPin
 from app.models.planner import PlannerEntry
 from app.models.presence import Announcement, OutOfOffice
 from app.models.reminder import Reminder
+from app.models.sheet import TaskSheet, TaskSheetCell, TaskSheetColumn, TaskSheetRow
 from app.models.structure import (
     Project,
     ProjectGroup,
@@ -55,6 +56,10 @@ __all__ = [
     "TaskNote",
     "TaskPin",
     "TaskSeries",
+    "TaskSheet",
+    "TaskSheetCell",
+    "TaskSheetColumn",
+    "TaskSheetRow",
     "TaskTag",
     "TimeEntry",
     "Team",

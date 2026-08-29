@@ -295,6 +295,35 @@ export type Checklist = {
   items: ChecklistItem[];
 };
 
+/** One checked cell on a sheet. A cell's presence here IS the check — a
+ *  (row, column) pair with no entry is unchecked. */
+export type SheetCell = {
+  row_id: string;
+  column_id: string;
+  checked_by: Person;
+  checked_at: string;
+};
+
+export type SheetRow = {
+  id: string;
+  label: string;
+};
+
+export type SheetColumn = {
+  id: string;
+  label: string;
+};
+
+/** A grid checklist on a task — a task can carry more than one. Rows and
+ *  columns are freeform labels; a cell is a checkbox at their intersection. */
+export type Sheet = {
+  id: string;
+  title: string;
+  rows: SheetRow[];
+  columns: SheetColumn[];
+  cells: SheetCell[];
+};
+
 export type Task = {
   id: string;
   title: string;

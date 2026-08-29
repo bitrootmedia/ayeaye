@@ -157,6 +157,50 @@ class ChecklistItemUpdate(BaseModel):
     done: bool | None = None
 
 
+class SheetCellOut(BaseModel):
+    row_id: str
+    column_id: str
+    checked_by: PersonOut
+    checked_at: datetime
+
+
+class SheetRowOut(BaseModel):
+    id: str
+    label: str
+
+
+class SheetColumnOut(BaseModel):
+    id: str
+    label: str
+
+
+class SheetOut(BaseModel):
+    id: str
+    title: str
+    rows: list[SheetRowOut]
+    columns: list[SheetColumnOut]
+    # Sparse — only checked cells appear. Every (row, column) pair not
+    # listed here is unchecked, including one from a row or column added
+    # after every other cell in the grid.
+    cells: list[SheetCellOut]
+
+
+class SheetIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class SheetUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class SheetRowIn(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+
+class SheetColumnIn(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+
+
 class NoteIn(BaseModel):
     # Empty deletes it — "clear the box" and "remove the note" are one gesture.
     body: str = ""

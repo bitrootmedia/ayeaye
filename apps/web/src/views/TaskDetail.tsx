@@ -16,6 +16,7 @@ import { ApiError, api } from "@/api";
 import { useRealtime } from "@/hooks/use-realtime";
 import type { Shell } from "@/App";
 import { ChecklistsPanel } from "@/components/checklist-panel";
+import { SheetsPanel } from "@/components/sheet-panel";
 import { CommentThread } from "@/components/comment-thread";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
@@ -85,9 +86,11 @@ export default function TaskDetail() {
   const [gone, setGone] = useState(false);
   // Comments can carry files, so posting one has to reach the Files panel.
   const [filesKey, setFilesKey] = useState(0);
-  // Checklists fetch separately, same reasoning as the Files panel: a
-  // realtime event needs its own nudge to reach a panel that isn't `load()`.
+  // Checklists and Sheets fetch separately, same reasoning as the Files
+  // panel: a realtime event needs its own nudge to reach a panel that isn't
+  // `load()`.
   const [checklistsKey, setChecklistsKey] = useState(0);
+  const [sheetsKey, setSheetsKey] = useState(0);
   // Type-the-title-to-confirm — the same bar as deleting an organisation or a
   // project, and for the same reason: a bare "Are you sure?" is exactly the
   // dialog a habitual double-click sails through.
@@ -133,10 +136,11 @@ export default function TaskDetail() {
       (event) => {
         if (event.type === "task" && event.task_id === taskId) {
           void load();
-          // The Files and Checklists panels fetch separately, so each needs
-          // its own nudge.
+          // The Files, Checklists and Sheets panels fetch separately, so
+          // each needs its own nudge.
           setFilesKey((k) => k + 1);
           setChecklistsKey((k) => k + 1);
+          setSheetsKey((k) => k + 1);
         }
       },
       [taskId, load],
@@ -333,6 +337,13 @@ export default function TaskDetail() {
             taskId={task.id}
             canEdit={editable}
             refreshKey={checklistsKey}
+          />
+
+          <SheetsPanel
+            orgId={org.id}
+            taskId={task.id}
+            canEdit={editable}
+            refreshKey={sheetsKey}
           />
 
           {/* Above the thread: the files are part of what the task *is*, and

@@ -24,6 +24,14 @@ from app.schemas.tasks import (
     NoteOut,
     SearchHitOut,
     SearchOut,
+    SheetCellOut,
+    SheetColumnIn,
+    SheetColumnOut,
+    SheetIn,
+    SheetOut,
+    SheetRowIn,
+    SheetRowOut,
+    SheetUpdate,
     TagIn,
     TagOut,
     TagUpdate,
@@ -49,6 +57,7 @@ from app.services import projects as projects_service
 from app.services import recurrence as recurrence_service
 from app.services import richtext
 from app.services import search as search_service
+from app.services import sheets as sheets_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 
@@ -850,6 +859,225 @@ async def delete_checklist_item(
     item = await checklists_service.get_item_or_404(db, checklist_id, item_id)
     await checklists_service.remove_item(db, item)
     await tasks_service.announce(db, tctx.task, "checklist_item_removed")
+
+
+def _sheet_out(sheet, cells: dict) -> SheetOut:
+    return SheetOut(
+        id=str(sheet.id),
+        title=sheet.title,
+        rows=[SheetRowOut(id=str(r.id), label=r.label) for r in sheet.rows],
+        columns=[SheetColumnOut(id=str(c.id), label=c.label) for c in sheet.columns],
+        cells=[
+            SheetCellOut(
+                row_id=str(row_id),
+                column_id=str(column_id),
+                checked_by=PersonOut(
+                    id=str(who.id), email=who.email, display_name=who.display_name
+                ),
+                checked_at=cell.created_at,
+            )
+            for (row_id, column_id), (cell, who) in cells.items()
+        ],
+    )
+
+
+@router.get("/tasks/{task_id}/sheets", response_model=list[SheetOut])
+async def list_sheets(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Every sheet on the task. `read` is enough — seeing the grid doesn't
+    change it."""
+    await tasks_service.context_for(db, ctx, task_id, user)
+    sheets = await sheets_service.for_task(db, task_id)
+    cells = await sheets_service.cells_for_sheets(db, [s.id for s in sheets])
+    return [_sheet_out(s, cells) for s in sheets]
+
+
+@router.post(
+    "/tasks/{task_id}/sheets", response_model=SheetOut, status_code=status.HTTP_201_CREATED
+)
+async def create_sheet(
+    task_id: uuid.UUID, body: SheetIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """`write` on the task, like any other edit to it — a sheet is shared
+    content, not a personal record."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.add_sheet(db, tctx.task, title=body.title)
+    await tasks_service.announce(db, tctx.task, "sheet_added")
+    # A freshly created sheet has no rows, columns or cells yet — built
+    # directly rather than eager-loading empty relationships for nothing.
+    return SheetOut(id=str(sheet.id), title=sheet.title, rows=[], columns=[], cells=[])
+
+
+@router.patch("/tasks/{task_id}/sheets/{sheet_id}", response_model=SheetOut)
+async def update_sheet(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    body: SheetUpdate,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
+    sheet = await sheets_service.rename_sheet(db, sheet, title=body.title)
+    cells = await sheets_service.cells_for_sheets(db, [sheet.id])
+    await tasks_service.announce(db, tctx.task, "sheet_renamed")
+    return _sheet_out(sheet, cells)
+
+
+@router.delete("/tasks/{task_id}/sheets/{sheet_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_sheet(
+    task_id: uuid.UUID, sheet_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
+    await sheets_service.remove_sheet(db, sheet)
+    await tasks_service.announce(db, tctx.task, "sheet_removed")
+
+
+@router.post(
+    "/tasks/{task_id}/sheets/{sheet_id}/rows",
+    response_model=SheetRowOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_sheet_row(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    body: SheetRowIn,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """A new row starts unchecked for every existing column — there's
+    nothing to backfill, since a cell's existence is the check (see
+    `models/sheet.py`)."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
+    row = await sheets_service.add_row(db, sheet, label=body.label)
+    await tasks_service.announce(db, tctx.task, "sheet_row_added")
+    return SheetRowOut(id=str(row.id), label=row.label)
+
+
+@router.delete(
+    "/tasks/{task_id}/sheets/{sheet_id}/rows/{row_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_sheet_row(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    row_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    row = await sheets_service.get_row_or_404(db, sheet_id, row_id)
+    await sheets_service.remove_row(db, row)
+    await tasks_service.announce(db, tctx.task, "sheet_row_removed")
+
+
+@router.post(
+    "/tasks/{task_id}/sheets/{sheet_id}/columns",
+    response_model=SheetColumnOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_sheet_column(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    body: SheetColumnIn,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
+    column = await sheets_service.add_column(db, sheet, label=body.label)
+    await tasks_service.announce(db, tctx.task, "sheet_column_added")
+    return SheetColumnOut(id=str(column.id), label=column.label)
+
+
+@router.delete(
+    "/tasks/{task_id}/sheets/{sheet_id}/columns/{column_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_sheet_column(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    column_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    column = await sheets_service.get_column_or_404(db, sheet_id, column_id)
+    await sheets_service.remove_column(db, column)
+    await tasks_service.announce(db, tctx.task, "sheet_column_removed")
+
+
+@router.put(
+    "/tasks/{task_id}/sheets/{sheet_id}/cells/{row_id}/{column_id}", response_model=SheetCellOut
+)
+async def check_sheet_cell(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    row_id: uuid.UUID,
+    column_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """`PUT`, not `POST`: checking an already-checked cell is not an error,
+    the same idempotent-on-purpose shape applying a tag twice already has."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    row = await sheets_service.get_row_or_404(db, sheet_id, row_id)
+    column = await sheets_service.get_column_or_404(db, sheet_id, column_id)
+    cell, who = await sheets_service.check_cell(db, row, column, user)
+    await tasks_service.announce(db, tctx.task, "sheet_cell_checked")
+    return SheetCellOut(
+        row_id=str(row.id),
+        column_id=str(column.id),
+        checked_by=PersonOut(id=str(who.id), email=who.email, display_name=who.display_name),
+        checked_at=cell.created_at,
+    )
+
+
+@router.delete(
+    "/tasks/{task_id}/sheets/{sheet_id}/cells/{row_id}/{column_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def uncheck_sheet_cell(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    row_id: uuid.UUID,
+    column_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    row = await sheets_service.get_row_or_404(db, sheet_id, row_id)
+    column = await sheets_service.get_column_or_404(db, sheet_id, column_id)
+    await sheets_service.uncheck_cell(db, row, column)
+    await tasks_service.announce(db, tctx.task, "sheet_cell_unchecked")
+
+
+@router.post("/tasks/{task_id}/sheets/{sheet_id}/reset", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_task_sheet(
+    task_id: uuid.UUID, sheet_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """Clears every cell — the sweep is done, start the next round."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
+    await sheets_service.reset_sheet(db, sheet)
+    await tasks_service.announce(db, tctx.task, "sheet_reset")
 
 
 @router.post("/tasks/{task_id}/hidden", response_model=TaskOut)

@@ -180,7 +180,8 @@ ayeayecaptain/
     │       ├── models/      # user, organisation (+ membership/invitations),
     │       │                #   structure (teams, groups, projects, grants),
     │       │                #   task (+ grants, events), tag (+ task_tags),
-    │       │                #   checklist (+ items), note (private, per person), reminder,
+    │       │                #   checklist (+ items), sheet (+ rows/columns/cells),
+    │       │                #   note (private, per person), reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
@@ -193,7 +194,7 @@ ayeayecaptain/
     │       │                #   teams.py projects.py tasks.py
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
-    │       │                #   tags.py checklists.py notes.py reminders.py presence.py
+    │       │                #   tags.py checklists.py sheets.py notes.py reminders.py presence.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -520,6 +521,53 @@ provably has none. Everywhere else that reads `.items` —
 front instead, and `rename_checklist`'s own `db.refresh()` is scoped to
 `attribute_names=["title"]` so it doesn't expire that already-loaded
 collection and reintroduce the same trap one call later.
+
+## Sheets
+
+Read `models/sheet.py`. A grid checklist under a task: rows and columns are
+freeform labels you type in — servers down one side, repeatable checks
+across the top — and a cell is a checkbox at their intersection. It exists
+for exactly the case a single flat checklist can't express: "run the same
+three checks across twenty servers" is 3 items × 1 list in a checklist, or a
+2D grid here, and the difference is whether you can see at a glance which
+server still needs which check.
+
+**A cell's existence IS the check.** There is no boolean column on
+`task_sheet_cells` — checking inserts a row (`ON CONFLICT DO NOTHING`, the
+same idempotent-apply idiom `tags.apply` already uses), unchecking deletes
+it. That single choice is what makes "a newly added row or column starts
+unchecked against everything else" free rather than something to backfill:
+an added row simply has no cells yet, for any column, until someone checks
+one. `services/sheets.py`'s `cells_for_sheets` reads them back as a sparse
+map in one query per page of sheets — the same one-lookup discipline every
+list endpoint in this codebase follows once access gets interesting, never
+one query per cell.
+
+**Every check records who and when.** `checked_by_user_id` plus `created_at`
+ride along on the same row whose existence is the check — no separate
+audit table, because the row already carries everything worth knowing.
+On a race (two people click the same cell within milliseconds), the
+`ON CONFLICT DO NOTHING` insert means the response has to be **read back**
+rather than assumed from the request: whoever's insert actually landed is
+who the cell belongs to, and the caller that lost the race needs to know
+that, not report themselves as the checker.
+
+**More than one sheet per task, ordered by `id`.** Same "packing list" vs
+"before we ship" reasoning as checklists, and the identical no-`position`-
+column convention — UUIDv7 sorts chronologically and nothing here needs
+drag-and-drop reordering.
+
+**`write` gates every mutation, `read` is enough to see the grid.** The
+identical bar checklists, tags and files already clear — this is shared
+task content, not a personal record.
+
+**A `<td>` is not a flex container, and Base UI's `Checkbox` root is a plain
+inline `<span>`.** Its explicit `size-4` width and height are simply
+ignored outside a flex or grid context, and the checkbox collapses to a
+hairline — the two side borders of a zero-width box — rather than a square.
+Every cell wraps its `Checkbox` in a `<div className="flex justify-center">`
+for exactly this reason; dropping that wrapper is the kind of regression a
+screenshot catches immediately and a type-check never will.
 
 ## The scheduler
 
@@ -1435,7 +1483,7 @@ Reminders are personal in the same way and are left out for the same reason.
 
 **Tasks ride the same channel.** Anything that changes a task publishes
 `{"type": "task", "task_id": …}` and the screen refetches — status, priority,
-due date, project, tags, files, checklists, grants, time entries, hide/unhide. Three
+due date, project, tags, files, checklists, sheets, grants, time entries, hide/unhide. Three
 things hold it together:
 
 - **`tasks_service.announce()` is called from every mutation, after the
@@ -1964,6 +2012,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-hidden.sh                 # the one place access is subtracted
 ./scripts/e2e-tags.sh                   # the vocabulary, and "off the board"
 ./scripts/e2e-checklists.sh             # more than one list, write-gated, read-only sees but can't touch
+./scripts/e2e-sheets.sh                 # a cell's existence IS the check, idempotent, who/when recorded
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
