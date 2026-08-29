@@ -24,6 +24,7 @@ import OrganisationDetail from "@/views/OrganisationDetail";
 import Organisations from "@/views/Organisations";
 import Notifications from "@/views/Notifications";
 import NotFound from "@/views/NotFound";
+import Notepad from "@/views/Notepad";
 import Planner from "@/views/Planner";
 import Reminders from "@/views/Reminders";
 import ProjectDetail from "@/views/ProjectDetail";
@@ -217,6 +218,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 />
                 <Route path="orgs/:orgId/planner" element={<Planner />} />
                 <Route path="orgs/:orgId/calendar" element={<CalendarView />} />
+                <Route path="orgs/:orgId/notes" element={<Notepad />} />
                 <Route path="orgs/:orgId/time" element={<Time />} />
                 <Route path="notifications" element={<Notifications />} />
                 {/* Personal and cross-organisation, like the inbox above it. */}

@@ -11,6 +11,7 @@ from app.models.login_event import LoginEvent
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.organisation import Organisation, OrganisationMember
+from app.models.personal_note import PersonalNote
 from app.models.pin import TaskPin
 from app.models.planner import PlannerEntry
 from app.models.presence import Announcement, OutOfOffice
@@ -42,6 +43,7 @@ __all__ = [
     "PersonalAccessToken",
     "OutOfOffice",
     "OrganisationMember",
+    "PersonalNote",
     "PlannerEntry",
     "Project",
     "ProjectGroup",

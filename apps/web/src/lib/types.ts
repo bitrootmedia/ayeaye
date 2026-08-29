@@ -449,6 +449,16 @@ export type CalendarData = {
   away: CalendarAbsence[];
 };
 
+/** A notepad entry. Personal, like a reminder — there is no "whose" field
+ *  because there is only ever one answer, and no admin override anywhere. */
+export type PersonalNote = {
+  id: string;
+  title: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
 /** A reminder. Personal — there is no "whose" field because there is only
  *  ever one answer. */
 export type Reminder = {

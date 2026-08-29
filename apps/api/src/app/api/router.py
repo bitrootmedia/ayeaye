@@ -14,6 +14,7 @@ from app.api.routers import (
     invites,
     notifications,
     organisations,
+    personal_notes,
     planner,
     reminders,
     structure,
@@ -64,6 +65,11 @@ api_router.include_router(planner.router)
 # Organisation-scoped like Tasks and Planner — see the router's own docstring
 # for why the two halves have different visibility rules.
 api_router.include_router(calendar.router)
+
+# The notepad: free-form personal notes. Organisation-scoped, and unlike
+# everything above it, has no visibility rule to speak of — only the author
+# ever reads a row, full stop.
+api_router.include_router(personal_notes.router)
 
 # Comment threads on tasks and projects. There is no separate comment system —
 # these ARE the conversations, which is what makes attachments, voice notes and

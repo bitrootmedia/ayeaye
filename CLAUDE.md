@@ -181,7 +181,8 @@ ayeayecaptain/
     │       │                #   structure (teams, groups, projects, grants),
     │       │                #   task (+ grants, events), tag (+ task_tags),
     │       │                #   checklist (+ items), sheet (+ rows/columns/cells),
-    │       │                #   note (private, per person), reminder,
+    │       │                #   note (private, per person), personal_note (the notepad),
+    │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
@@ -194,7 +195,8 @@ ayeayecaptain/
     │       │                #   teams.py projects.py tasks.py
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
-    │       │                #   tags.py checklists.py sheets.py notes.py reminders.py presence.py
+    │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
+    │       │                #   reminders.py presence.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -1631,6 +1633,58 @@ every other view/filter in the product: a month somebody navigated to is one
 they can send a colleague, and a reload should land back where they were
 rather than snapping to today.
 
+## The notepad
+
+Read `services/personal_notes.py`. Free-form notes, scoped to an
+organisation, with a title, a body, timestamps and a delete button — a
+different shape from `services/notes.py`'s private task note, and
+deliberately so. That module's own docstring explains why a task note stays
+a single field with no title, no list, no delete: "a list would grow a
+timestamp, an author, a delete button... and would arrive at being a second
+comment thread." The notepad **is** that list, on purpose — it isn't about
+any one piece of work, so it needs the title and the list to be findable
+again later. Same organisation-scoped nav tier as Tasks, Planner and
+Calendar, not tucked under Account or Reminders.
+
+**Only the author, ever — the identical absence-of-a-branch discipline.**
+Every statement in `services/personal_notes.py` filters on `user_id == the
+caller`, full stop, not even for an organisation admin. `get_or_404` also
+filters on `organisation_id == ctx.organisation.id`: without that half, a
+note made in one organisation could be edited or deleted through a
+*different* organisation's URL by the same person — invisible to anyone
+else, but still the wrong organisation's notepad reaching into another
+one's. `scripts/e2e-notepad.sh` has a dedicated case for exactly that.
+
+**Autosaved, no Save button** — the identical trade `PrivateNote` already
+made for the task-scoped version: a button turns a scratchpad into a form
+you can fail to submit, and the failure mode is losing the thought you were
+trying to keep.
+
+**Title and body share one debounce window, not two independent timers.**
+The first version queued each field's own `setTimeout`, and typing in one
+field cleared and replaced the *other* field's pending timer without saving
+it — silently dropping whichever field wasn't touched last. `pending.current`
+merges every queued field into one object; a single timer flushes all of it
+in one `PATCH`.
+
+**Closing the dialog has to flush the pending debounce, not just cancel
+it.** Escape, the corner X and a backdrop click all unmount the editor, and
+the original cleanup effect just cleared the timer — silently discarding
+the last few keystrokes typed before closing. `flush()` is what both the
+unmount cleanup and every field's `onBlur` call now: it cancels the timer
+and immediately fires the save with whatever's still pending, so a save in
+flight is never abandoned, only ever completed early.
+
+**The card and its Delete button can't both be `<button>` elements.** A
+`<button>` nested inside a `<button>` is invalid HTML — found because a
+Playwright role query for "Delete {title}" matched both the outer card
+(whose computed accessible name concatenates its own text with the nested
+button's) and the real button, which is exactly the kind of ambiguity that
+also confuses the browser's own click handling. The card carries `role=
+"button"` on a plain `<div>` (via `Card`'s own prop passthrough) with
+`tabIndex`/`onKeyDown` for keyboard access instead, and Delete's own click
+handler stops propagation rather than relying on DOM nesting to isolate it.
+
 ## Time tracking
 
 Read the `services/time_tracking.py` docstring. Four rules, and the first is a
@@ -2037,6 +2091,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-checklists.sh             # more than one list, write-gated, read-only sees but can't touch
 ./scripts/e2e-sheets.sh                 # a cell's existence IS the check, idempotent, who/when recorded
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
+./scripts/e2e-notepad.sh                # the notepad: same rule, a list this time, org-scoped
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person

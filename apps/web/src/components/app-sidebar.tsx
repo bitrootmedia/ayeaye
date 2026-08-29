@@ -20,6 +20,7 @@ import {
   MailIcon,
   MoonIcon,
   NetworkIcon,
+  NotebookIcon,
   SunIcon,
   UserIcon,
   UsersIcon,
@@ -110,6 +111,11 @@ export function AppSidebar({
                     to: `/orgs/${currentOrg.id}/calendar`,
                     label: "Calendar",
                     icon: CalendarIcon,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/notes`,
+                    label: "Notes",
+                    icon: NotebookIcon,
                   },
                   {
                     to: `/orgs/${currentOrg.id}/projects`,
