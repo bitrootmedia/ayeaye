@@ -5,10 +5,12 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 from app.models.task import PRIORITIES, STATUSES
+from app.models.task_series import INTERVAL_UNITS
 from app.schemas.structure import LEVEL_PATTERN, GrantOut, PersonOut
 
 STATUS_PATTERN = f"^({'|'.join(STATUSES)})$"
 PRIORITY_PATTERN = f"^({'|'.join(PRIORITIES)})$"
+INTERVAL_PATTERN = f"^({'|'.join(INTERVAL_UNITS)})$"
 
 
 class TaskCreate(BaseModel):
@@ -44,6 +46,22 @@ class TaskUpdate(BaseModel):
     position: int | None = None
 
 
+class TaskRecurrenceIn(BaseModel):
+    interval_unit: str = Field(pattern=INTERVAL_PATTERN)
+    interval_count: int = Field(default=1, ge=1, le=52)
+
+
+class TaskRecurrenceOut(BaseModel):
+    id: str
+    interval_unit: str
+    interval_count: int
+    next_due_on: date
+    active: bool
+    # Resolved server-side, same discipline as `can_close`/`can_hide`: the UI
+    # hides "Stop repeating" rather than showing it and taking a 403.
+    can_manage: bool
+
+
 class TaskOut(BaseModel):
     id: str
     title: str
@@ -71,6 +89,10 @@ class TaskOut(BaseModel):
     # The caller's own bookmark, not a property of the task — two people
     # looking at the same task can get two different answers here.
     is_pinned: bool
+    # Set only when this task is part of a recurring series. `None` on the
+    # list and board views, which don't pay this lookup's cost per row — see
+    # `_recurrence_for` in the router.
+    recurrence: TaskRecurrenceOut | None = None
     # Every tag on it. Sent with the task rather than fetched per card: the
     # board renders dozens at a time and one lookup covers the page.
     tags: list["TagOut"] = []

@@ -14,6 +14,7 @@ from app.tasks import (
     deadlines,  # noqa: F401  registers sweep_deadlines
     invites,  # noqa: F401  registers send_invite_email
     notifications,  # noqa: F401  registers send_notification_email
+    recurrence,  # noqa: F401  registers sweep_recurring_tasks
     reminders,  # noqa: F401  registers sweep_reminders
     thumbnails,  # noqa: F401  registers make_thumbnail
 )
@@ -34,6 +35,7 @@ __all__ = [
     "deadlines",
     "invites",
     "notifications",
+    "recurrence",
     "reminders",
     "thumbnails",
 ]

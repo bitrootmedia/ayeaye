@@ -518,6 +518,91 @@ exactly that set so the two can't drift. Adding a kind in Python without the
 matching `ALTER` raises an `IntegrityError` at the worst possible moment —
 while notifying somebody.
 
+## Recurring tasks
+
+Read `services/recurrence.py`. `task_series` is its own table (like
+`task_pins`, `task_notes`, `planner_entries`) rather than columns on `Task` —
+a series outlives any one occurrence of it, so it can't be a property of one.
+`attach()` snapshots the task's title, description, project, owner and
+priority onto a new series row, points the task at it via `tasks.series_id`,
+and from then on the two are decoupled: editing the task afterwards never
+edits the series, the same way editing a reminder's note doesn't reach back
+into the task it's about.
+
+**On schedule, regardless of whether the last occurrence closed — a product
+decision, not an oversight.** Like a calendar event, not a checklist:
+"pay rent" for September appears whether or not August's got closed, and two
+open occurrences of the same series can coexist on the board. That's an
+honest backlog, not a bug to hide, and it's why generation has no rule tying
+it to the previous task's status.
+
+**`sweep_recurring_tasks`** (:35 past the hour — reminders, deadlines and the
+digest already hold :05, :15 and :25) claims a series with `try_claim`, then
+generates the occurrence through `tasks_service.create()` — there is
+deliberately not a second path that writes a `Task` row, the same reason
+`app/mcp/server.py` has no `select()` of its own. Generation runs *as the
+series owner*, which is what keeps `task.owner_user_id` from ever differing
+from the person who set the cadence, and is why no "you're now the owner"
+notification fires for a task they already knew was coming.
+
+**No notification on generation, on purpose.** The owner set the cadence
+themselves; pinging them every time their own recurring task reappears is
+the exact noise `services/conversations.py` already argues against for
+comments. The daily digest's "planned for today" and the dashboard's Due
+soon card already cover the nudge, once the task actually needs attention.
+
+**The claim can't be one shared-value `UPDATE`, unlike reminders and
+deadlines.** Those two sweeps claim every due row in a single statement
+because the claimed value is always the same (`func.now()`, or today's
+date). Here the advance amount is per-row — a week for one series, a month
+for another — so `try_claim` reads `next_due_on`, computes the new value in
+Python, and issues a per-row `UPDATE … WHERE next_due_on = <the value just
+read>`. Still race-safe (a second sweep's UPDATE matches zero rows once the
+first one has advanced it), just N statements instead of one.
+
+**`advance()` is calendar-aware for months, not `+ timedelta(days=30)`.**
+The 31st plus a month lands on the shorter month's last day (Jan 31 → Feb
+28/29), not six days into March — the trap naive arithmetic falls into.
+Pinned by `tests/test_recurrence_rules.py`, the pure-function half of this
+feature; the sweep and the claim are proved through
+`scripts/e2e-recurring-tasks.sh` instead, the same split `test_access_
+matrix.py`'s docstring explains for the access model.
+
+**Stop, not delete, and not resumable.** `stop()` sets `active = False` —
+the same non-destructive default as un-pinning or hiding — and the UI shows
+"Stopped repeating" as permanent history on that task rather than offering a
+restart. A new series always starts from whichever task is due next, the
+same direction generation itself runs: forward, never back into an
+occurrence that already happened. **Managing a series is creator-or-admin,
+not the task's own access level** — `can_manage()` checks
+`created_by_user_id`, deliberately not `can_edit` on the current task, the
+same way `services/pins.py` needed its own rule rather than reusing a task
+one. The reason is structural: a series can outlive the particular task it
+first attached to, so by the time someone wants to stop it there may be no
+one task's access level left to check against.
+
+**Offboarding reassigns series ownership too.** `task_series.owner_user_id`
+is `RESTRICT`, same as `tasks.owner_user_id`, so
+`organisations._reassign_everything_owned_by` calls
+`recurrence.reassign_owned_series` alongside the task and project
+reassignment it already does — without it, removing a member who set up a
+recurring task fails the whole removal with a raw foreign-key error.
+
+**A service that mutates a `Task` field outside `tasks_service.update()`
+must `db.refresh()` it before anything reads `updated_at` back.** Found
+building `attach()`: `SessionLocal` sets `expire_on_commit=False`, so a
+commit does *not* normally force a re-fetch — except `Task.updated_at`
+carries `onupdate=func.now()`, and any commit that touches a dirty `Task`
+still needs that one column's real value back from Postgres regardless of
+the session-wide flag. Read it before that refresh happens and SQLAlchemy's
+async ORM raises `MissingGreenlet` — a lazy load attempted outside an
+awaited call — which look nothing like "you forgot to refresh an object"
+unless you already know to look for it. `tasks_service.update()` already
+gets this right (it refreshes at the end); `recurrence.attach()` didn't
+until this bug surfaced it. Anywhere else that flips a `Task` column via a
+raw `db.execute()`/`db.commit()` rather than going through
+`tasks_service.update()` is a candidate for the identical crash.
+
 ## The dashboard, and what belongs to a person
 
 `/orgs/{id}` is the organisation's home. The people roster moved to
@@ -1637,6 +1722,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
+./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

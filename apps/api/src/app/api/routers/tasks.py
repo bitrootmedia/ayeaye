@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
-from app.models import Attachment, Project, Tag, Task, TaskGrant, Team, User
+from app.models import Attachment, Project, Tag, Task, TaskGrant, TaskSeries, Team, User
 from app.schemas.structure import GrantLevelIn, GrantOut, PersonOut, TeamOut
 from app.schemas.tasks import (
     BoardColumn,
@@ -29,6 +29,8 @@ from app.schemas.tasks import (
     TaskGrantIn,
     TaskHiddenIn,
     TaskOut,
+    TaskRecurrenceIn,
+    TaskRecurrenceOut,
     TaskUpdate,
 )
 from app.services import access as access_service
@@ -37,6 +39,7 @@ from app.services import conversations as conversations_service
 from app.services import notes as notes_service
 from app.services import pins as pins_service
 from app.services import projects as projects_service
+from app.services import recurrence as recurrence_service
 from app.services import richtext
 from app.services import search as search_service
 from app.services import tags as tags_service
@@ -129,6 +132,32 @@ async def _pinned_for(db: DbSession, tasks: list[Task], user: User) -> set[uuid.
     return await pins_service.pinned_ids(db, [t.id for t in tasks], user)
 
 
+def _recurrence_out(series: TaskSeries, *, user: User, org_role: str) -> TaskRecurrenceOut:
+    return TaskRecurrenceOut(
+        id=str(series.id),
+        interval_unit=series.interval_unit,
+        interval_count=series.interval_count,
+        next_due_on=series.next_due_on,
+        active=series.active,
+        can_manage=recurrence_service.can_manage(series, user_id=user.id, org_role=org_role),
+    )
+
+
+async def _recurrence_for(
+    db: DbSession, tasks: list[Task], user: User, ctx
+) -> dict[uuid.UUID, TaskRecurrenceOut]:
+    """One lookup for the whole page, same discipline as `_pinned_for` — used
+    only where the caller re-renders from the response (the single-task
+    endpoints), not on the list or board, which don't pay this row's cost."""
+    series_map = await recurrence_service.for_tasks(db, tasks)
+    out: dict[uuid.UUID, TaskRecurrenceOut] = {}
+    for task in tasks:
+        series = series_map.get(task.series_id) if task.series_id else None
+        if series is not None:
+            out[task.id] = _recurrence_out(series, user=user, org_role=ctx.role)
+    return out
+
+
 async def _image_urls(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, str]:
     """Fresh presigned URLs for every image referenced by these descriptions.
 
@@ -169,6 +198,7 @@ def _task_out(
     tags: dict[uuid.UUID, list[Tag]] | None = None,
     image_urls: dict[uuid.UUID, str] | None = None,
     pinned: set[uuid.UUID] | None = None,
+    recurrence: dict[uuid.UUID, TaskRecurrenceOut] | None = None,
 ) -> TaskOut:
     return TaskOut(
         id=str(task.id),
@@ -190,6 +220,7 @@ def _task_out(
         updated_at=task.updated_at,
         is_hidden=task.hidden_at is not None,
         is_pinned=task.id in (pinned or set()),
+        recurrence=(recurrence or {}).get(task.id),
         access=level,
         can_close=tasks_service.can_close(level=level, is_owner=is_owner),
         can_hide=tasks_service.can_hide(is_owner=is_owner),
@@ -379,6 +410,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     tags = await _tags_for(db, [tctx.task])
     images = await _image_urls(db, [tctx.task])
     pinned = await _pinned_for(db, [tctx.task], user)
+    recurrence = await _recurrence_for(db, [tctx.task], user, ctx)
     return _task_out(
         tctx.task,
         tctx.level,
@@ -388,6 +420,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
         tags=tags,
         image_urls=images,
         pinned=pinned,
+        recurrence=recurrence,
     )
 
 
@@ -416,6 +449,7 @@ async def update_task(
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
+    recurrence = await _recurrence_for(db, [task], user, ctx)
     return _task_out(
         task,
         fresh.level,
@@ -425,6 +459,7 @@ async def update_task(
         tags=tags,
         image_urls=images,
         pinned=pinned,
+        recurrence=recurrence,
     )
 
 
@@ -444,6 +479,7 @@ async def close_task(
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
+    recurrence = await _recurrence_for(db, [task], user, ctx)
     return _task_out(
         task,
         tctx.level,
@@ -453,18 +489,24 @@ async def close_task(
         tags=tags,
         image_urls=images,
         pinned=pinned,
+        recurrence=recurrence,
     )
 
 
 # --- personal pins -----------------------------------------------------------
 
 
-async def _pin_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
+async def _task_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
+    """Rebuild the full `TaskOut` for one task. Shared by every endpoint below
+    that mutates something *about* the task without going through
+    `tasks_service.update()` — pinning and recurrence both need the same
+    people/tags/pinned/recurrence lookups a plain GET does."""
     people = await _people(db, [tctx.task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [tctx.task])
     images = await _image_urls(db, [tctx.task])
     pinned = await _pinned_for(db, [tctx.task], user)
+    recurrence = await _recurrence_for(db, [tctx.task], user, ctx)
     return _task_out(
         tctx.task,
         tctx.level,
@@ -474,6 +516,7 @@ async def _pin_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
         tags=tags,
         image_urls=images,
         pinned=pinned,
+        recurrence=recurrence,
     )
 
 
@@ -484,14 +527,49 @@ async def pin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     nothing."""
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     await pins_service.set_pinned(db, task_id, user, pinned=True)
-    return await _pin_response(db, ctx, tctx, user)
+    return await _task_response(db, ctx, tctx, user)
 
 
 @router.delete("/tasks/{task_id}/pin", response_model=TaskOut)
 async def unpin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     await pins_service.set_pinned(db, task_id, user, pinned=False)
-    return await _pin_response(db, ctx, tctx, user)
+    return await _task_response(db, ctx, tctx, user)
+
+
+# --- recurrence ---------------------------------------------------------------
+
+
+@router.post("/tasks/{task_id}/recurrence", response_model=TaskOut)
+async def make_recurring(
+    task_id: uuid.UUID, body: TaskRecurrenceIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """Turn this task into the first occurrence of a series. `write` on the
+    task, like any other edit — see `services/recurrence.py`."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    await recurrence_service.attach(
+        db,
+        ctx,
+        user,
+        tctx.task,
+        interval_unit=body.interval_unit,
+        interval_count=body.interval_count,
+    )
+    return await _task_response(db, ctx, tctx, user)
+
+
+@router.post("/tasks/{task_id}/recurrence/stop", response_model=TaskOut)
+async def stop_recurring(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Stop future occurrences. Whoever set it up, or an organisation admin —
+    not the same rule as editing the task, because the series can outlive any
+    one occurrence of it. Already-generated tasks are untouched."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    if tctx.task.series_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not a recurring task")
+    series = await recurrence_service.get_or_404(db, tctx.task.series_id, ctx.organisation.id)
+    await recurrence_service.stop(db, ctx, user, series)
+    return await _task_response(db, ctx, tctx, user)
 
 
 # --- private notes ---------------------------------------------------------------
@@ -609,6 +687,7 @@ async def hide_task(
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
+    recurrence = await _recurrence_for(db, [task], user, ctx)
     return _task_out(
         task,
         tctx.level,
@@ -617,6 +696,7 @@ async def hide_task(
         is_owner=tctx.is_owner,
         tags=tags,
         pinned=pinned,
+        recurrence=recurrence,
         image_urls=images,
     )
 

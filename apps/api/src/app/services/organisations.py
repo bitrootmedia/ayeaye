@@ -395,10 +395,12 @@ async def remove_member(
 async def _reassign_everything_owned_by(
     db: AsyncSession, ctx: OrgContext, leaving_user_id: uuid.UUID
 ) -> None:
-    """Hand this person's projects and tasks to an owner who is staying."""
+    """Hand this person's projects, tasks and recurring series to an owner
+    who is staying."""
     # Imported here: services.tasks imports services.access, which has no
     # business being pulled in by every module that touches a membership row.
     from app.models import Project
+    from app.services import recurrence as recurrence_service
     from app.services import tasks as tasks_service
 
     successor = (
@@ -439,6 +441,15 @@ async def _reassign_everything_owned_by(
         project.owner_user_id = successor
 
     await tasks_service.reassign_owned_tasks(
+        db,
+        org_id=ctx.organisation.id,
+        from_user_id=leaving_user_id,
+        to_user_id=successor,
+    )
+    # `task_series.owner_user_id` is RESTRICT too — without this, someone
+    # who set up a recurring task before leaving blocks their own removal
+    # with a raw foreign-key error, same as an unreassigned task would.
+    await recurrence_service.reassign_owned_series(
         db,
         org_id=ctx.organisation.id,
         from_user_id=leaving_user_id,

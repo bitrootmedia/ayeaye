@@ -308,7 +308,22 @@ export type Task = {
   /** Owner-only, and deliberately NOT the same rule as `can_close` — an
    *  organisation admin qualifies for that one and not for this. */
   can_hide: boolean;
+  /** Set only when this task is part of a recurring series. `null` on the
+   *  list and board views — see services/recurrence.py. */
+  recurrence: TaskRecurrence | null;
   tags: Tag[];
+};
+
+/** A recurring task's cadence. On schedule, not on close — the next
+ *  occurrence appears whether or not this one is done. */
+export type TaskRecurrence = {
+  id: string;
+  interval_unit: "day" | "week" | "month";
+  interval_count: number;
+  next_due_on: string;
+  active: boolean;
+  /** Resolved server-side: whoever set it up, or an organisation admin. */
+  can_manage: boolean;
 };
 
 /** One board column: what's shown, and how much there really is. */

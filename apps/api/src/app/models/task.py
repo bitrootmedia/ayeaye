@@ -224,6 +224,17 @@ class Task(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    # SET NULL, not CASCADE: this task is one occurrence, not the series.
+    # Deleting the series stops future generation; it must not take an
+    # already-generated task with it, the same way removing a tag doesn't
+    # touch the tasks that carried it. See models/task_series.py.
+    series_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("task_series.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # A claim, not an audit trail — same discipline as `Reminder.notified_

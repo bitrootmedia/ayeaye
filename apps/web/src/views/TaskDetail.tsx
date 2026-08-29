@@ -6,6 +6,7 @@ import {
   HistoryIcon,
   LockIcon,
   PinIcon,
+  RepeatIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -452,6 +453,7 @@ export default function TaskDetail() {
                   onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
                 />
               </div>
+              <RecurrenceControl orgId={org.id} task={task} editable={editable} onChanged={load} />
             </CardContent>
           </Card>
 
@@ -647,6 +649,141 @@ function Details({
         }}
       >
         Save
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Turn this task into the first occurrence of a series, or show the one
+ * it's already part of. On schedule, not on close — the next occurrence
+ * appears whether or not this one is done, so there's no "resume" here,
+ * only "stop": once a series is generating, the only lever this control
+ * offers is turning it off.
+ */
+function RecurrenceControl({
+  orgId,
+  task,
+  editable,
+  onChanged,
+}: {
+  orgId: string;
+  task: Task;
+  editable: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const toast = useToastManager();
+  const [open, setOpen] = useState(false);
+  const [count, setCount] = useState("1");
+  const [unit, setUnit] = useState<"day" | "week" | "month">("week");
+  const [busy, setBusy] = useState(false);
+
+  const fail = (err: unknown, title: string) => {
+    const detail = err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+    toast.add({ title, description: detail });
+  };
+
+  const submit = async () => {
+    const n = parseInt(count, 10);
+    if (!n || n < 1 || busy) return;
+    setBusy(true);
+    try {
+      await api(`/organisations/${orgId}/tasks/${task.id}/recurrence`, {
+        method: "POST",
+        body: JSON.stringify({ interval_unit: unit, interval_count: n }),
+      });
+      setOpen(false);
+      await onChanged();
+      toast.add({ title: "Now repeating" });
+    } catch (err) {
+      fail(err, "Couldn't set that up");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stop = async () => {
+    try {
+      await api(`/organisations/${orgId}/tasks/${task.id}/recurrence/stop`, { method: "POST" });
+      await onChanged();
+      toast.add({ title: "Stopped repeating" });
+    } catch (err) {
+      fail(err, "Couldn't stop that");
+    }
+  };
+
+  if (task.recurrence) {
+    const { interval_count, interval_unit, next_due_on, active, can_manage } = task.recurrence;
+    const cadence =
+      interval_count === 1 ? `every ${interval_unit}` : `every ${interval_count} ${interval_unit}s`;
+    // Stopped is permanent history on this particular task, not a live
+    // state — no "Stop" button to click again, and deliberately no "restart"
+    // either. A new series starts from whichever task is due next, the same
+    // way generation itself works: forward from here, not backward into one
+    // that already happened.
+    if (!active) {
+      return (
+        <div className="flex items-center gap-1.5 rounded-lg border p-2 text-xs text-muted-foreground">
+          <RepeatIcon className="size-3.5 shrink-0" />
+          Stopped repeating {cadence}
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 text-xs">
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <RepeatIcon className="size-3.5 shrink-0" />
+          Repeats {cadence} · next on {next_due_on}
+        </span>
+        {can_manage && (
+          <Button size="sm" variant="ghost" onClick={stop}>
+            Stop
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  // Needs a due date to anchor the cadence to, and write access to set one
+  // up — the same bar as any other edit to the task.
+  if (!editable || !task.due_on) return null;
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="ghost" className="w-fit justify-start" onClick={() => setOpen(true)}>
+        <RepeatIcon className="size-3.5" />
+        Repeat this task
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border p-2">
+      <span className="text-xs text-muted-foreground">Every</span>
+      <Input
+        type="number"
+        min={1}
+        max={52}
+        className="w-16"
+        value={count}
+        aria-label="Interval count"
+        onChange={(e) => setCount(e.target.value)}
+      />
+      <select
+        className="h-8 rounded-lg border bg-background px-2 text-sm"
+        value={unit}
+        aria-label="Interval unit"
+        onChange={(e) => setUnit(e.target.value as typeof unit)}
+      >
+        <option value="day">day(s)</option>
+        <option value="week">week(s)</option>
+        <option value="month">month(s)</option>
+      </select>
+      <Button size="sm" disabled={busy} onClick={submit}>
+        Set
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+        Cancel
       </Button>
     </div>
   );

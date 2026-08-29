@@ -22,6 +22,7 @@ from app.models.structure import (
 )
 from app.models.tag import Tag, TaskTag
 from app.models.task import Task, TaskEvent, TaskGrant
+from app.models.task_series import TaskSeries
 from app.models.time_entry import TimeEntry
 from app.models.token import PersonalAccessToken
 from app.models.user import User
@@ -48,6 +49,7 @@ __all__ = [
     "TaskGrant",
     "TaskNote",
     "TaskPin",
+    "TaskSeries",
     "TaskTag",
     "TimeEntry",
     "Team",
