@@ -29,6 +29,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Empty,
   EmptyContent,
   EmptyDescription,
@@ -74,6 +83,11 @@ export default function TaskDetail() {
   const [gone, setGone] = useState(false);
   // Comments can carry files, so posting one has to reach the Files panel.
   const [filesKey, setFilesKey] = useState(0);
+  // Type-the-title-to-confirm — the same bar as deleting an organisation or a
+  // project, and for the same reason: a bare "Are you sure?" is exactly the
+  // dialog a habitual double-click sails through.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
 
   const load = useCallback(async () => {
     if (!orgId || !taskId) return;
@@ -518,17 +532,7 @@ export default function TaskDetail() {
           {accessInfo.can_manage && (
             <Card>
               <CardContent className="pt-6">
-                <Button
-                  variant="destructive"
-                  onClick={() =>
-                    act(async () => {
-                      await api(`/organisations/${org.id}/tasks/${task.id}`, {
-                        method: "DELETE",
-                      });
-                      navigate(`/orgs/${org.id}/tasks`);
-                    }, "Task deleted")
-                  }
-                >
+                <Button variant="destructive" onClick={() => setConfirmingDelete(true)}>
                   <Trash2Icon />
                   Delete task
                 </Button>
@@ -537,6 +541,47 @@ export default function TaskDetail() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={confirmingDelete}
+        onOpenChange={(open) => {
+          setConfirmingDelete(open);
+          if (!open) setConfirmText("");
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {task.title}?</DialogTitle>
+            <DialogDescription>
+              This removes it, its comments, files and history. It cannot be undone. Type the
+              title to confirm.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={confirmText}
+            placeholder={task.title}
+            onChange={(e) => setConfirmText(e.target.value)}
+          />
+          <DialogFooter>
+            <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive"
+              disabled={confirmText !== task.title}
+              onClick={() =>
+                act(async () => {
+                  await api(`/organisations/${org.id}/tasks/${task.id}`, {
+                    method: "DELETE",
+                  });
+                  setConfirmingDelete(false);
+                  navigate(`/orgs/${org.id}/tasks`);
+                }, "Task deleted")
+              }
+            >
+              Delete permanently
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
