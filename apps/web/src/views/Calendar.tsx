@@ -2,6 +2,7 @@ import {
   BellIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  PlaneIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
@@ -11,7 +12,15 @@ import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { PRIORITY_TONE, STATUS_DOT, type CalendarData, type CalendarReminder, type CalendarTask } from "@/lib/types";
+import {
+  PRIORITY_TONE,
+  STATUS_DOT,
+  personName,
+  type CalendarAbsence,
+  type CalendarData,
+  type CalendarReminder,
+  type CalendarTask,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -41,11 +50,14 @@ function gridStart(year: number, month: number): Date {
 /**
  * Every visible task's due date, and your own reminders, on one month grid.
  *
- * **Tasks are team-wide, reminders are yours alone** — see the endpoint's own
- * docstring for why that split is deliberate rather than inconsistent. A
- * shared "what's due when" only works if it shows the whole team's work; a
- * reminder is a note to yourself, and there is no version of the product
- * where somebody else's private note appears on your screen.
+ * **Tasks and out-of-office are team-wide, reminders are yours alone** — see
+ * the endpoint's own docstring for why that split is deliberate rather than
+ * inconsistent. A shared "what's due when" only works if it shows the whole
+ * team's work, and OOO is the one thing on this grid that is *not* private by
+ * product decision (services/presence.py): its whole value is a colleague
+ * checking before they ask you for something. A reminder is a note to
+ * yourself, and there is no version of the product where somebody else's
+ * private note appears on your screen.
  *
  * Hand-rolled, not a calendar library: a month grid is a CSS grid and some
  * date arithmetic, and this product reaches for a dependency only once
@@ -86,7 +98,7 @@ export default function CalendarView() {
     setData(
       await api<CalendarData>(
         `/organisations/${orgId}/calendar?start=${isoDate(start)}&end=${isoDate(end)}`,
-      ).catch(() => ({ tasks: [], reminders: [] })),
+      ).catch(() => ({ tasks: [], reminders: [], away: [] })),
     );
   }, [orgId, start, end]);
 
@@ -96,10 +108,22 @@ export default function CalendarView() {
 
   if (!org) return null;
 
-  const byDay = new Map<string, { tasks: CalendarTask[]; reminders: CalendarReminder[] }>();
-  for (const day of days) byDay.set(isoDate(day), { tasks: [], reminders: [] });
+  const byDay = new Map<
+    string,
+    { tasks: CalendarTask[]; reminders: CalendarReminder[]; away: CalendarAbsence[] }
+  >();
+  for (const day of days) byDay.set(isoDate(day), { tasks: [], reminders: [], away: [] });
   for (const t of data?.tasks ?? []) byDay.get(t.due_on)?.tasks.push(t);
   for (const r of data?.reminders ?? []) byDay.get(r.remind_on)?.reminders.push(r);
+  // Unlike a task or reminder's single date, an absence spans a range, so it
+  // has to be checked against every day in the grid rather than looked up by
+  // one key.
+  for (const a of data?.away ?? []) {
+    for (const day of days) {
+      const iso = isoDate(day);
+      if (iso >= a.starts_on && iso <= a.ends_on) byDay.get(iso)?.away.push(a);
+    }
+  }
 
   const goTo = (y: number, m: number) => {
     const normalised = new Date(y, m, 1);
@@ -119,7 +143,7 @@ export default function CalendarView() {
       <PageHeader
         crumbs={[{ label: org.name, to: `/orgs/${org.id}` }, { label: "Calendar" }]}
         title="Calendar"
-        description="Every visible task's due date, and your own reminders."
+        description="Every visible task's due date, your own reminders, and who's away."
         actions={
           <div className="flex items-center gap-1">
             <Button
@@ -162,10 +186,10 @@ export default function CalendarView() {
           <div className="grid grid-cols-7">
             {days.map((day) => {
               const iso = isoDate(day);
-              const cell = byDay.get(iso) ?? { tasks: [], reminders: [] };
+              const cell = byDay.get(iso) ?? { tasks: [], reminders: [], away: [] };
               const inMonth = day.getMonth() === month;
               const isToday = iso === todayIso;
-              const items = [...cell.tasks, ...cell.reminders];
+              const items = [...cell.tasks, ...cell.reminders, ...cell.away];
               const shown = items.slice(0, 3);
               const overflow = items.length - shown.length;
               return (
@@ -189,8 +213,10 @@ export default function CalendarView() {
                     {shown.map((item) =>
                       "due_on" in item ? (
                         <TaskChip key={`t-${item.id}`} orgId={org.id} task={item} />
-                      ) : (
+                      ) : "remind_on" in item ? (
                         <ReminderChip key={`r-${item.id}`} orgId={org.id} reminder={item} />
+                      ) : (
+                        <AbsenceChip key={`a-${item.id}`} absence={item} />
                       ),
                     )}
                     {overflow > 0 && (
@@ -217,6 +243,19 @@ function TaskChip({ orgId, task }: { orgId: string; task: CalendarTask }) {
       <span className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[task.status])} />
       <span className={cn("truncate", PRIORITY_TONE[task.priority])}>{task.title}</span>
     </Link>
+  );
+}
+
+function AbsenceChip({ absence }: { absence: CalendarAbsence }) {
+  const label = personName(absence.person);
+  return (
+    <div
+      title={absence.note ? `${label} — ${absence.note}` : label}
+      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-xs text-muted-foreground"
+    >
+      <PlaneIcon className="size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </div>
   );
 }
 

@@ -1457,7 +1457,7 @@ product meaning.
 
 Read `api/routers/calendar.py`'s own docstring — it states the one thing
 worth knowing before touching any of this. `GET /organisations/{id}/calendar
-?start=&end=` returns two lists with **deliberately different visibility
+?start=&end=` returns three lists with **deliberately different visibility
 rules on the same grid**: every visible task's due date is team-wide (the
 same access as the Tasks list — `tasks_service.list_visible` with
 `due_after`/`due_before`, two new params on `access.visible_tasks_stmt`
@@ -1469,6 +1469,21 @@ month. That split was the one real design question here, decided in favour
 of a genuinely shared "what's due when" over a quieter personal-agenda
 version scoped like the dashboard's escalation cards — see the router
 docstring for the reasoning kept next to the code it explains.
+
+**Out-of-office rides with tasks, not reminders — because it was never
+private to begin with.** `presence_service.away_between(start, end)` is the
+dashboard's own fortnight-ahead OOO query generalised to an arbitrary window,
+with `away_in_org` kept as a thin wrapper over it so the dashboard's call
+site didn't need to change. CLAUDE.md's own presence rule — "its whole value
+is a colleague checking before they ask you for something" — is what decides
+the visibility here, the same as everywhere else OOO appears: every member of
+the organisation sees every absence, scoped to membership rather than task
+access, because OOO is about people rather than about anything you'd need a
+grant to see. Unlike a task's single `due_on` or a reminder's single
+`remind_on`, an absence spans `[starts_on, ends_on]`, so the frontend can't
+bucket it with a single map lookup by date — `Calendar.tsx` walks every grid
+day against every absence and does a plain range-overlap test, the same
+`starts_on <= day <= ends_on` shape `presence.is_away()` already uses.
 
 **The window is capped at 42 days** (`MAX_WINDOW_DAYS`) — a month grid is
 never more than six weeks, and a caller wanting more than that already has

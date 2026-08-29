@@ -386,9 +386,22 @@ export type CalendarReminder = {
   task_title: string;
 };
 
+/** One out-of-office period, on the calendar. Team-wide, not private — see
+ *  services/presence.py: "its whole value is a colleague checking before
+ *  they ask you for something." Spans a range, unlike a task's due date or a
+ *  reminder's single day. */
+export type CalendarAbsence = {
+  id: string;
+  person: Person | null;
+  starts_on: string;
+  ends_on: string;
+  note: string | null;
+};
+
 export type CalendarData = {
   tasks: CalendarTask[];
   reminders: CalendarReminder[];
+  away: CalendarAbsence[];
 };
 
 /** A reminder. Personal — there is no "whose" field because there is only

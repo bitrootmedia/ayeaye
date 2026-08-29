@@ -1,6 +1,7 @@
-"""The calendar: every visible task's due date, and your own reminders.
+"""The calendar: every visible task's due date, your own reminders, and
+who's away.
 
-Two different scopes on one grid, and that's deliberate rather than
+Three different scopes on one grid, and that's deliberate rather than
 inconsistent:
 
 * **Tasks are team-wide** — every task the caller can see with a due date in
@@ -12,6 +13,12 @@ inconsistent:
   statement every other reminder surface uses, and there is no version of it
   that shows anyone else's. Two people looking at the same calendar in the
   same organisation see the same task dots and different reminder dots.
+* **Out-of-office is team-wide too, on purpose** — it is the one thing in
+  this file that is *not* private by product decision (CLAUDE.md: "its whole
+  value is a colleague checking before they ask you for something"), so it
+  gets the same visibility as tasks, not reminders. `presence.away_between`
+  is the dashboard's own query generalised from a fixed fortnight-ahead
+  window to an arbitrary one.
 """
 
 import uuid
@@ -24,6 +31,8 @@ from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.models import Project, Reminder
+from app.schemas.structure import PersonOut
+from app.services import presence as presence_service
 from app.services import reminders as reminders_service
 from app.services import tasks as tasks_service
 
@@ -52,9 +61,18 @@ class CalendarReminderOut(BaseModel):
     task_title: str
 
 
+class CalendarAbsenceOut(BaseModel):
+    id: str
+    person: PersonOut | None
+    starts_on: date
+    ends_on: date
+    note: str | None
+
+
 class CalendarOut(BaseModel):
     tasks: list[CalendarTaskOut]
     reminders: list[CalendarReminderOut]
+    away: list[CalendarAbsenceOut]
 
 
 async def _project_names(db: DbSession, org_id: uuid.UUID) -> dict[uuid.UUID, str]:
@@ -62,6 +80,12 @@ async def _project_names(db: DbSession, org_id: uuid.UUID) -> dict[uuid.UUID, st
         await db.execute(select(Project.id, Project.name).where(Project.organisation_id == org_id))
     ).all()
     return {pid: name for pid, name in rows}
+
+
+def _person(user) -> PersonOut | None:
+    if user is None:
+        return None
+    return PersonOut(id=str(user.id), email=user.email, display_name=user.display_name)
 
 
 @router.get("/calendar", response_model=CalendarOut)
@@ -97,6 +121,8 @@ async def calendar(
         )
     ).all()
 
+    away_rows = await presence_service.away_between(db, ctx, start=start, end=end)
+
     return CalendarOut(
         tasks=[
             CalendarTaskOut(
@@ -123,5 +149,15 @@ async def calendar(
                 task_title=reminder_task.title,
             )
             for reminder, reminder_task in reminder_rows
+        ],
+        away=[
+            CalendarAbsenceOut(
+                id=str(absence.id),
+                person=_person(who),
+                starts_on=absence.starts_on,
+                ends_on=absence.ends_on,
+                note=absence.note,
+            )
+            for absence, who in away_rows
         ],
     )

@@ -88,16 +88,19 @@ async def remove_absence(db: AsyncSession, user: User, absence_id: uuid.UUID) ->
     await db.commit()
 
 
-async def away_in_org(
-    db: AsyncSession, ctx: OrgContext, *, today: date
+async def away_between(
+    db: AsyncSession, ctx: OrgContext, *, start: date, end: date
 ) -> list[tuple[OutOfOffice, User]]:
-    """Who is away now or soon, among this organisation's members.
+    """Who is away at any point in `[start, end]`, among this organisation's
+    members.
 
     Scoped to membership, not to task access: OOO is about people, and the
     people in your organisation are exactly who you might be waiting on. One
-    statement, joined through the membership table.
+    statement, joined through the membership table. The window is a plain
+    overlap test — started before the window ends, hasn't ended before the
+    window starts — written that way rather than as two branches so a period
+    spanning the whole window can't fall between them.
     """
-    horizon = today + timedelta(days=UPCOMING_DAYS)
     rows = (
         await db.execute(
             select(OutOfOffice, User)
@@ -106,16 +109,21 @@ async def away_in_org(
             .where(
                 OrganisationMember.organisation_id == ctx.organisation.id,
                 OrganisationMember.status == STATUS_ACTIVE,
-                # Overlaps the window: started before the horizon and hasn't
-                # ended yet. Written as an overlap rather than two branches so
-                # a period spanning "now" can't fall between them.
-                OutOfOffice.starts_on <= horizon,
-                OutOfOffice.ends_on >= today,
+                OutOfOffice.starts_on <= end,
+                OutOfOffice.ends_on >= start,
             )
             .order_by(OutOfOffice.starts_on)
         )
     ).all()
     return [(a, u) for a, u in rows]
+
+
+async def away_in_org(
+    db: AsyncSession, ctx: OrgContext, *, today: date
+) -> list[tuple[OutOfOffice, User]]:
+    """Who is away now or soon — the dashboard's own fortnight-ahead window,
+    on top of the general-purpose `away_between`."""
+    return await away_between(db, ctx, start=today, end=today + timedelta(days=UPCOMING_DAYS))
 
 
 def is_away(absence: OutOfOffice, *, today: date) -> bool:
