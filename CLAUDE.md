@@ -180,7 +180,7 @@ ayeayecaptain/
     │       ├── models/      # user, organisation (+ membership/invitations),
     │       │                #   structure (teams, groups, projects, grants),
     │       │                #   task (+ grants, events), tag (+ task_tags),
-    │       │                #   note (private, per person), reminder,
+    │       │                #   checklist (+ items), note (private, per person), reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
@@ -193,7 +193,7 @@ ayeayecaptain/
     │       │                #   teams.py projects.py tasks.py
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
-    │       │                #   tags.py notes.py reminders.py presence.py
+    │       │                #   tags.py checklists.py notes.py reminders.py presence.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -446,6 +446,21 @@ Two more that will bite:
 - **Moving a reminder clears both stamps.** Otherwise snoozing until next week
   silences it permanently.
 
+**A reminder doesn't need a task.** `ck_reminders_one_anchor`
+(`num_nonnulls(task_id, title) = 1`) is the same one-of-two-anchors idiom
+`attachments` and `conversations` already use — a standalone reminder carries
+its own `title` where a task-anchored one uses the task's. It still needs an
+organisation, because the calendar reads reminders one organisation at a
+time and a standalone row has no task to read one from —
+`ck_reminders_org_iff_standalone` (`(task_id IS NULL) = (organisation_id IS
+NOT NULL)`) is what keeps `organisation_id` from drifting out of sync with
+which shape a row actually is. `mine_stmt` outer-joins `Task` rather than
+requiring one; every caller — the sweep, the calendar, both `ReminderOut`
+schemas — has to handle `task is None` rather than assuming a task exists.
+Created from `/reminders`, not from a task screen, with its own
+organisation picker (there's no URL to infer one from, unlike the task-
+anchored form which already has an org in its path).
+
 **Pins: personal, like the note, not shared, like the tag.** `task_pins` is
 the same one-row-per-person-per-task shape as `task_notes` and
 `planner_entries`, and for the same reason — pinning is what *you* want on
@@ -457,6 +472,54 @@ justified it — nothing deletes the row when a grant is revoked — so the read
 that builds the dashboard's Pinned card re-applies `visible_task_ids_stmt`
 rather than trusting the join, the identical reasoning `services/planner.py`
 already documents for its own bucket read.
+
+## Checklists
+
+Read `services/checklists.py`. A task can carry more than one — "packing
+list" and "before we ship" are two different lists, not two sections of
+one — and unlike everything in the section above, a checklist is **shared
+task content, not a personal record**: `write` gates every mutation
+(`services/checklists.py`'s own docstring), the same bar tagging and
+attaching a file already clear, not the `read`-is-enough rule reminders,
+notes and pins get for a record of what *you* did.
+
+**`write`, not the task owner, and not an org admin's special case.** There
+is no `can_manage_checklists` rule distinct from `can_edit` — an editor and
+the owner see identical controls, which is correct: a checklist item is no
+more the owner's alone than the description is.
+
+**Ordered by `id`, no `position` column.** UUIDv7 sorts chronologically, so
+creation order falls out for free — the same reasoning `list_members`
+already uses for the roster, and simpler than the midpoint-position
+convention the planner and the task list use, because nothing here needs
+drag-and-drop reordering.
+
+**Every mutation announces, and the panel needs its own nudge to hear it.**
+`tasks_service.announce()` after every add/toggle/remove is what makes a
+second open tab see a checked-off item without a manual refresh — the same
+"if it writes to a task, it announces" rule as tags and files. But the
+Checklists panel fetches on its own, the identical shape `TaskFilesPanel`
+already has: `TaskDetail.tsx`'s realtime handler bumps a `checklistsKey`
+alongside the existing `filesKey`, and the panel's `refreshKey` prop is a
+dependency of its own load effect. Missing that wiring is invisible in
+testing and shows up as "I checked it off and the other tab still shows it
+unchecked."
+
+**A freshly created checklist's `items` must never be touched before the
+router builds its response.** Found building `add_checklist`: assigning
+`checklist.items = []` to "seed" the relationship still triggers SQLAlchemy
+to load the *current* value first to diff against, and an unloaded
+relationship on a session-attached object is a lazy load — outside an
+awaited call, that's the identical `MissingGreenlet` trap
+`recurrence.attach()` hit (see "A service that mutates a `Task` field
+outside `tasks_service.update()`" above). The fix isn't a workaround, it's
+not touching `.items` at all: the router builds `ChecklistOut(..., items=[])`
+directly for a create response, since a checklist that was just made
+provably has none. Everywhere else that reads `.items` —
+`get_checklist_or_404`, `for_task` — eager-loads it with `selectinload` up
+front instead, and `rename_checklist`'s own `db.refresh()` is scoped to
+`attribute_names=["title"]` so it doesn't expire that already-loaded
+collection and reintroduce the same trap one call later.
 
 ## The scheduler
 
@@ -1372,7 +1435,7 @@ Reminders are personal in the same way and are left out for the same reason.
 
 **Tasks ride the same channel.** Anything that changes a task publishes
 `{"type": "task", "task_id": …}` and the screen refetches — status, priority,
-due date, project, tags, files, grants, time entries, hide/unhide. Three
+due date, project, tags, files, checklists, grants, time entries, hide/unhide. Three
 things hold it together:
 
 - **`tasks_service.announce()` is called from every mutation, after the
@@ -1477,7 +1540,11 @@ organisation see the same task dots and different reminder dots on the same
 month. That split was the one real design question here, decided in favour
 of a genuinely shared "what's due when" over a quieter personal-agenda
 version scoped like the dashboard's escalation cards — see the router
-docstring for the reasoning kept next to the code it explains.
+docstring for the reasoning kept next to the code it explains. A standalone
+reminder (see "Tags, notes, reminders and pins" above) shows here too —
+`mine_stmt` outer-joins `Task`, so `CalendarReminderOut.task_id` comes back
+`None` for one and `Calendar.tsx`'s own `ReminderChip` renders it as a plain
+label instead of a link, since there's no task screen for it to open.
 
 **Out-of-office rides with tasks, not reminders — because it was never
 private to begin with.** `presence_service.away_between(start, end)` is the
@@ -1896,6 +1963,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-task-files.sh             # priority, task files, thumbnails, moving a task
 ./scripts/e2e-hidden.sh                 # the one place access is subtracted
 ./scripts/e2e-tags.sh                   # the vocabulary, and "off the board"
+./scripts/e2e-checklists.sh             # more than one list, write-gated, read-only sees but can't touch
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements

@@ -1,5 +1,6 @@
 # Import every model here so `import app.models` populates Base.metadata.
 # Alembic's env.py imports this module for autogenerate to see the tables.
+from app.models.checklist import TaskChecklist, TaskChecklistItem
 from app.models.conversation import (
     Attachment,
     Conversation,
@@ -47,6 +48,8 @@ __all__ = [
     "Reminder",
     "Tag",
     "Task",
+    "TaskChecklist",
+    "TaskChecklistItem",
     "TaskEvent",
     "TaskGrant",
     "TaskNote",

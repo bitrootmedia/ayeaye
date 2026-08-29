@@ -1,13 +1,17 @@
 """Reminders — personal, and therefore mostly outside an organisation.
 
-Two surfaces:
+Three surfaces:
 
-* **`/organisations/{id}/tasks/{id}/reminders`** — setting one needs the task,
-  so it lives under the organisation like everything else about a task.
-* **`/reminders`** — reading them does not. The list and the badge are
-  cross-organisation on purpose, the same way the notification inbox is: a
-  reminder you set in one place must not be invisible because you happen to
-  be looking at another.
+* **`/organisations/{id}/tasks/{id}/reminders`** — setting a task-anchored one
+  needs the task, so it lives under the organisation like everything else
+  about a task.
+* **`/organisations/{id}/reminders`** — a standalone one has no task to hang
+  off, but it still needs an organisation (see `models/reminder.py`'s
+  `ck_reminders_org_iff_standalone`), so it gets the same shape one level up.
+* **`/reminders`** — reading them does not need either. The list and the
+  badge are cross-organisation on purpose, the same way the notification
+  inbox is: a reminder you set in one place must not be invisible because
+  you happen to be looking at another.
 """
 
 import uuid
@@ -18,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.models import Organisation
-from app.models.reminder import MAX_NOTE_LENGTH
+from app.models.reminder import MAX_NOTE_LENGTH, MAX_TITLE_LENGTH
 from app.services import reminders as reminders_service
 from app.services import tasks as tasks_service
 
@@ -30,8 +34,15 @@ class ReminderIn(BaseModel):
     note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
 
 
+class StandaloneReminderIn(BaseModel):
+    remind_on: date
+    title: str = Field(min_length=1, max_length=MAX_TITLE_LENGTH)
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
+
+
 class ReminderUpdate(BaseModel):
     remind_on: date | None = None
+    title: str | None = None
     note: str | None = None
     done: bool | None = None
 
@@ -44,21 +55,25 @@ class ReminderOut(BaseModel):
     # yet" is not a question the browser can answer for somebody who set the
     # reminder on their phone in another country.
     overdue: bool
-    task_id: str
+    # NULL for a standalone reminder — `title` is its own "what" then.
+    task_id: str | None = None
     task_title: str | None = None
+    title: str | None = None
     organisation_id: str | None = None
     organisation_name: str | None = None
 
 
 def _out(reminder, *, today: date, task=None, org_name: str | None = None) -> ReminderOut:
+    org_id = task.organisation_id if task is not None else reminder.organisation_id
     return ReminderOut(
         id=str(reminder.id),
         remind_on=reminder.remind_on,
         note=reminder.note,
         overdue=reminders_service.is_overdue(reminder.remind_on, today=today),
-        task_id=str(reminder.task_id),
+        task_id=str(reminder.task_id) if reminder.task_id else None,
         task_title=task.title if task is not None else None,
-        organisation_id=str(task.organisation_id) if task is not None else None,
+        title=reminder.title,
+        organisation_id=str(org_id) if org_id else None,
         organisation_name=org_name,
     )
 
@@ -95,6 +110,25 @@ async def add_reminder(
     return _out(row, today=reminders_service.today_for(user))
 
 
+# --- standalone, no task behind it --------------------------------------------
+
+
+@router.post(
+    "/organisations/{org_id}/reminders",
+    response_model=ReminderOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_standalone_reminder(
+    body: StandaloneReminderIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """A reminder about nothing in particular — membership in the
+    organisation is enough, the same way seeing the roster is."""
+    row = await reminders_service.create_standalone(
+        db, ctx, user, remind_on=body.remind_on, title=body.title, note=body.note
+    )
+    return _out(row, today=reminders_service.today_for(user))
+
+
 # --- yours, across everything -------------------------------------------------
 
 
@@ -111,7 +145,12 @@ async def my_reminders(user: CurrentUser, db: DbSession):
     )
     today = reminders_service.today_for(user)
     return [
-        _out(r, today=today, task=t, org_name=org_names.get(t.organisation_id))
+        _out(
+            r,
+            today=today,
+            task=t,
+            org_name=org_names.get(t.organisation_id if t is not None else r.organisation_id),
+        )
         for r, t in rows
     ]
 

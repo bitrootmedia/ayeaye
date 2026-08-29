@@ -281,6 +281,20 @@ export type Tag = {
   task_count: number;
 };
 
+/** One item on a checklist. */
+export type ChecklistItem = {
+  id: string;
+  text: string;
+  done: boolean;
+};
+
+/** A quick todo list on a task — a task can carry more than one. */
+export type Checklist = {
+  id: string;
+  title: string;
+  items: ChecklistItem[];
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -377,13 +391,15 @@ export type CalendarTask = {
 };
 
 /** One reminder, on the calendar. Private — see services/reminders.py; two
- *  people looking at the same month see different reminder dots. */
+ *  people looking at the same month see different reminder dots. NULL
+ *  `task_id` means a standalone reminder — `title` is its own "what" then. */
 export type CalendarReminder = {
   id: string;
   remind_on: string;
   note: string | null;
-  task_id: string;
-  task_title: string;
+  task_id: string | null;
+  task_title: string | null;
+  title: string | null;
 };
 
 /** One out-of-office period, on the calendar. Team-wide, not private — see
@@ -414,8 +430,10 @@ export type Reminder = {
    *  arrived is not a question the browser can answer for a reminder set on
    *  a phone in another country. */
   overdue: boolean;
-  task_id: string;
+  /** NULL for a standalone reminder — `title` is its own "what" then. */
+  task_id: string | null;
   task_title: string | null;
+  title: string | null;
   organisation_id: string | null;
   organisation_name: string | null;
 };

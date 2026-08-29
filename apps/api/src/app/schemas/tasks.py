@@ -128,6 +128,35 @@ class TagUpdate(BaseModel):
     off_board: bool | None = None
 
 
+class ChecklistItemOut(BaseModel):
+    id: str
+    text: str
+    done: bool
+
+
+class ChecklistOut(BaseModel):
+    id: str
+    title: str
+    items: list[ChecklistItemOut]
+
+
+class ChecklistIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class ChecklistUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class ChecklistItemIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class ChecklistItemUpdate(BaseModel):
+    text: str | None = None
+    done: bool | None = None
+
+
 class NoteIn(BaseModel):
     # Empty deletes it — "clear the box" and "remove the note" are one gesture.
     body: str = ""

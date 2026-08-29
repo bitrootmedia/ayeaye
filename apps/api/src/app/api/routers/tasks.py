@@ -14,6 +14,12 @@ from app.schemas.structure import GrantLevelIn, GrantOut, PersonOut, TeamOut
 from app.schemas.tasks import (
     BoardColumn,
     BoardOut,
+    ChecklistIn,
+    ChecklistItemIn,
+    ChecklistItemOut,
+    ChecklistItemUpdate,
+    ChecklistOut,
+    ChecklistUpdate,
     NoteIn,
     NoteOut,
     SearchHitOut,
@@ -35,6 +41,7 @@ from app.schemas.tasks import (
 )
 from app.services import access as access_service
 from app.services import attachments as attachments_service
+from app.services import checklists as checklists_service
 from app.services import conversations as conversations_service
 from app.services import notes as notes_service
 from app.services import pins as pins_service
@@ -708,6 +715,141 @@ async def untag_task(
     tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
     await tags_service.unapply(db, tctx.task, tag_id)
     await tasks_service.announce(db, tctx.task, "untagged")
+
+
+def _checklist_out(checklist) -> ChecklistOut:
+    return ChecklistOut(
+        id=str(checklist.id),
+        title=checklist.title,
+        items=[
+            ChecklistItemOut(id=str(item.id), text=item.text, done=item.done_at is not None)
+            for item in checklist.items
+        ],
+    )
+
+
+@router.get("/tasks/{task_id}/checklists", response_model=list[ChecklistOut])
+async def list_checklists(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Every checklist on the task. `read` is enough — seeing what's on the
+    list doesn't change it."""
+    await tasks_service.context_for(db, ctx, task_id, user)
+    return [_checklist_out(c) for c in await checklists_service.for_task(db, task_id)]
+
+
+@router.post(
+    "/tasks/{task_id}/checklists",
+    response_model=ChecklistOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_checklist(
+    task_id: uuid.UUID, body: ChecklistIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """`write` on the task, like any other edit to it — a checklist is shared
+    content, not a personal record."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    checklist = await checklists_service.add_checklist(db, tctx.task, title=body.title)
+    await tasks_service.announce(db, tctx.task, "checklist_added")
+    # Built directly rather than through `_checklist_out`: a freshly created
+    # checklist has no items yet, and `checklist.items` is unloaded here —
+    # touching it would lazy-load outside an awaited call. See
+    # `checklists_service.get_checklist_or_404`'s docstring for the trap.
+    return ChecklistOut(id=str(checklist.id), title=checklist.title, items=[])
+
+
+@router.patch("/tasks/{task_id}/checklists/{checklist_id}", response_model=ChecklistOut)
+async def rename_checklist(
+    task_id: uuid.UUID,
+    checklist_id: uuid.UUID,
+    body: ChecklistUpdate,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    checklist = await checklists_service.get_checklist_or_404(db, task_id, checklist_id)
+    checklist = await checklists_service.rename_checklist(db, checklist, title=body.title)
+    await tasks_service.announce(db, tctx.task, "checklist_renamed")
+    return _checklist_out(checklist)
+
+
+@router.delete(
+    "/tasks/{task_id}/checklists/{checklist_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_checklist(
+    task_id: uuid.UUID, checklist_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    checklist = await checklists_service.get_checklist_or_404(db, task_id, checklist_id)
+    await checklists_service.remove_checklist(db, checklist)
+    await tasks_service.announce(db, tctx.task, "checklist_removed")
+
+
+@router.post(
+    "/tasks/{task_id}/checklists/{checklist_id}/items",
+    response_model=ChecklistItemOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_checklist_item(
+    task_id: uuid.UUID,
+    checklist_id: uuid.UUID,
+    body: ChecklistItemIn,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    checklist = await checklists_service.get_checklist_or_404(db, task_id, checklist_id)
+    item = await checklists_service.add_item(db, checklist, text=body.text)
+    await tasks_service.announce(db, tctx.task, "checklist_item_added")
+    return ChecklistItemOut(id=str(item.id), text=item.text, done=False)
+
+
+@router.patch(
+    "/tasks/{task_id}/checklists/{checklist_id}/items/{item_id}", response_model=ChecklistItemOut
+)
+async def update_checklist_item(
+    task_id: uuid.UUID,
+    checklist_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: ChecklistItemUpdate,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """Check it off, or re-word it. `write`, same as everything else here —
+    ticking a box is a change to shared content, not a personal record the
+    way logging your own time against a `read`-only task is."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    item = await checklists_service.get_item_or_404(db, checklist_id, item_id)
+    item = await checklists_service.update_item(
+        db, item, fields=body.model_dump(exclude_unset=True)
+    )
+    await tasks_service.announce(db, tctx.task, "checklist_item_toggled")
+    return ChecklistItemOut(id=str(item.id), text=item.text, done=item.done_at is not None)
+
+
+@router.delete(
+    "/tasks/{task_id}/checklists/{checklist_id}/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_checklist_item(
+    task_id: uuid.UUID,
+    checklist_id: uuid.UUID,
+    item_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    item = await checklists_service.get_item_or_404(db, checklist_id, item_id)
+    await checklists_service.remove_item(db, item)
+    await tasks_service.announce(db, tctx.task, "checklist_item_removed")
 
 
 @router.post("/tasks/{task_id}/hidden", response_model=TaskOut)

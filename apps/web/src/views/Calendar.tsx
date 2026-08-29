@@ -260,14 +260,28 @@ function AbsenceChip({ absence }: { absence: CalendarAbsence }) {
 }
 
 function ReminderChip({ orgId, reminder }: { orgId: string; reminder: CalendarReminder }) {
-  return (
-    <Link
-      to={`/orgs/${orgId}/tasks/${reminder.task_id}`}
-      title={reminder.note || reminder.task_title}
-      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-accent"
-    >
+  // `task_title` for a task-anchored reminder, `title` for a standalone one
+  // — exactly one of the two is set, mirroring ck_reminders_one_anchor.
+  const label = reminder.task_title ?? reminder.title ?? "Reminder";
+  const content = (
+    <>
       <BellIcon className="size-3 shrink-0" />
-      <span className="truncate">{reminder.note || reminder.task_title}</span>
+      <span className="truncate">{reminder.note || label}</span>
+    </>
+  );
+  const className =
+    "flex items-center gap-1 truncate rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-accent";
+  // A standalone reminder has no task screen to link to.
+  if (reminder.task_id === null) {
+    return (
+      <div title={reminder.note || label} className={className}>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <Link to={`/orgs/${orgId}/tasks/${reminder.task_id}`} title={reminder.note || label} className={className}>
+      {content}
     </Link>
   );
 }

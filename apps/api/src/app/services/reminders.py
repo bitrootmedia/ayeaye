@@ -30,11 +30,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Reminder, Task, User
-from app.models.reminder import MAX_NOTE_LENGTH
+from app.models.reminder import MAX_NOTE_LENGTH, MAX_TITLE_LENGTH
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -74,7 +74,9 @@ def is_overdue(remind_on: date, *, today: date) -> bool:
 
 
 def mine_stmt(*, user_id: uuid.UUID, ctx: OrgContext | None = None) -> Select:
-    """The caller's reminders, on tasks they can still see.
+    """The caller's reminders — task-anchored ones on tasks they can still
+    see, plus standalone ones. `Task` comes back `None` for a standalone row;
+    every caller has to handle that rather than assuming a task exists.
 
     Organisation-scoped when a context is given, and across everything when
     it isn't: the badge in the rail is a personal, cross-organisation count,
@@ -83,18 +85,24 @@ def mine_stmt(*, user_id: uuid.UUID, ctx: OrgContext | None = None) -> Select:
     """
     stmt = (
         select(Reminder, Task)
-        .join(Task, Task.id == Reminder.task_id)
+        .outerjoin(Task, Task.id == Reminder.task_id)
         .where(Reminder.user_id == user_id, Reminder.done_at.is_(None))
         .order_by(Reminder.remind_on, Reminder.id)
     )
     if ctx is not None:
         stmt = stmt.where(
-            Task.organisation_id == ctx.organisation.id,
-            Task.id.in_(
-                access.visible_task_ids_stmt(
-                    user_id=user_id, org_id=ctx.organisation.id, org_role=ctx.role
-                )
-            ),
+            or_(
+                and_(
+                    Reminder.task_id.isnot(None),
+                    Task.organisation_id == ctx.organisation.id,
+                    Task.id.in_(
+                        access.visible_task_ids_stmt(
+                            user_id=user_id, org_id=ctx.organisation.id, org_role=ctx.role
+                        )
+                    ),
+                ),
+                Reminder.organisation_id == ctx.organisation.id,
+            )
         )
     return stmt
 
@@ -146,8 +154,8 @@ async def due_count(db: AsyncSession, user: User) -> int:
 # --- writes ----------------------------------------------------------------------
 
 
-async def create(
-    db: AsyncSession, task: Task, user: User, *, remind_on: date, note: str | None
+def _new_reminder(
+    *, user: User, remind_on: date, note: str | None, task_id=None, organisation_id=None, title=None
 ) -> Reminder:
     if remind_on is None:
         raise HTTPException(
@@ -155,19 +163,58 @@ async def create(
             detail="a reminder needs a date",
         )
     row = Reminder(
-        task_id=task.id,
+        task_id=task_id,
+        organisation_id=organisation_id,
         user_id=user.id,
         remind_on=remind_on,
+        title=title,
         note=(note or "").strip()[:MAX_NOTE_LENGTH] or None,
     )
     # A reminder set for today or the past is legitimate — "remind me about
     # this, I've already let it slip" — and it shows as due immediately. What
     # it must NOT do is send a "coming up tomorrow" nudge for a day that has
     # already gone, so both stamps are pre-set for windows already passed.
-    now = func.now()
-    today = today_for(user)
-    if remind_on <= today:
-        row.notified_ahead_at = now
+    if remind_on <= today_for(user):
+        row.notified_ahead_at = func.now()
+    return row
+
+
+async def create(
+    db: AsyncSession, task: Task, user: User, *, remind_on: date, note: str | None
+) -> Reminder:
+    row = _new_reminder(user=user, remind_on=remind_on, note=note, task_id=task.id)
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def create_standalone(
+    db: AsyncSession,
+    ctx: OrgContext,
+    user: User,
+    *,
+    remind_on: date,
+    title: str,
+    note: str | None,
+) -> Reminder:
+    """A reminder about nothing in particular — no task behind it, just a
+    date and what it's about. Still organisation-scoped (`ck_reminders_org_iff_standalone`),
+    because the calendar reads reminders one organisation at a time and needs
+    somewhere to filter from."""
+    title = (title or "").strip()[:MAX_TITLE_LENGTH]
+    if not title:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="a standalone reminder needs something to call it",
+        )
+    row = _new_reminder(
+        user=user,
+        remind_on=remind_on,
+        note=note,
+        organisation_id=ctx.organisation.id,
+        title=title,
+    )
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -202,6 +249,17 @@ async def update_one(
             reminder.notified_ahead_at = func.now()
     if "note" in fields:
         reminder.note = (fields["note"] or "").strip()[:MAX_NOTE_LENGTH] or None
+    # Only meaningful for a standalone reminder — a task-anchored one has no
+    # `title` column value to change (see `ck_reminders_one_anchor`), and the
+    # router never sends this field for one.
+    if "title" in fields and reminder.task_id is None:
+        title = (fields["title"] or "").strip()[:MAX_TITLE_LENGTH]
+        if not title:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="a standalone reminder needs something to call it",
+            )
+        reminder.title = title
     if "done" in fields:
         reminder.done_at = func.now() if fields["done"] else None
     await db.commit()
@@ -282,7 +340,7 @@ async def claim(db: AsyncSession, *, tz_name: str, ahead: bool) -> list[uuid.UUI
     return list(rows)
 
 
-def visible_and_due(reminders: list[tuple[Reminder, Task]], *, today: date):
+def visible_and_due(reminders: list[tuple[Reminder, Task | None]], *, today: date):
     """Split a list into due-or-overdue and upcoming. Pure, so the boundary
     ("today counts as due") is testable without a database."""
     due = [(r, t) for r, t in reminders if is_overdue(r.remind_on, today=today)]
@@ -294,6 +352,7 @@ __all__ = [
     "AHEAD_DAYS",
     "claim",
     "create",
+    "create_standalone",
     "due_count",
     "for_task",
     "get_or_404",

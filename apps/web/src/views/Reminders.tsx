@@ -1,12 +1,23 @@
-import { BellRingIcon, CheckIcon, Trash2Icon } from "lucide-react";
+import { BellRingIcon, CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 
-import { api } from "@/api";
+import { ApiError, api } from "@/api";
+import type { Shell } from "@/App";
+import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Empty,
   EmptyDescription,
@@ -14,7 +25,11 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { useToastManager } from "@/components/ui/toast";
+import { lastOrg } from "@/lib/current-org";
 import type { Reminder } from "@/lib/types";
 
 /**
@@ -26,7 +41,9 @@ import type { Reminder } from "@/lib/types";
  * "what's coming" are two different questions and only one of them is urgent.
  */
 export default function Reminders() {
+  const { organisations } = useOutletContext<Shell>();
   const [rows, setRows] = useState<Reminder[] | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const load = useCallback(async () => {
     setRows(await api<Reminder[]>("/reminders").catch(() => []));
@@ -52,6 +69,14 @@ export default function Reminders() {
       <PageHeader
         title="Reminders"
         description="Yours alone — nobody else can see these, and nobody else is told."
+        actions={
+          organisations.length > 0 && (
+            <Button onClick={() => setAdding(true)}>
+              <PlusIcon />
+              New reminder
+            </Button>
+          )
+        }
       />
 
       {rows.length === 0 ? (
@@ -62,7 +87,8 @@ export default function Reminders() {
             </EmptyMedia>
             <EmptyTitle>Nothing to remember</EmptyTitle>
             <EmptyDescription>
-              Set one on any task and you&rsquo;ll be told the day before and on the day.
+              Set one on any task, or on nothing in particular, and you&rsquo;ll be told the day
+              before and on the day.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -101,6 +127,13 @@ export default function Reminders() {
           )}
         </div>
       )}
+
+      <NewReminderDialog
+        open={adding}
+        onOpenChange={setAdding}
+        organisations={organisations}
+        onCreated={load}
+      />
     </>
   );
 }
@@ -115,6 +148,10 @@ function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Pro
     await onChanged();
   };
 
+  // Exactly one of the two is ever set — a task-anchored reminder has no
+  // `title` column value, a standalone one has no task (ck_reminders_one_anchor).
+  const label = reminder.task_title ?? reminder.title ?? "Reminder";
+
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
       <span className="font-mono text-xs text-muted-foreground">{reminder.remind_on}</span>
@@ -124,10 +161,10 @@ function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Pro
             to={`/orgs/${reminder.organisation_id}/tasks/${reminder.task_id}`}
             className="block truncate text-sm font-medium hover:underline"
           >
-            {reminder.task_title ?? "A task"}
+            {label}
           </Link>
         ) : (
-          <span className="block truncate text-sm font-medium">{reminder.task_title}</span>
+          <span className="block truncate text-sm font-medium">{label}</span>
         )}
         {reminder.note && (
           <span className="block truncate text-xs text-muted-foreground">{reminder.note}</span>
@@ -140,18 +177,132 @@ function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Pro
       )}
       {/* Dismissing is the point: a reminder you can see but not silence is an
           alarm with no off switch, and the badge would stay red forever. */}
-      <Button size="sm" variant="outline" aria-label={`Done with ${reminder.task_title}`} onClick={done}>
+      <Button size="sm" variant="outline" aria-label={`Done with ${label}`} onClick={done}>
         <CheckIcon />
         Done
       </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        aria-label={`Delete reminder for ${reminder.task_title}`}
-        onClick={remove}
-      >
+      <Button size="sm" variant="ghost" aria-label={`Delete reminder for ${label}`} onClick={remove}>
         <Trash2Icon />
       </Button>
     </div>
+  );
+}
+
+function NewReminderDialog({
+  open,
+  onOpenChange,
+  organisations,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organisations: Shell["organisations"];
+  onCreated: () => Promise<void>;
+}) {
+  const toast = useToastManager();
+  const [title, setTitle] = useState("");
+  const [when, setWhen] = useState("");
+  const [note, setNote] = useState("");
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const last = lastOrg();
+    setOrgId(
+      (last && organisations.some((o) => o.id === last) ? last : organisations[0]?.id) ?? null,
+    );
+  }, [open, organisations]);
+
+  const orgItems: PickerItem[] = organisations.map((o) => ({ value: o.id, label: o.name }));
+
+  const reset = () => {
+    setTitle("");
+    setWhen("");
+    setNote("");
+  };
+
+  const submit = async () => {
+    if (!title.trim() || !when || !orgId || busy) return;
+    setBusy(true);
+    try {
+      await api(`/organisations/${orgId}/reminders`, {
+        method: "POST",
+        body: JSON.stringify({ remind_on: when, title: title.trim(), note: note.trim() || null }),
+      });
+      reset();
+      onOpenChange(false);
+      await onCreated();
+      toast.add({ title: "Reminder set" });
+    } catch (err) {
+      const detail =
+        err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+      toast.add({ title: "Couldn't set that reminder", description: detail });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) reset();
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New reminder</DialogTitle>
+          <DialogDescription>
+            About nothing in particular — no task needed. Only you see this.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="reminder-title">What about</Label>
+            <Input
+              id="reminder-title"
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="reminder-when">Remind me on</Label>
+              <Input
+                id="reminder-when"
+                type="date"
+                value={when}
+                onChange={(e) => setWhen(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reminder-org">Organisation</Label>
+              <EntityPicker
+                id="reminder-org"
+                ariaLabel="Organisation"
+                items={orgItems}
+                value={orgId}
+                searchPlaceholder="Find an organisation…"
+                onChange={setOrgId}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="reminder-note">Note</Label>
+            <Input id="reminder-note" value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <Button onClick={submit} disabled={busy || !title.trim() || !when || !orgId}>
+            Set reminder
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

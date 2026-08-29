@@ -12,7 +12,11 @@ inconsistent:
 * **Reminders stay private** — `reminders_service.mine_stmt` is the same
   statement every other reminder surface uses, and there is no version of it
   that shows anyone else's. Two people looking at the same calendar in the
-  same organisation see the same task dots and different reminder dots.
+  same organisation see the same task dots and different reminder dots. A
+  standalone reminder (no task behind it — `models/reminder.py`) is still a
+  reminder as far as this endpoint is concerned: `mine_stmt` outer-joins
+  `Task` rather than requiring one, and `CalendarReminderOut.task_id` comes
+  back `None` for it.
 * **Out-of-office is team-wide too, on purpose** — it is the one thing in
   this file that is *not* private by product decision (CLAUDE.md: "its whole
   value is a colleague checking before they ask you for something"), so it
@@ -57,8 +61,11 @@ class CalendarReminderOut(BaseModel):
     id: str
     remind_on: date
     note: str | None
-    task_id: str
-    task_title: str
+    # NULL for a standalone reminder — `title` is its own "what" then, the
+    # same split as the /reminders endpoint's own ReminderOut.
+    task_id: str | None
+    task_title: str | None
+    title: str | None
 
 
 class CalendarAbsenceOut(BaseModel):
@@ -145,8 +152,9 @@ async def calendar(
                 id=str(reminder.id),
                 remind_on=reminder.remind_on,
                 note=reminder.note,
-                task_id=str(reminder_task.id),
-                task_title=reminder_task.title,
+                title=reminder.title,
+                task_id=str(reminder_task.id) if reminder_task is not None else None,
+                task_title=reminder_task.title if reminder_task is not None else None,
             )
             for reminder, reminder_task in reminder_rows
         ],

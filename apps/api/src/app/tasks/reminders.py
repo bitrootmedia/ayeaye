@@ -62,7 +62,7 @@ async def _notify(db, reminder_id, *, ahead: bool) -> int:
     """
     row = (
         await db.execute(
-            select(Reminder, Task).join(Task, Task.id == Reminder.task_id).where(
+            select(Reminder, Task).outerjoin(Task, Task.id == Reminder.task_id).where(
                 Reminder.id == reminder_id
             )
         )
@@ -72,17 +72,24 @@ async def _notify(db, reminder_id, *, ahead: bool) -> int:
     reminder, task = row
 
     when: date = reminder.remind_on
+    # `task` is None for a standalone reminder — `reminder.title` is its own
+    # "what" in that case (see `ck_reminders_one_anchor`).
+    subject = task.title if task is not None else reminder.title
     if ahead:
-        title = f"Tomorrow: “{task.title}”"
+        title = f"Tomorrow: “{subject}”"
     else:
-        title = f"Today: “{task.title}”"
+        title = f"Today: “{subject}”"
     await notifications_service.notify(
         db,
         user_id=reminder.user_id,
         kind=KIND_REMINDER_SOON if ahead else KIND_REMINDER_DUE,
         title=title,
         body=reminder.note,
-        link_path=f"/orgs/{task.organisation_id}/tasks/{task.id}",
+        # A standalone reminder has no task screen to land on — the personal
+        # list is the only place it lives.
+        link_path=(
+            f"/orgs/{task.organisation_id}/tasks/{task.id}" if task is not None else "/reminders"
+        ),
     )
     logger.debug("reminder %s for %s fired (ahead=%s)", reminder_id, when, ahead)
     return 1
