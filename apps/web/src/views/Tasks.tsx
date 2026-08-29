@@ -8,15 +8,15 @@ import {
   ListIcon,
   PlusIcon,
   SignalIcon,
-  TriangleAlertIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
-import { ApiError, api, apiWithHeaders } from "@/api";
+import { api, apiWithHeaders } from "@/api";
 import type { Shell } from "@/App";
 import { useRealtime } from "@/hooks/use-realtime";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
+import { NewTaskDialog } from "@/components/new-task-dialog";
 import { PageHeader } from "@/components/page-header";
 import { PriorityGlyph } from "@/components/priority";
 import { ClosedBadge, StatusBadge } from "@/components/status-badge";
@@ -32,15 +32,6 @@ import { TagChip } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Empty,
   EmptyContent,
   EmptyDescription,
@@ -48,11 +39,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
-import { useToastManager } from "@/components/ui/toast";
 import { ago, timestamp } from "@/lib/format";
 import {
   PRIORITY_LABEL,
@@ -63,7 +50,6 @@ import {
   type BoardData,
   type Member,
   type Project,
-  type SearchHit,
   type Tag,
   type Task,
   type TaskPriority,
@@ -652,230 +638,3 @@ function TaskMeta({ task }: { task: Task }) {
   );
 }
 
-function NewTaskDialog({
-  open,
-  onOpenChange,
-  orgId,
-  projects,
-  defaultProject,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  orgId: string;
-  projects: Project[];
-  defaultProject: string;
-  onCreated: () => Promise<void>;
-}) {
-  const toast = useToastManager();
-  const navigate = useNavigate();
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<TaskStatus>("todo");
-  const [priority, setPriority] = useState<TaskPriority>("normal");
-  const [projectId, setProjectId] = useState<string | null>(defaultProject || null);
-  const [busy, setBusy] = useState(false);
-  // Duplicate check: null means "not checked for the current title yet".
-  // Set once a check finds something, and cleared the moment the title
-  // changes again — a stale warning against a title nobody's typing anymore
-  // is worse than no warning at all.
-  const [similar, setSimilar] = useState<SearchHit[] | null>(null);
-  const [checking, setChecking] = useState(false);
-
-  useEffect(() => {
-    if (open) setProjectId(defaultProject || null);
-  }, [open, defaultProject]);
-
-  // Only projects you can edit — filing work into someone's project changes
-  // what they see, so a viewer shouldn't be able to. The API enforces it; this
-  // just avoids offering an option that would 403.
-  const projectItems: PickerItem[] = projects
-    .filter((p) => p.access !== "read" && !p.archived)
-    .map((p) => ({ value: p.id, label: p.name, hint: p.project_group_name ?? undefined }));
-  const statusItems: PickerItem[] = TASK_STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }));
-  const priorityItems: PickerItem[] = TASK_PRIORITIES.map((p) => ({
-    value: p,
-    label: PRIORITY_LABEL[p],
-    icon: <PriorityGlyph priority={p} />,
-  }));
-
-  const submit = async () => {
-    if (!title.trim() || busy || checking) return;
-    // First press with something to check: run it, show what's similar, and
-    // stop there rather than creating — the same "type it again to mean it"
-    // shape as a delete confirmation, minus the retyping. `similar` already
-    // being populated means this press IS the confirmation.
-    if (similar === null) {
-      setChecking(true);
-      try {
-        const found = await api<{ hits: SearchHit[] }>(
-          `/organisations/${orgId}/tasks/similar?q=${encodeURIComponent(title.trim())}`,
-        );
-        if (found.hits.length > 0) {
-          setSimilar(found.hits);
-          return;
-        }
-        setSimilar([]);
-      } catch {
-        // A failed check must not block creating the task — the check is a
-        // courtesy, not a gate the feature depends on.
-        setSimilar([]);
-      } finally {
-        setChecking(false);
-      }
-    }
-
-    setBusy(true);
-    try {
-      const created = await api<Task>(`/organisations/${orgId}/tasks`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: title.trim(),
-          description: description.trim() || null,
-          status,
-          priority,
-          project_id: projectId,
-        }),
-      });
-      setTitle("");
-      setDescription("");
-      setStatus("todo");
-      setPriority("normal");
-      setSimilar(null);
-      onOpenChange(false);
-      await onCreated();
-      // The dialog deliberately doesn't jump to the task it just made — you're
-      // usually adding several in a row — so this is the only way back to it
-      // without hunting through the list. Ten seconds, not the default five:
-      // it's the one toast in the product somebody might read *after* typing
-      // the next task's title rather than the instant it appears.
-      toast.add({
-        title: `Task "${created.title}" was created`,
-        timeout: 10_000,
-        actionProps: {
-          children: "Open",
-          onClick: () => navigate(`/orgs/${orgId}/tasks/${created.id}`),
-        },
-      });
-    } catch (err) {
-      const detail =
-        err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
-      toast.add({ title: "Couldn't create that", description: detail });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New task</DialogTitle>
-          <DialogDescription>
-            You&rsquo;ll own it, which means you&rsquo;re the one who can close it.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="task-title">Title</Label>
-            <Input
-              id="task-title"
-              autoFocus
-              value={title}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                // A new title hasn't been checked yet — stale duplicates
-                // against the old one would be actively misleading.
-                setSimilar(null);
-              }}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-            />
-          </div>
-          {similar !== null && similar.length > 0 && (
-            <div
-              role="region"
-              aria-label="Possible duplicates"
-              className="space-y-2 rounded-lg border border-status-review/40 bg-status-review/5 p-3"
-            >
-              <p className="flex items-center gap-1.5 text-sm font-medium">
-                <TriangleAlertIcon className="size-4 text-status-review" />
-                Similar tasks already exist
-              </p>
-              <ul className="space-y-1">
-                {similar.slice(0, 5).map((hit) => (
-                  <li key={hit.id} className="truncate text-sm text-muted-foreground">
-                    {hit.title}
-                    {hit.inactive && " (closed)"}
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs text-muted-foreground">
-                Press Create again to add this one anyway.
-              </p>
-            </div>
-          )}
-          <div className="space-y-2">
-            <Label htmlFor="task-description">Description</Label>
-            <Textarea
-              id="task-description"
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="task-status">Status</Label>
-              <EntityPicker
-                id="task-status"
-                ariaLabel="Status"
-                items={statusItems}
-                value={status}
-                searchPlaceholder="Filter…"
-                onChange={(v) => v && setStatus(v as TaskStatus)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="task-priority">Priority</Label>
-              <EntityPicker
-                id="task-priority"
-                ariaLabel="Priority"
-                items={priorityItems}
-                value={priority}
-                searchPlaceholder="Filter…"
-                onChange={(v) => v && setPriority(v as TaskPriority)}
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="task-project">Project</Label>
-            <EntityPicker
-              id="task-project"
-              ariaLabel="Project"
-              items={projectItems}
-              value={projectId}
-              placeholder="No project"
-              emptyLabel="No project"
-              searchPlaceholder="Find a project…"
-              onChange={setProjectId}
-            />
-          </div>
-          {!projectId && (
-            /* The loose-task rule, said where the decision is being made
-               rather than in a help page nobody opens. */
-            <p className="text-xs text-muted-foreground">
-              A task with no project is visible only to you, anyone you share it with, and the
-              organisation&rsquo;s admins — not to everyone in the organisation.
-            </p>
-          )}
-        </div>
-        <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-          <Button onClick={submit} disabled={busy || checking || !title.trim()}>
-            {similar && similar.length > 0 ? "Create anyway" : "Create"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}

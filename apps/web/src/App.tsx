@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { signOut } from "supertokens-auth-react/recipe/session";
 
-import { BellIcon } from "lucide-react";
+import { BellIcon, PlusIcon } from "lucide-react";
 
 import { api } from "@/api";
 import { AppSidebar } from "@/components/app-sidebar";
+import { NewTaskDialog } from "@/components/new-task-dialog";
 import { TimerBar } from "@/components/timer-bar";
 import {
   SearchPalette,
@@ -131,6 +132,7 @@ function Shell() {
   const [gate, setGate] = useState<Gate>("loading");
   const [creating, setCreating] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [creatingTask, setCreatingTask] = useState(false);
 
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -301,6 +303,20 @@ function Shell() {
           </span>
           <div className="ml-auto flex items-center gap-2">
             <TimerBar timer={timer} onChanged={refreshTimer} />
+            {/* Next to search, deliberately: the same "reachable from any
+                screen without leaving it" reasoning applies to starting a
+                task as to finding one. `railOrg` (not the URL's org) is what
+                search already follows for the same reason — the nav claims
+                an organisation even on pages that aren't inside one.
+                Suppressed on the Tasks screen itself, which already has this
+                exact button in its own page actions — two of them on one
+                screen would be redundant, not extra convenient. */}
+            {railOrg && pathname !== `/orgs/${railOrg.id}/tasks` && (
+              <Button variant="outline" size="sm" onClick={() => setCreatingTask(true)}>
+                <PlusIcon />
+                <span className="hidden md:inline">New task</span>
+              </Button>
+            )}
             {railOrg && <SearchTrigger onClick={openSearch} />}
           </div>
           <Link
@@ -326,6 +342,15 @@ function Shell() {
           open={searching}
           onOpenChange={setSearching}
         />
+      )}
+
+      {railOrg && (
+        // No `onCreated` — a screen showing tasks (the board, a list) already
+        // refetches on the realtime `task` event this create publishes, the
+        // identical path a second tab or a colleague's own change takes. A
+        // second, bespoke refresh wired through the shell would just be a
+        // slower duplicate of that.
+        <NewTaskDialog open={creatingTask} onOpenChange={setCreatingTask} orgId={railOrg.id} />
       )}
 
       <CreateOrgDialog
