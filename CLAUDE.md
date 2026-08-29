@@ -1891,6 +1891,29 @@ Read these before starting Phase 6.
 
 ## Gotchas in what exists now
 
+- **The task screen linked its own project unconditionally, in two places,
+  and both were wrong for the same reason.** The breadcrumb's project crumb
+  and the access card's "Anyone who can see {project}" sentence both used
+  to render as links regardless of whether the caller could actually open
+  the project. Task access has six routes in — three more than a project's
+  — so a task-level grant (or being action-required, or having created it)
+  can make a task visible to someone with **zero** access to the project it
+  happens to be filed in; `access.inherits_from_project` is purely
+  structural ("does this task have a project", `task.project_id is not
+  None` server-side) and says nothing about *this caller's* access to it.
+  The fix in both places is the same: check membership in the `projects`
+  list `TaskDetail.tsx` already fetches for the move-task picker — that
+  list is scoped to exactly what the caller can see
+  (`access.visible_projects_stmt`), so `projects.some(p => p.id ===
+  task.project_id)` is the real answer, not a guess from a structural
+  field. Found by testing a task-level-only grant specifically, the same
+  case `effective_task_level`'s own docs call out as surprising.
+  **Traced through a test-authoring trap on the way**: shadcn's
+  `BreadcrumbPage` (the non-clickable "current page" marker) sets
+  `role="link" aria-disabled="true"` for accessibility, so
+  `getByRole("link", { name })` matches it exactly like a real `<a>` —
+  proving "this is not a link" needs `locator('a:has-text(...)')`, not a
+  role query, or the assertion passes for the wrong reason.
 - **The notification inbox's body span had no `whitespace-pre-wrap`, and it
   took the daily digest to notice.** Every notification before it was
   effectively one line, so the missing wrap was invisible; a digest body with

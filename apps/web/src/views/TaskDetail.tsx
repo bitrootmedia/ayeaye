@@ -236,9 +236,23 @@ export default function TaskDetail() {
         crumbs={[
           { label: org.name, to: `/orgs/${org.id}` },
           { label: "Tasks", to: `/orgs/${org.id}/tasks` },
-          // Access flows up read-only: you get the project's name for the
-          // trail, not its other tasks and not a place in your project list.
-          ...(task.project_name ? [{ label: task.project_name }] : []),
+          // Linked only when the caller can actually open it. A task-level
+          // grant can reach further than the project's own — the same gap
+          // effective_task_level documents — so seeing the project's name
+          // here doesn't mean seeing the project page. `projects` is already
+          // scoped to what this caller can see (the same fetch behind the
+          // move-task picker), so membership in it is the real answer rather
+          // than a guess from a structural field like `inherits_from_project`.
+          ...(task.project_name
+            ? [
+                {
+                  label: task.project_name,
+                  to: projects.some((p) => p.id === task.project_id)
+                    ? `/orgs/${org.id}/projects/${task.project_id}`
+                    : undefined,
+                },
+              ]
+            : []),
           { label: task.title },
         ]}
         title={task.title}
@@ -540,6 +554,7 @@ export default function TaskDetail() {
             task={task}
             orgId={org.id}
             access={accessInfo}
+            canOpenProject={projects.some((p) => p.id === task.project_id)}
             onToggleHidden={
               task.can_hide
                 ? () =>
@@ -838,11 +853,19 @@ function TaskAccessCard({
   task,
   orgId,
   access,
+  canOpenProject,
   onToggleHidden,
 }: {
   task: Task;
   orgId: string;
   access: TaskAccess;
+  /** Whether *this caller* can actually open the project, not just whether
+   *  the task has one. `access.inherits_from_project` is structural (does
+   *  the task belong to a project at all) — a task-level grant can reach
+   *  further than the project's own, so a task can be visible to someone
+   *  with zero access to the project it's filed in. Linking unconditionally
+   *  would be a link that predictably 404s for exactly that person. */
+  canOpenProject: boolean;
   /** Absent for anyone who isn't the owner — including org admins. */
   onToggleHidden?: () => void;
 }) {
@@ -864,12 +887,16 @@ function TaskAccessCard({
         ) : access.inherits_from_project ? (
           <p className="text-muted-foreground">
             Anyone who can see{" "}
-            <Link
-              to={`/orgs/${orgId}/projects/${task.project_id}`}
-              className="font-medium text-foreground underline underline-offset-2"
-            >
-              {access.project_name}
-            </Link>{" "}
+            {canOpenProject ? (
+              <Link
+                to={`/orgs/${orgId}/projects/${task.project_id}`}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                {access.project_name}
+              </Link>
+            ) : (
+              <span className="font-medium text-foreground">{access.project_name}</span>
+            )}{" "}
             can see this task, at the same level.
           </p>
         ) : (
