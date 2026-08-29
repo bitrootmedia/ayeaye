@@ -405,9 +405,9 @@ already owns the only red and the only amber, and a second colour scale per
 card would stop red meaning "this needs you". Every glyph carries a `title`
 and an `aria-label`, so the level is never conveyed by colour alone.
 
-## Tags, notes and reminders
+## Tags, notes, reminders and pins
 
-Three small subsystems on the task, and each has exactly one rule worth
+Four small subsystems on the task, and each has exactly one rule worth
 remembering.
 
 **Tags: `lower(name)` is unique per organisation.** Without that you get `kb`,
@@ -446,6 +446,18 @@ Two more that will bite:
 - **Moving a reminder clears both stamps.** Otherwise snoozing until next week
   silences it permanently.
 
+**Pins: personal, like the note, not shared, like the tag.** `task_pins` is
+the same one-row-per-person-per-task shape as `task_notes` and
+`planner_entries`, and for the same reason — pinning is what *you* want on
+*your* dashboard, and there is no admin override, the same absence-of-a-branch
+discipline as `services/notes.py`. `read` is enough to pin, the same reasoning
+that lets read-only access log your own time: it's a record of what you find
+worth watching, not a change to the work. A pin outlives whatever access
+justified it — nothing deletes the row when a grant is revoked — so the read
+that builds the dashboard's Pinned card re-applies `visible_task_ids_stmt`
+rather than trusting the join, the identical reasoning `services/planner.py`
+already documents for its own bucket read.
+
 ## The scheduler
 
 A tenth container, `taskiq scheduler app.tasks:scheduler`, running one hourly
@@ -463,10 +475,17 @@ jobs, not about the scheduler, and it is why the reminder claim exists.
 
 ## The dashboard, and what belongs to a person
 
-`/orgs/{id}` is the organisation's home and shows two things: what everyone has
-been told, and who isn't here. The people roster moved to `/orgs/{id}/people` —
-a roster is a reference screen you visit on purpose, and it was only the landing
-page by accident of being built first.
+`/orgs/{id}` is the organisation's home. The people roster moved to
+`/orgs/{id}/people` — a roster is a reference screen you visit on purpose, and
+it was only the landing page by accident of being built first.
+
+Announcements and Away lead the page, in that order, ahead of any one
+person's own escalations — the org's front page, not your personal one.
+Everything below them answers a different question, and `api/routers/
+dashboard.py`'s `dashboard()` builds all of it in the one request the page
+needs, for the reason `services/conversations.py` gives for batching a
+thread: three round-trips to render one landing screen is three chances to
+show it half-built.
 
 **Announcements are per organisation because there is no global administrator.**
 No staff tier, no backoffice, nobody who *could* write to every installation.
@@ -481,6 +500,36 @@ dashboard looks two weeks ahead.
 **A status line and an announcement are different things**, which is why both
 exist: the first is one person's answer to "what are you on with", the second
 has an author and an audience.
+
+**Critical, Urgent, Due soon and Pinned are the same question at four
+filters, and `access.my_priority_tasks_stmt`/`my_due_soon_tasks_stmt` say so
+by staying siblings.** Each is "open, and mine" — either I own it or I'm
+asked to act — ORed rather than the list view's usual AND filters, because
+"work that's mine, either way" is one question, not two lists stitched
+together client-side. `pins.my_pinned_tasks_stmt` is the odd one out only in
+its source (a join to the caller's own pin rows, not a column filter); the
+shape it returns and the card it renders in are identical. **Not "critical in
+the organisation"**: an admin already sees everything, and mailing them every
+critical task in the company is the exact notification-fatigue mistake the
+comment socket avoids for the same reason. Every row on every one of these
+cards distinguishes **"your action" from "waiting on someone else"** —
+`is_action_required` vs `waiting_on`, resolved server-side so the UI never
+has to reverse-engineer which one a task is from raw ids — and every row
+also carries `is_overdue`/`is_due_today`, computed once against the same
+per-viewer `today` the whole endpoint resolves, so a date's colour (the
+product's one red, the product's one amber, same as status) can't disagree
+with itself between cards. An empty card renders nothing: a card for a
+filter that currently matches nothing is clutter, not reassurance.
+
+**Recent activity is the one card that is not "mine."** Ten most-recently-
+updated tasks, organisation-wide, sorted by `updated_at` — which a comment
+bumps exactly like a status change does (`services/conversations.py`'s
+`_announce()`), so a comment posted a minute ago is why a task is at the top
+of this list even though nothing about its status moved. It answers "what is
+everybody up to", which is a different question from every card above it,
+and reuses `access.visible_tasks_stmt` rather than a bespoke query for
+exactly that reason — it's the ordinary list, `.limit(10)`, nothing narrowed
+to the caller's own stake.
 
 **Changing your password verifies the current one** (`verify_credentials`, not
 `sign_in` — checking a password shouldn't mint a session). A session left open
@@ -1046,6 +1095,21 @@ a change to the work, and the commonest reason to share something read-only is
 to get somebody's input. Editing stays with the author or an org admin; **the
 task owner is not special here**, which is only testable between two plain
 members.
+
+**A comment can switch who's action-required, but that is `write`, not
+`read` — a second bar on the same endpoint, not a relaxation of the first.**
+`MessageIn.action_required_user_id` on a task-anchored comment defaults to
+`None`, and `None` means *no change*, never "clear it" — a composer that
+silently un-assigned a task because nobody touched the picker would be a
+trap wearing the shape of a feature. `comment_on_task` runs
+`tasks_service.update()` (the identical call the task screen's own picker
+makes, so the transition-only notify rule and the `task_events` row are the
+same code, not a second implementation of them) **before** it posts the
+comment, deliberately: if a read-only commenter somehow reaches this — the
+UI's own gate is `people.length > 1` on write access, but the server does not
+trust that — the whole request 403s and nothing posts, rather than leaving a
+comment that claims a reassignment its own request body couldn't make good
+on.
 
 **The socket has two audiences, and conflating them was a bug.**
 

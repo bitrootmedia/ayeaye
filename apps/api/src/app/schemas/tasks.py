@@ -68,6 +68,9 @@ class TaskOut(BaseModel):
     # Hidden: only the owner ever sees a task with this set, so anyone reading
     # this field is that owner. It is on the wire so the screen can say so.
     is_hidden: bool
+    # The caller's own bookmark, not a property of the task — two people
+    # looking at the same task can get two different answers here.
+    is_pinned: bool
     # Every tag on it. Sent with the task rather than fetched per card: the
     # board renders dozens at a time and one lookup covers the page.
     tags: list["TagOut"] = []

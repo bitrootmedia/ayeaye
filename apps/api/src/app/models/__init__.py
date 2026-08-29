@@ -9,6 +9,7 @@ from app.models.conversation import (
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.organisation import Organisation, OrganisationMember
+from app.models.pin import TaskPin
 from app.models.planner import PlannerEntry
 from app.models.presence import Announcement, OutOfOffice
 from app.models.reminder import Reminder
@@ -46,6 +47,7 @@ __all__ = [
     "TaskEvent",
     "TaskGrant",
     "TaskNote",
+    "TaskPin",
     "TaskTag",
     "TimeEntry",
     "Team",

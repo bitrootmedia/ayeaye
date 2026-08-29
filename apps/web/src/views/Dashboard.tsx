@@ -1,6 +1,8 @@
 import {
+  ActivityIcon,
   ArrowRightIcon,
   ArrowUpIcon,
+  CalendarClockIcon,
   ClockIcon,
   MegaphoneIcon,
   PinIcon,
@@ -15,7 +17,7 @@ import { Link, useOutletContext, useParams } from "react-router-dom";
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
-import { StatusBadge } from "@/components/status-badge";
+import { ClosedBadge, StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,7 +27,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import { personName, type DashboardData, type PriorityTask, type TaskStatus } from "@/lib/types";
+import {
+  personName,
+  type DashboardData,
+  type DashboardTask,
+  type RecentTask,
+  type TaskStatus,
+} from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /**
  * The organisation's landing screen.
@@ -84,20 +93,10 @@ export default function Dashboard() {
         }
       />
 
-      <PriorityCard
-        label="Critical"
-        icon={<TriangleAlertIcon className="size-4 text-status-blocker" />}
-        tasks={data.critical}
-        orgId={org.id}
-      />
-      <PriorityCard
-        label="Urgent"
-        icon={<ArrowUpIcon className="size-4 text-status-review" />}
-        tasks={data.urgent}
-        orgId={org.id}
-      />
-
-      <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
+      {/* Announcements and Away lead the page, deliberately: they're what
+          everyone has been told, ahead of any one person's escalations —
+          the org's front page, not your personal one. */}
+      <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card role="region" aria-label="Announcements">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -188,6 +187,33 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      <DashboardCard
+        label="Critical"
+        icon={<TriangleAlertIcon className="size-4 text-status-blocker" />}
+        tasks={data.critical}
+        orgId={org.id}
+      />
+      <DashboardCard
+        label="Urgent"
+        icon={<ArrowUpIcon className="size-4 text-status-review" />}
+        tasks={data.urgent}
+        orgId={org.id}
+      />
+      <DashboardCard
+        label="Due soon"
+        icon={<CalendarClockIcon className="size-4" />}
+        tasks={data.due_soon}
+        orgId={org.id}
+      />
+      <DashboardCard
+        label="Pinned"
+        icon={<PinIcon className="size-4" />}
+        tasks={data.pinned}
+        orgId={org.id}
+      />
+
+      <RecentCard tasks={data.recent} orgId={org.id} />
+
       {posting && (
         <NewAnnouncement
           orgId={org.id}
@@ -215,13 +241,13 @@ function AwayRow({ absence }: { absence: DashboardData["away"][number] }) {
 }
 
 /**
- * One priority's escalation card — Critical and Urgent are the same shape,
- * just a different filter server-side, so this is the one place that shape
- * is written down rather than two near-identical cards drifting apart.
- * Empty renders nothing: a card for the priority you have none of at is
- * clutter, not reassurance.
+ * One dashboard escalation card — Critical, Urgent, Due soon and Pinned are
+ * the same shape, just a different filter server-side, so this is the one
+ * place that shape is written down rather than four near-identical cards
+ * drifting apart. Empty renders nothing: a card for a filter that currently
+ * matches nothing is clutter, not reassurance.
  */
-function PriorityCard({
+function DashboardCard({
   label,
   icon,
   tasks,
@@ -229,7 +255,7 @@ function PriorityCard({
 }: {
   label: string;
   icon: React.ReactNode;
-  tasks: PriorityTask[];
+  tasks: DashboardTask[];
   orgId: string;
 }) {
   if (tasks.length === 0) return null;
@@ -243,7 +269,7 @@ function PriorityCard({
       </CardHeader>
       <CardContent className="space-y-2">
         {tasks.map((t) => (
-          <PriorityRow key={t.id} orgId={orgId} task={t} />
+          <DashboardTaskRow key={t.id} orgId={orgId} task={t} />
         ))}
       </CardContent>
     </Card>
@@ -251,12 +277,15 @@ function PriorityCard({
 }
 
 /**
- * One open task at that priority the caller has a stake in — the distinction
- * the card exists to draw. "Your action" is shape, not colour (an
- * `ArrowRightIcon`, no red): status already owns the only red in the product,
- * and a second red badge here would mean it stops meaning "this needs you".
+ * One open task the caller has a stake in — the distinction the card exists
+ * to draw. "Your action" is shape, not colour (an `ArrowRightIcon`, no red):
+ * status already owns the only red in the product, and a second red badge
+ * here would mean it stops meaning "this needs you". The due date is the one
+ * place colour still does the talking — red past due, amber due today — both
+ * already the product's only red and only amber, just spent on a date instead
+ * of a status.
  */
-function PriorityRow({ orgId, task }: { orgId: string; task: PriorityTask }) {
+function DashboardTaskRow({ orgId, task }: { orgId: string; task: DashboardTask }) {
   return (
     <Link
       to={`/orgs/${orgId}/tasks/${task.id}`}
@@ -267,9 +296,7 @@ function PriorityRow({ orgId, task }: { orgId: string; task: PriorityTask }) {
       {task.project_name && (
         <span className="truncate text-xs text-muted-foreground">{task.project_name}</span>
       )}
-      {task.due_on && (
-        <span className="font-mono text-xs text-muted-foreground">due {task.due_on}</span>
-      )}
+      {task.due_on && <DueBadge dueOn={task.due_on} overdue={task.is_overdue} today={task.is_due_today} />}
       {task.is_action_required ? (
         <Badge variant="outline" className="gap-1.5">
           <ArrowRightIcon className="size-3" />
@@ -282,6 +309,60 @@ function PriorityRow({ orgId, task }: { orgId: string; task: PriorityTask }) {
         </Badge>
       )}
     </Link>
+  );
+}
+
+/** Red past due, amber due today, plain otherwise — the product's only red
+ *  and only amber, spent here on urgency-by-date instead of status. */
+function DueBadge({ dueOn, overdue, today }: { dueOn: string; overdue: boolean; today: boolean }) {
+  return (
+    <span
+      className={cn(
+        "font-mono text-xs",
+        overdue ? "text-status-blocker" : today ? "text-status-review" : "text-muted-foreground",
+      )}
+    >
+      {overdue ? "overdue " : today ? "due today · " : "due "}
+      {dueOn}
+    </span>
+  );
+}
+
+/**
+ * The 10 most recently active tasks, organisation-wide — the one card that
+ * answers "what is everybody up to" rather than "what needs me". A comment
+ * bumps `updated_at` exactly like a status change does, so this is also
+ * where a comment posted a minute ago actually shows up.
+ */
+function RecentCard({ tasks, orgId }: { tasks: RecentTask[]; orgId: string }) {
+  if (tasks.length === 0) return null;
+  return (
+    <Card role="region" aria-label="Recently updated tasks" className="mb-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ActivityIcon className="size-4" />
+          Recent activity
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {tasks.map((t) => (
+          <Link
+            key={t.id}
+            to={`/orgs/${orgId}/tasks/${t.id}`}
+            className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm hover:bg-accent/50"
+          >
+            <span className="min-w-0 flex-1 truncate font-medium">{t.title}</span>
+            <StatusBadge status={t.status as TaskStatus} />
+            <ClosedBadge isOpen={t.is_open} />
+            {t.project_name && (
+              <span className="truncate text-xs text-muted-foreground">{t.project_name}</span>
+            )}
+            {t.owner && <span className="text-xs text-muted-foreground">{personName(t.owner)}</span>}
+            <span className="font-mono text-xs text-muted-foreground">{ago(t.updated_at)}</span>
+          </Link>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 

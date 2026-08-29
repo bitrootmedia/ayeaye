@@ -35,6 +35,7 @@ from app.services import access as access_service
 from app.services import attachments as attachments_service
 from app.services import conversations as conversations_service
 from app.services import notes as notes_service
+from app.services import pins as pins_service
 from app.services import projects as projects_service
 from app.services import richtext
 from app.services import search as search_service
@@ -121,6 +122,13 @@ async def _tags_for(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, list[Ta
     return await tags_service.for_tasks(db, [t.id for t in tasks])
 
 
+async def _pinned_for(db: DbSession, tasks: list[Task], user: User) -> set[uuid.UUID]:
+    """Which of these tasks the caller has pinned. One lookup for the whole
+    page, same discipline as `_tags_for` — and personal to the caller, unlike
+    a tag: two people looking at the same list can get two different answers."""
+    return await pins_service.pinned_ids(db, [t.id for t in tasks], user)
+
+
 async def _image_urls(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, str]:
     """Fresh presigned URLs for every image referenced by these descriptions.
 
@@ -160,6 +168,7 @@ def _task_out(
     is_owner: bool,
     tags: dict[uuid.UUID, list[Tag]] | None = None,
     image_urls: dict[uuid.UUID, str] | None = None,
+    pinned: set[uuid.UUID] | None = None,
 ) -> TaskOut:
     return TaskOut(
         id=str(task.id),
@@ -180,6 +189,7 @@ def _task_out(
         created_at=task.created_at,
         updated_at=task.updated_at,
         is_hidden=task.hidden_at is not None,
+        is_pinned=task.id in (pinned or set()),
         access=level,
         can_close=tasks_service.can_close(level=level, is_owner=is_owner),
         can_hide=tasks_service.can_hide(is_owner=is_owner),
@@ -251,6 +261,7 @@ async def list_tasks(
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, tasks)
     images = await _image_urls(db, tasks)
+    pinned = await _pinned_for(db, tasks, user)
     return [
         _task_out(
             task,
@@ -260,6 +271,7 @@ async def list_tasks(
             is_owner=task.owner_user_id == user.id,
             tags=tags,
             image_urls=images,
+            pinned=pinned,
         )
         for task, level in visible
     ]
@@ -306,6 +318,7 @@ async def task_board(
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [t for t, _, _ in rows])
     images = await _image_urls(db, [t for t, _, _ in rows])
+    pinned = await _pinned_for(db, [t for t, _, _ in rows], user)
 
     columns: dict[str, BoardColumn] = {}
     for task, level, total in rows:
@@ -320,6 +333,7 @@ async def task_board(
                 is_owner=task.owner_user_id == user.id,
                 tags=tags,
                 image_urls=images,
+                pinned=pinned,
             )
         )
     return BoardOut(group_by=group, per_group=per_group, columns=list(columns.values()))
@@ -364,6 +378,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [tctx.task])
     images = await _image_urls(db, [tctx.task])
+    pinned = await _pinned_for(db, [tctx.task], user)
     return _task_out(
         tctx.task,
         tctx.level,
@@ -372,6 +387,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
         is_owner=tctx.is_owner,
         tags=tags,
         image_urls=images,
+        pinned=pinned,
     )
 
 
@@ -399,6 +415,7 @@ async def update_task(
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
+    pinned = await _pinned_for(db, [task], user)
     return _task_out(
         task,
         fresh.level,
@@ -407,6 +424,7 @@ async def update_task(
         is_owner=fresh.is_owner,
         tags=tags,
         image_urls=images,
+        pinned=pinned,
     )
 
 
@@ -425,6 +443,7 @@ async def close_task(
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
+    pinned = await _pinned_for(db, [task], user)
     return _task_out(
         task,
         tctx.level,
@@ -433,7 +452,46 @@ async def close_task(
         is_owner=tctx.is_owner,
         tags=tags,
         image_urls=images,
+        pinned=pinned,
     )
+
+
+# --- personal pins -----------------------------------------------------------
+
+
+async def _pin_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
+    people = await _people(db, [tctx.task])
+    names = await _project_names(db, ctx.organisation.id)
+    tags = await _tags_for(db, [tctx.task])
+    images = await _image_urls(db, [tctx.task])
+    pinned = await _pinned_for(db, [tctx.task], user)
+    return _task_out(
+        tctx.task,
+        tctx.level,
+        people=people,
+        project_names=names,
+        is_owner=tctx.is_owner,
+        tags=tags,
+        image_urls=images,
+        pinned=pinned,
+    )
+
+
+@router.post("/tasks/{task_id}/pin", response_model=TaskOut)
+async def pin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Bookmark it for your own dashboard. `read` is enough — see
+    services/pins.py. Idempotent: pinning something already pinned changes
+    nothing."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    await pins_service.set_pinned(db, task_id, user, pinned=True)
+    return await _pin_response(db, ctx, tctx, user)
+
+
+@router.delete("/tasks/{task_id}/pin", response_model=TaskOut)
+async def unpin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    await pins_service.set_pinned(db, task_id, user, pinned=False)
+    return await _pin_response(db, ctx, tctx, user)
 
 
 # --- private notes ---------------------------------------------------------------
@@ -550,6 +608,7 @@ async def hide_task(
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
+    pinned = await _pinned_for(db, [task], user)
     return _task_out(
         task,
         tctx.level,
@@ -557,6 +616,7 @@ async def hide_task(
         project_names=names,
         is_owner=tctx.is_owner,
         tags=tags,
+        pinned=pinned,
         image_urls=images,
     )
 

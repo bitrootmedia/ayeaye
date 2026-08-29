@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, api } from "@/api";
+import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { Lightbox } from "@/components/lightbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +75,7 @@ export function CommentThread({
   anchor,
   anchorId,
   onChanged,
+  actionRequiredCandidates,
 }: {
   orgId: string;
   anchor: "tasks" | "projects";
@@ -81,11 +83,19 @@ export function CommentThread({
   /** Fired when the thread actually moves. A comment can carry a file, and
    *  the task's Files panel shows those — so it has to hear about it. */
   onChanged?: () => void;
+  /** Task threads only — a project has no action-required to switch. Passed
+   *  only when the caller has write access on the task; its presence (and
+   *  needing more than one candidate to be worth offering a switch at all)
+   *  is what decides whether the picker renders, not a prop of its own. */
+  actionRequiredCandidates?: PickerItem[];
 }) {
   const toast = useToastManager();
   const [thread, setThread] = useState<Thread | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // "" is the default and means no change — switching action-required is an
+  // opt-in per comment, never a side effect of posting one.
+  const [actionRequired, setActionRequired] = useState("");
   // Uploaded and confirmed, waiting for a comment to belong to. They exist
   // server-side already — sending is what gives them a home.
   const [staged, setStaged] = useState<Attachment[]>([]);
@@ -205,10 +215,17 @@ export function CommentThread({
     try {
       await api(base, {
         method: "POST",
-        body: JSON.stringify({ body, attachment_ids: staged.map((a) => a.id) }),
+        body: JSON.stringify({
+          body,
+          attachment_ids: staged.map((a) => a.id),
+          // Omitted entirely when "" (the default): the server treats an
+          // absent field as "no change", not as "clear it".
+          ...(actionRequired ? { action_required_user_id: actionRequired } : {}),
+        }),
       });
       setDraft("");
       setStaged([]);
+      setActionRequired("");
       await refresh();
       bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } catch (err) {
@@ -342,6 +359,27 @@ export function CommentThread({
                 }
               }}
             />
+            {/* Only worth offering when there's someone to switch to besides
+                the one person who's currently on it — a picker with one
+                option is a control that does nothing. */}
+            {actionRequiredCandidates && actionRequiredCandidates.length > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  With this comment, action required:
+                </span>
+                <div className="w-44">
+                  <EntityPicker
+                    ariaLabel="Switch action required with this comment"
+                    items={actionRequiredCandidates}
+                    value={actionRequired || null}
+                    placeholder="No change"
+                    emptyLabel="No change"
+                    searchPlaceholder="Find a person…"
+                    onChange={(v) => setActionRequired(v ?? "")}
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
                 Enter to send, Shift+Enter for a new line

@@ -67,6 +67,7 @@ disagree with `projects.owner_user_id`.
 """
 
 import uuid
+from datetime import date, timedelta
 
 from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.orm import aliased
@@ -545,6 +546,35 @@ def my_priority_tasks_stmt(
             Task.position,
             Task.id,
         )
+    )
+
+
+def my_due_soon_tasks_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, today: date, horizon_days: int = 2
+) -> Select:
+    """Open, due within `horizon_days` (overdue included), and yours — the
+    same OR as `my_priority_tasks_stmt`, filtered on the due date instead of
+    priority.
+
+    `today` is passed in rather than computed here because "today" is
+    per-person timezone, resolved once by the caller the same way the
+    dashboard already resolves it for out-of-office — computing it twice
+    risks the two disagreeing about whether something is overdue.
+    """
+    level = task_level_expression(user_id, org_role)
+    horizon = today + timedelta(days=horizon_days)
+    return (
+        select(Task, level.label("level_rank"))
+        .where(
+            Task.organisation_id == org_id,
+            level > NO_ACCESS,
+            Task.due_on.isnot(None),
+            Task.due_on <= horizon,
+            Task.closed_at.is_(None),
+            or_(Task.owner_user_id == user_id, Task.action_required_user_id == user_id),
+        )
+        # Most overdue first — that is the one that has waited longest.
+        .order_by(Task.due_on, Task.id)
     )
 
 

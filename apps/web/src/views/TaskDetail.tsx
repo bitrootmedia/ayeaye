@@ -5,6 +5,7 @@ import {
   EyeOffIcon,
   HistoryIcon,
   LockIcon,
+  PinIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -236,27 +237,48 @@ export default function TaskDetail() {
           </span>
         }
         actions={
-          // Only the owner (or an org admin) closes — resolved server-side and
-          // sent as `can_close`, so the button isn't there for anyone else
-          // rather than being there and 403-ing.
-          task.can_close && (
+          <span className="flex items-center gap-2">
+            {/* Yours to set regardless of edit access — see services/pins.py.
+                A pin is a personal bookmark, not a change to the task, so
+                read is enough and there's nothing to disable here. */}
             <Button
-              variant={task.is_open ? "default" : "outline"}
+              variant="ghost"
+              aria-label={task.is_pinned ? "Unpin task" : "Pin task"}
               onClick={() =>
                 act(
                   () =>
-                    api(`/organisations/${org.id}/tasks/${task.id}/closed`, {
-                      method: "POST",
-                      body: JSON.stringify({ closed: task.is_open }),
+                    api(`/organisations/${org.id}/tasks/${task.id}/pin`, {
+                      method: task.is_pinned ? "DELETE" : "POST",
                     }),
-                  task.is_open ? "Closed" : "Reopened",
+                  task.is_pinned ? "Unpinned" : "Pinned to your dashboard",
                 )
               }
             >
-              {task.is_open ? <CheckCircle2Icon /> : <CircleDotIcon />}
-              {task.is_open ? "Close task" : "Reopen"}
+              <PinIcon className={task.is_pinned ? "fill-current" : undefined} />
+              {task.is_pinned ? "Pinned" : "Pin"}
             </Button>
-          )
+            {/* Only the owner (or an org admin) closes — resolved server-side
+                and sent as `can_close`, so the button isn't there for anyone
+                else rather than being there and 403-ing. */}
+            {task.can_close && (
+              <Button
+                variant={task.is_open ? "default" : "outline"}
+                onClick={() =>
+                  act(
+                    () =>
+                      api(`/organisations/${org.id}/tasks/${task.id}/closed`, {
+                        method: "POST",
+                        body: JSON.stringify({ closed: task.is_open }),
+                      }),
+                    task.is_open ? "Closed" : "Reopened",
+                  )
+                }
+              >
+                {task.is_open ? <CheckCircle2Icon /> : <CircleDotIcon />}
+                {task.is_open ? "Close task" : "Reopen"}
+              </Button>
+            )}
+          </span>
         }
       />
 
@@ -300,6 +322,10 @@ export default function TaskDetail() {
             anchor="tasks"
             anchorId={task.id}
             onChanged={onCommentsChanged}
+            // Write access to switch it, same bar as the sidebar's own
+            // Action required field — a read-only viewer can still comment,
+            // just not reassign the task while doing it.
+            actionRequiredCandidates={editable ? people : undefined}
           />
 
           <Card>

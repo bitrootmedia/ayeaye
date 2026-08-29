@@ -15,6 +15,7 @@ from app.realtime.connections import manager
 from app.schemas.structure import PersonOut
 from app.services import attachments as attachments_service
 from app.services import conversations as conversations_service
+from app.services import tasks as tasks_service
 from app.services import users as users_service
 
 logger = logging.getLogger("app.api.conversations")
@@ -28,6 +29,13 @@ class MessageIn(BaseModel):
     # Staged uploads to bind to this comment. They already exist (confirmed in
     # step 3 of the handshake); sending is what gives them a home.
     attachment_ids: list[str] = Field(default_factory=list)
+    # Task-anchored comments only; ignored on a project thread. `None` — the
+    # default — means no change, not "clear it": a comment composer that
+    # silently un-assigned a task because nobody touched a dropdown would be
+    # a trap. Setting it goes through `tasks_service.update()` before the
+    # comment posts, so it's refused for a read-only commenter exactly the
+    # way changing it from the task screen would be.
+    action_required_user_id: str | None = None
 
 
 class AttachmentOut(BaseModel):
@@ -151,6 +159,19 @@ async def task_comments(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, 
 async def comment_on_task(
     task_id: uuid.UUID, body: MessageIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
 ):
+    # Before the comment, not after: if switching action-required 403s (a
+    # read-only commenter, say) the whole request fails and nothing posts,
+    # rather than leaving a comment that silently didn't do what its own
+    # composer said it would.
+    if body.action_required_user_id is not None:
+        tctx = await tasks_service.context_for(db, ctx, task_id, user)
+        await tasks_service.update(
+            db,
+            tctx,
+            ctx,
+            user,
+            fields={"action_required_user_id": uuid.UUID(body.action_required_user_id)},
+        )
     thread = await _thread(db, ctx, user, task_id=task_id, create=True)
     return await _post(db, ctx, thread, user, body)
 

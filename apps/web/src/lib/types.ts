@@ -285,6 +285,10 @@ export type Task = {
   /** Hidden from everyone but the owner — so if you can read this, it's
    *  yours. See services/access.py: it short-circuits every other route. */
   is_hidden: boolean;
+  /** The caller's own bookmark, not a property of the task — see
+   *  services/pins.py. Two people looking at the same task can get two
+   *  different answers here. */
+  is_pinned: boolean;
   closed_at: string | null;
   project_id: string | null;
   project_name: string | null;
@@ -376,10 +380,13 @@ export type Announcement = {
   created_at: string;
 };
 
-/** Open, at one priority, and mine — either I own it or I'm asked to act.
- *  `is_action_required` and `waiting_on` are the distinction the dashboard
- *  exists to draw: one needs me, the other needs someone else. */
-export type PriorityTask = {
+/** One row on a dashboard escalation card — Critical, Urgent, Due soon,
+ *  Pinned. `is_action_required` and `waiting_on` are the distinction those
+ *  cards exist to draw: one needs me, the other needs someone else.
+ *  `is_overdue`/`is_due_today` are computed server-side against the
+ *  viewer's own timezone, the same "today" the whole dashboard resolves
+ *  once. */
+export type DashboardTask = {
   id: string;
   title: string;
   status: string;
@@ -389,6 +396,22 @@ export type PriorityTask = {
   is_owner: boolean;
   is_action_required: boolean;
   waiting_on: Person | null;
+  is_overdue: boolean;
+  is_due_today: boolean;
+};
+
+/** One row of "what changed" — organisation-wide, not narrowed to the
+ *  caller's own work. Sorted by `updated_at`, which a comment bumps just
+ *  like a status change does. */
+export type RecentTask = {
+  id: string;
+  title: string;
+  status: string;
+  project_id: string | null;
+  project_name: string | null;
+  owner: Person | null;
+  is_open: boolean;
+  updated_at: string;
 };
 
 /** One request, because a landing page that renders in three stages looks
@@ -398,8 +421,11 @@ export type DashboardData = {
   away: Absence[];
   /** Resolved server-side — admins write, everyone reads. */
   can_announce: boolean;
-  critical: PriorityTask[];
-  urgent: PriorityTask[];
+  critical: DashboardTask[];
+  urgent: DashboardTask[];
+  due_soon: DashboardTask[];
+  pinned: DashboardTask[];
+  recent: RecentTask[];
 };
 
 /** A personal access token. The secret is only ever in the create response. */
