@@ -75,7 +75,37 @@ SuperTokens.init({
   // The pre-built auth screens, restyled with the product's own tokens rather
   // than a second palette — see lib/auth-theme.ts.
   style: AUTH_STYLE,
-  recipeList: [EmailPassword.init(), Session.init()],
+  recipeList: [
+    EmailPassword.init({
+      signInAndUpFeature: {
+        signUpForm: {
+          formFields: [
+            // A courtesy pre-check echoing `security/authn.py`'s own
+            // `strong_password_validator` — the server is what actually
+            // decides (and the reset-password screen has no equivalent
+            // client-side hook, so it always round-trips), but matching the
+            // rule here means sign-up doesn't wait on a request for the
+            // common case. The sign-in form is untouched: an account made
+            // before this policy tightened must still be able to log in.
+            {
+              id: "password",
+              label: "Password",
+              validate: async (value: string) => {
+                if (typeof value !== "string" || value.length < 10) {
+                  return "Use at least 10 characters.";
+                }
+                if (!/[a-z]/.test(value)) return "Include at least one lowercase letter.";
+                if (!/[A-Z]/.test(value)) return "Include at least one uppercase letter.";
+                if (!/[0-9]/.test(value)) return "Include at least one number.";
+                return undefined;
+              },
+            },
+          ],
+        },
+      },
+    }),
+    Session.init(),
+  ],
 });
 
 /** See the `__crash` route. */

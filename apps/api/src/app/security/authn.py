@@ -5,6 +5,7 @@ organisation membership and grants — see services/access.py (Phase 3). There i
 no policy engine and no staff tier; PLAN.md §2.1 explains why.
 """
 
+import re
 from typing import Annotated
 
 from fastapi import Depends
@@ -12,6 +13,8 @@ from supertokens_python import InputAppInfo, SupertokensConfig, get_request_from
 from supertokens_python.asyncio import get_user
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
 from supertokens_python.recipe import emailpassword, session
+from supertokens_python.recipe.emailpassword import InputFormField, InputSignUpFeature
+from supertokens_python.recipe.emailpassword.constants import FORM_FIELD_PASSWORD_ID
 from supertokens_python.recipe.session import SessionContainer
 from supertokens_python.recipe.session.framework.fastapi import verify_session
 from supertokens_python.recipe.session.interfaces import RecipeInterface
@@ -23,6 +26,26 @@ from app.security.email import MailerEmailDelivery
 # The canonical "this request has a valid session" dependency. Declared here so
 # everything shares one instance instead of building its own verifier.
 VerifiedSession = Annotated[SessionContainer, Depends(verify_session())]
+
+# SuperTokens' own default (8 characters, one letter, one digit) passes
+# "aaaaaaa1" — length and mixed case are what actually resist guessing, and
+# both are cheap to require. Stops short of demanding a symbol: that mostly
+# trains people to write the password down rather than choose a better one.
+MIN_PASSWORD_LENGTH = 10
+
+
+async def strong_password_validator(value: str, _tenant_id: str) -> str | None:
+    if len(value) < MIN_PASSWORD_LENGTH:
+        return f"Use at least {MIN_PASSWORD_LENGTH} characters."
+    if len(value) >= 100:
+        return "Password's length must be lesser than 100 characters"
+    if not re.search(r"[a-z]", value):
+        return "Include at least one lowercase letter."
+    if not re.search(r"[A-Z]", value):
+        return "Include at least one uppercase letter."
+    if not re.search(r"[0-9]", value):
+        return "Include at least one number."
+    return None
 
 
 def _client_ip(request) -> str | None:
@@ -117,6 +140,16 @@ def init_auth() -> None:
                 # Replaces SuperTokens' managed sending service: password-reset
                 # mail goes out through our own SMTP, from our own domain.
                 email_delivery=EmailDeliveryConfig(service=MailerEmailDelivery()),
+                # See `strong_password_validator` above — the email field
+                # keeps SuperTokens' own default validator by not being
+                # listed here.
+                sign_up_feature=InputSignUpFeature(
+                    form_fields=[
+                        InputFormField(
+                            id=FORM_FIELD_PASSWORD_ID, validate=strong_password_validator
+                        )
+                    ]
+                ),
             ),
         ],
         mode="asgi",
