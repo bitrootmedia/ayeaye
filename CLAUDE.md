@@ -819,6 +819,17 @@ table is a real `<table>`, the first one in the product — the task list's
 own "list" view is div rows, not semantic markup, and there was no reason
 to match that when the ask was specifically a table.
 
+**Absent the param entirely, both toggles fall back to a remembered
+preference, not always the same hardcoded default.** `lib/view-preference.ts`
+is a thin `localStorage` wrapper, the same shape and the same brand-free-key
+reasoning as `lib/theme.ts`. Set only on an explicit toggle click, never on
+landing via a URL that already names a view — a colleague's table-view link
+must not silently become your own permanent default just because you
+followed it once. The URL still wins whenever it's present; the remembered
+value is only ever the fallback for "no `?view=` at all," which is what
+happens the next time you navigate here from the rail rather than from a
+link.
+
 ## Rich task descriptions
 
 Read `services/richtext.py`. A description is **sanitised HTML** now, and that
@@ -2168,6 +2179,6 @@ three-file change:
 | Email subjects, `From:`, OpenAPI title, SuperTokens app name | `brand_name` in `apps/api/src/app/core/config.py` |
 | The browser tab | `apps/web/index.html` `<title>` |
 
-Storage keys are deliberately brand-free (`ui-theme`): a key with the product
-name in it silently resets everyone's saved preferences the day the name
-changes.
+Storage keys are deliberately brand-free (`ui-theme`, `view-tasks`,
+`view-projects`): a key with the product name in it silently resets
+everyone's saved preferences the day the name changes.

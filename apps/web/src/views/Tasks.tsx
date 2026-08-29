@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { ago, timestamp } from "@/lib/format";
+import { lastView, rememberView } from "@/lib/view-preference";
 import {
   PRIORITY_LABEL,
   STATUS_LABEL,
@@ -92,7 +93,16 @@ export default function Tasks() {
 
   const projectFilter = params.get("project");
   const tagFilter = params.get("tag");
-  const view = params.get("view") === "list" ? "list" : "board";
+  // The URL wins when it names a view explicitly (a link somebody sends
+  // carries the view they meant); otherwise fall back to whatever you
+  // last toggled to here, rather than always defaulting to Board.
+  const viewParam = params.get("view");
+  const view: "list" | "board" =
+    viewParam === "list" || viewParam === "board"
+      ? viewParam
+      : lastView("tasks") === "list"
+        ? "list"
+        : "board";
   const groupBy = params.get("group") === "priority" ? "priority" : "status";
   // Sorting and filtering live in the URL, so a view somebody arrived at is a
   // view they can send to a colleague.
@@ -246,7 +256,11 @@ export default function Tasks() {
             )}
             <Button
               variant="ghost"
-              onClick={() => setParam("view", view === "board" ? "list" : "board")}
+              onClick={() => {
+                const next = view === "board" ? "list" : "board";
+                setParam("view", next);
+                rememberView("tasks", next);
+              }}
             >
               {view === "board" ? <ListIcon /> : <LayoutGridIcon />}
               {view === "board" ? "List" : "Board"}

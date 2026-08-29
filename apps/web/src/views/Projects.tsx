@@ -48,6 +48,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { LEVEL_LABEL, personName, type Project, type ProjectGroup } from "@/lib/types";
+import { lastView, rememberView } from "@/lib/view-preference";
 
 const UNGROUPED = "__none__";
 
@@ -73,8 +74,16 @@ export default function Projects() {
 
   // Both in the URL, same reasoning as the task list: a view somebody
   // arrived at — filtered, as a table — is one they can send to a colleague.
+  // Absent the param entirely, fall back to whatever you last toggled to
+  // here rather than always defaulting to Cards.
   const query = params.get("q") ?? "";
-  const view = params.get("view") === "table" ? "table" : "cards";
+  const viewParam = params.get("view");
+  const view: "table" | "cards" =
+    viewParam === "table" || viewParam === "cards"
+      ? viewParam
+      : lastView("projects") === "table"
+        ? "table"
+        : "cards";
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
     if (value === null || value === "") next.delete(key);
@@ -141,7 +150,16 @@ export default function Projects() {
             <Button
               variant="ghost"
               aria-label={view === "cards" ? "View as a table" : "View as cards"}
-              onClick={() => setParam("view", view === "cards" ? "table" : null)}
+              onClick={() => {
+                const next = view === "cards" ? "table" : "cards";
+                // "cards" clears the param rather than writing it — same
+                // "default stays out of the URL" convention `?view=` already
+                // followed before this — but the preference still needs
+                // remembering either way, or toggling back to Cards would
+                // silently keep offering Table as tomorrow's default.
+                setParam("view", next === "cards" ? null : next);
+                rememberView("projects", next);
+              }}
             >
               {view === "cards" ? <TableIcon /> : <LayoutGridIcon />}
               {view === "cards" ? "Table" : "Cards"}
