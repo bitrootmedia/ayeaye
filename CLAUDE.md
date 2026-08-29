@@ -1453,6 +1453,45 @@ in *some* bucket, survives a reload" is the honest claim; asserting "landed
 in Today specifically" is asserting an implementation detail that has no
 product meaning.
 
+## The calendar
+
+Read `api/routers/calendar.py`'s own docstring — it states the one thing
+worth knowing before touching any of this. `GET /organisations/{id}/calendar
+?start=&end=` returns two lists with **deliberately different visibility
+rules on the same grid**: every visible task's due date is team-wide (the
+same access as the Tasks list — `tasks_service.list_visible` with
+`due_after`/`due_before`, two new params on `access.visible_tasks_stmt`
+alongside its existing filters, both inclusive so a task due on the grid's
+last day still shows), while reminders stay `reminders_service.mine_stmt` —
+private, exactly like every other reminder surface. Two people in the same
+organisation see the same task dots and different reminder dots on the same
+month. That split was the one real design question here, decided in favour
+of a genuinely shared "what's due when" over a quieter personal-agenda
+version scoped like the dashboard's escalation cards — see the router
+docstring for the reasoning kept next to the code it explains.
+
+**The window is capped at 42 days** (`MAX_WINDOW_DAYS`) — a month grid is
+never more than six weeks, and a caller wanting more than that already has
+the Tasks list, which actually paginates. Both `start > end` and an
+oversized window are `422`, not silently clamped — a silent cap is the same
+mistake the task list's own "no default limit" rule exists to avoid.
+
+**Hand-rolled month grid, not a calendar library.** The first calendar
+surface in the product and there was no reason to reach past a CSS grid and
+some date arithmetic for it — `@dnd-kit` is the precedent for what actually
+justifies a new dependency here (a keyboard sensor doing something plain
+CSS/JS can't), and click-through-only navigation never needed one. The one
+place this bit: **`toISOString()` converts to UTC first**, which slides the
+date near midnight for anyone not on UTC — `isoDate()` builds `YYYY-MM-DD`
+from the local `Date` fields instead, the same reasoning
+`services/reminders.py` gives for doing its own date arithmetic rather than
+trusting a library to get local-day boundaries right.
+
+**The visible month is in the URL** (`?month=YYYY-MM`), same reasoning as
+every other view/filter in the product: a month somebody navigated to is one
+they can send a colleague, and a reload should land back where they were
+rather than snapping to today.
+
 ## Time tracking
 
 Read the `services/time_tracking.py` docstring. Four rules, and the first is a

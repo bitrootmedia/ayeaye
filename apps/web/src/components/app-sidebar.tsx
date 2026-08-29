@@ -12,6 +12,7 @@ import {
   LayoutDashboardIcon,
   BuildingIcon,
   CalendarDaysIcon,
+  CalendarIcon,
   CircleDotIcon,
   ClockIcon,
   FolderKanbanIcon,
@@ -104,6 +105,11 @@ export function AppSidebar({
                     to: `/orgs/${currentOrg.id}/planner`,
                     label: "Planner",
                     icon: CalendarDaysIcon,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/calendar`,
+                    label: "Calendar",
+                    icon: CalendarIcon,
                   },
                   {
                     to: `/orgs/${currentOrg.id}/projects`,

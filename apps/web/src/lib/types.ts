@@ -365,6 +365,32 @@ export type TaskAccess = {
   can_manage: boolean;
 };
 
+/** One task, on the calendar. Team-wide — every task you can see with a due
+ *  date in the visible window, not narrowed to yours. */
+export type CalendarTask = {
+  id: string;
+  title: string;
+  due_on: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  project_name: string | null;
+};
+
+/** One reminder, on the calendar. Private — see services/reminders.py; two
+ *  people looking at the same month see different reminder dots. */
+export type CalendarReminder = {
+  id: string;
+  remind_on: string;
+  note: string | null;
+  task_id: string;
+  task_title: string;
+};
+
+export type CalendarData = {
+  tasks: CalendarTask[];
+  reminders: CalendarReminder[];
+};
+
 /** A reminder. Personal — there is no "whose" field because there is only
  *  ever one answer. */
 export type Reminder = {

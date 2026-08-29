@@ -8,6 +8,7 @@ means adding a module in routers/ and one include_router line here.
 from fastapi import APIRouter
 
 from app.api.routers import (
+    calendar,
     conversations,
     dashboard,
     invites,
@@ -58,6 +59,11 @@ api_router.include_router(time.router)
 # like Tasks; the admin escape hatch is time entries' shape, not notes' —
 # see services/planner.py.
 api_router.include_router(planner.router)
+
+# Every visible task's due date, team-wide, plus the caller's own reminders.
+# Organisation-scoped like Tasks and Planner — see the router's own docstring
+# for why the two halves have different visibility rules.
+api_router.include_router(calendar.router)
 
 # Comment threads on tasks and projects. There is no separate comment system —
 # these ARE the conversations, which is what makes attachments, voice notes and

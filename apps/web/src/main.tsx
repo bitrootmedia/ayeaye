@@ -17,6 +17,7 @@ import { applyStoredTheme } from "@/lib/theme";
 import { lastOrg } from "@/lib/current-org";
 import AcceptInvite from "@/views/AcceptInvite";
 import Account from "@/views/Account";
+import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
 import Landing, { Footer, Header } from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
@@ -185,6 +186,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={<TaskDetail />}
                 />
                 <Route path="orgs/:orgId/planner" element={<Planner />} />
+                <Route path="orgs/:orgId/calendar" element={<CalendarView />} />
                 <Route path="orgs/:orgId/time" element={<Time />} />
                 <Route path="notifications" element={<Notifications />} />
                 {/* Personal and cross-organisation, like the inbox above it. */}

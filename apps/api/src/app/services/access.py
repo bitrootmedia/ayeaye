@@ -482,6 +482,8 @@ def visible_tasks_stmt(
     priority: str | None = None,
     owner_user_id: uuid.UUID | None = None,
     action_required_user_id: uuid.UUID | None = None,
+    due_after: date | None = None,
+    due_before: date | None = None,
     sort: str | None = None,
     descending: bool = False,
 ) -> Select:
@@ -489,7 +491,9 @@ def visible_tasks_stmt(
 
     `project_id` narrows to one project; `loose_only` narrows to tasks with no
     project at all. Neither widens access — the level expression is the same
-    either way, and so are the two tag filters.
+    either way, and so are the two tag filters. `due_after`/`due_before` are
+    both inclusive, for the calendar — a task due on the last visible day of
+    a month must still appear in that month.
 
     **`include_off_board` is a display rule, not an access rule.** A task
     tagged "Knowledge base" is perfectly visible; it is just not queueing for
@@ -520,6 +524,10 @@ def visible_tasks_stmt(
         stmt = stmt.where(Task.owner_user_id == owner_user_id)
     if action_required_user_id is not None:
         stmt = stmt.where(Task.action_required_user_id == action_required_user_id)
+    if due_after is not None:
+        stmt = stmt.where(Task.due_on >= due_after)
+    if due_before is not None:
+        stmt = stmt.where(Task.due_on <= due_before)
     if tag_id is not None:
         # Imported here, not at module scope: `services/tags.py` imports this
         # module for `administers_organisation`, and at the top that is a
