@@ -69,6 +69,9 @@ test("photograph the product", async ({ page }) => {
   await page.goto(`/orgs/${orgId}/people`);
   await shot(page, "03-organisation-people");
 
+  await page.goto(`/orgs/${orgId}/settings`);
+  await shot(page, "03b-organisation-settings");
+
   await inviteMember(page, orgId, mate, "admin");
   await shot(page, "04-invitation-link");
 
@@ -234,4 +237,16 @@ test("photograph the product", async ({ page }) => {
   await shot(page, "15-task-board-dark");
   await page.goto(`/orgs/${orgId}/projects`);
   await shot(page, "16-projects-dark");
+
+  await page.goto(`/orgs/${orgId}/settings`);
+  await shot(page, "17-organisation-settings-dark");
+
+  // The task screen carries three native `type="date"` inputs (Due, Est.
+  // start) — the one place a browser-drawn control (the calendar picker
+  // icon) can silently ignore the theme entirely rather than following the
+  // design tokens like everything else.
+  await page.goto(`/orgs/${orgId}/tasks`);
+  await page.getByRole("link", { name: /Strip the old antifoul/ }).click();
+  await page.waitForURL(/\/tasks\/[0-9a-f-]+$/);
+  await shot(page, "18-task-detail-dark");
 });

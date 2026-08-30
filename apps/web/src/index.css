@@ -176,6 +176,14 @@
   .font-mono, code, pre {
     font-variant-numeric: tabular-nums;
     }
+  /* The browser draws this glyph itself and ignores `color`/`fill` — it's
+     always near-black, which disappears against a dark input. `invert(1)`
+     is the only lever Chromium/Safari expose for it. Every `type="date"`
+     field in the product (task due date, reminders, out-of-office, …)
+     shares this one rule rather than each needing its own fix. */
+  .dark input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    }
 }
 
 /* --- rich task descriptions -------------------------------------------------

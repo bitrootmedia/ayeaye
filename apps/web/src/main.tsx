@@ -21,6 +21,7 @@ import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
 import Landing, { Footer, Header } from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
+import OrganisationSettings from "@/views/OrganisationSettings";
 import Organisations from "@/views/Organisations";
 import Notifications from "@/views/Notifications";
 import NotFound from "@/views/NotFound";
@@ -204,6 +205,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route
                   path="orgs/:orgId/people"
                   element={<OrganisationDetail />}
+                />
+                <Route
+                  path="orgs/:orgId/settings"
+                  element={<OrganisationSettings />}
                 />
                 <Route path="orgs/:orgId/structure" element={<Teams />} />
                 <Route path="orgs/:orgId/projects" element={<Projects />} />

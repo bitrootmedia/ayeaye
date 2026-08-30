@@ -15,7 +15,6 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { CopyLink } from "@/components/copy-link";
-import { ExportCard } from "@/components/export-card";
 import { PageHeader } from "@/components/page-header";
 import { PendingBadge, RoleBadge } from "@/components/role-badge";
 import { Button } from "@/components/ui/button";
@@ -62,10 +61,7 @@ import {
   ROLE_HELP,
   ROLE_LABEL,
   canActOn,
-  canDeleteOrg,
   canManageMembers,
-  canRename,
-  canRequireMfa,
   grantableRoles,
   type InviteCreated,
   type Member,
@@ -396,12 +392,6 @@ export default function OrganisationDetail() {
         </CardContent>
       </Card>
 
-      <ExportCard orgId={org.id} projectId={null} />
-
-      {(canRename(org.role) || canDeleteOrg(org.role)) && (
-        <OrgSettings org={org} onDone={reload} />
-      )}
-
       <InviteDialog
         open={inviting}
         onOpenChange={setInviting}
@@ -586,143 +576,5 @@ function InviteDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function OrgSettings({
-  org,
-  onDone,
-}: {
-  org: { id: string; name: string; role: Role; require_mfa: boolean };
-  onDone: () => Promise<void>;
-}) {
-  const navigate = useNavigate();
-  const toast = useToastManager();
-  const [name, setName] = useState(org.name);
-  const [confirming, setConfirming] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
-  const [mfaBusy, setMfaBusy] = useState(false);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Settings</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {canRename(org.role) && (
-          <div className="space-y-2">
-            <Label htmlFor="org-rename">Name</Label>
-            <div className="flex gap-2">
-              <Input
-                id="org-rename"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="max-w-sm"
-              />
-              <Button
-                variant="outline"
-                disabled={!name.trim() || name.trim() === org.name}
-                onClick={async () => {
-                  await api(`/organisations/${org.id}`, {
-                    method: "PATCH",
-                    body: JSON.stringify({ name: name.trim() }),
-                  });
-                  await onDone();
-                  toast.add({ title: "Renamed" });
-                }}
-              >
-                Rename
-              </Button>
-            </div>
-            {/* Worth saying out loud: people bookmark and share these. */}
-            <p className="text-xs text-muted-foreground">
-              The URL stays the same — renaming changes the label, not the address.
-            </p>
-          </div>
-        )}
-
-        {canRequireMfa(org.role) && (
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                checked={org.require_mfa}
-                disabled={mfaBusy}
-                onChange={async (e) => {
-                  setMfaBusy(true);
-                  try {
-                    await api(`/organisations/${org.id}/require-mfa`, {
-                      method: "POST",
-                      body: JSON.stringify({ enabled: e.target.checked }),
-                    });
-                    await onDone();
-                    toast.add({
-                      title: e.target.checked
-                        ? "Two-factor authentication required"
-                        : "Two-factor authentication no longer required",
-                    });
-                  } finally {
-                    setMfaBusy(false);
-                  }
-                }}
-              />
-              Require two-factor authentication for all members
-            </label>
-            <p className="text-xs text-muted-foreground">
-              Anyone who hasn&rsquo;t already turned it on for themselves is asked to set it up
-              at their next sign-in. Turning this off never removes a member&rsquo;s own
-              enrollment.
-            </p>
-          </div>
-        )}
-
-        {canDeleteOrg(org.role) && (
-          <div className="space-y-2 rounded-lg border border-destructive/30 p-3">
-            <div className="font-medium">Delete this organisation</div>
-            <p className="text-sm text-muted-foreground">
-              Everything in it goes with it, for everyone. This cannot be undone.
-            </p>
-            <Button variant="destructive" onClick={() => setConfirming(true)}>
-              <Trash2Icon />
-              Delete
-            </Button>
-          </div>
-        )}
-      </CardContent>
-
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {org.name}?</DialogTitle>
-            <DialogDescription>
-              This removes it for every member, along with everything inside it. Type the name
-              to confirm.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={confirmText}
-            placeholder={org.name}
-            onChange={(e) => setConfirmText(e.target.value)}
-          />
-          <DialogFooter>
-            <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-            <Button
-              variant="destructive"
-              disabled={confirmText !== org.name}
-              onClick={async () => {
-                await api(`/organisations/${org.id}`, { method: "DELETE" });
-                forgetOrg(org.id);
-                setConfirming(false);
-                await onDone();
-                navigate("/");
-                toast.add({ title: `${org.name} deleted` });
-              }}
-            >
-              Delete permanently
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </Card>
   );
 }

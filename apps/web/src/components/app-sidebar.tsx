@@ -21,6 +21,7 @@ import {
   MoonIcon,
   NetworkIcon,
   NotebookIcon,
+  SettingsIcon,
   SunIcon,
   UserIcon,
   UsersIcon,
@@ -128,6 +129,11 @@ export function AppSidebar({
                     to: `/orgs/${currentOrg.id}/structure`,
                     label: "Teams and groups",
                     icon: NetworkIcon,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/settings`,
+                    label: "Settings",
+                    icon: SettingsIcon,
                   },
                 ].map((item) => (
                   <SidebarMenuItem key={item.to}>

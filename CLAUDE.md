@@ -907,6 +907,28 @@ on a shared machine must not be enough to lock its owner out of their account.
 SuperTokens owns the password policy and its rejection is passed straight
 through; restating it here would be two rules that can disagree.
 
+## Organisation settings, and where the data export lives
+
+`/orgs/{id}/settings` — its own screen, with its own gear icon in the rail,
+`views/OrganisationSettings.tsx`. It didn't start that way: rename, the
+two-factor requirement, deletion and `ExportCard` were all a second,
+unrelated card at the bottom of `/people`, because that screen already
+existed when data export shipped and nobody had asked for a settings screen
+yet. The result was a genuine discoverability bug — a real "take your data"
+button existed from the day exports landed, and the only way to find it was
+to scroll past the entire member roster on a page whose own nav label is
+"People." Moved out once it was reported.
+
+**`ExportCard` is visible to every member, not gated on the same role check
+as the rest of the page.** A data export is scoped to the requester's own
+visibility (`services/exports.py`'s own "no branch that grants anybody else
+access" rule), not an admin privilege — a plain member exporting their own
+view of the organisation is exactly the intended use, so the card renders
+unconditionally while the rename/MFA/delete card beneath it stays gated on
+`canRename` / `canRequireMfa` / `canDeleteOrg`, precisely as it was on the
+People page. `screenshots.spec.ts` photographs the new screen in both
+themes (`03b-organisation-settings`, `17-organisation-settings-dark`).
+
 ## The Projects list: stats, filtering, table view
 
 `GET /projects` carries two counts per project now —
@@ -2546,6 +2568,16 @@ Read these before starting Phase 6.
   hand-rolled capture-phase trick existed to fabricate. Confirmed, not
   assumed: `e2e/tests/task-ux.spec.ts`'s "Escape closes the list, not the
   dialog behind it" still passes unchanged.
+- **A native `<input type="date">`'s calendar glyph is browser-drawn and
+  ignores every design token.** It doesn't take `color`, doesn't take
+  `fill`, and is always near-black — invisible against a dark input, on
+  every `type="date"` field in the product (task due date, estimate start,
+  reminders, out-of-office). `filter: invert(1)` on
+  `::-webkit-calendar-picker-indicator`, scoped to `.dark`, is the only
+  lever Chromium/Safari expose for it — one rule in `index.css`'s base
+  layer fixes every instance at once rather than each screen needing its
+  own patch. Firefox draws this control differently and isn't a target
+  here; the product's own e2e suite runs Chromium.
 
 ## Running and testing
 
