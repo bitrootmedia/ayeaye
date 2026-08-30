@@ -11,6 +11,7 @@ from app.api.routers import (
     calendar,
     conversations,
     dashboard,
+    exports,
     invites,
     notifications,
     organisations,
@@ -83,3 +84,7 @@ api_router.include_router(conversations.ws_router)
 # Joining one. Deliberately NOT under /organisations/{id} — you aren't a member
 # yet, so the membership dependency there would 404 you out of your own invite.
 api_router.include_router(invites.router)
+
+# Data exports — a ZIP built in the worker, one directory per task. Every
+# read filters on the requester; see services/exports.py.
+api_router.include_router(exports.router)

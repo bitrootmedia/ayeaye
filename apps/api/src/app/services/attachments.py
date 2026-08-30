@@ -34,7 +34,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -239,6 +239,44 @@ async def for_task(
         .scalars()
         .all()
     )
+
+
+async def for_tasks(
+    db: AsyncSession, task_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[Attachment]]:
+    """Every attachment across many tasks, in one statement — added directly
+    *or* posted in comments, the same OR-over-both-anchors shape `for_task()`
+    already uses for one. Built for the data export, which would otherwise be
+    N+1 deep across however many tasks are in scope; mirrors `for_messages()`'s
+    batched-by-ids shape in this same file.
+
+    A comment-posted attachment has no `task_id` of its own — it's anchored to
+    the conversation instead — so the grouping key is
+    `COALESCE(Attachment.task_id, Conversation.task_id)`, not a plain column.
+    """
+    if not task_ids:
+        return {}
+    task_col = func.coalesce(Attachment.task_id, Conversation.task_id).label("task_id")
+    rows = (
+        await db.execute(
+            select(Attachment, task_col)
+            .outerjoin(Conversation, Conversation.id == Attachment.conversation_id)
+            .where(
+                or_(
+                    Attachment.task_id.in_(task_ids),
+                    and_(
+                        Conversation.task_id.in_(task_ids), Attachment.message_id.isnot(None)
+                    ),
+                ),
+                Attachment.status == STATUS_READY,
+            )
+            .order_by(Attachment.id)
+        )
+    ).all()
+    grouped: dict[uuid.UUID, list[Attachment]] = {}
+    for attachment, task_id in rows:
+        grouped.setdefault(task_id, []).append(attachment)
+    return grouped
 
 
 async def delete(db: AsyncSession, attachment: Attachment) -> None:

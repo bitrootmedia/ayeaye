@@ -183,6 +183,7 @@ ayeayecaptain/
     │       │                #   checklist (+ items), sheet (+ rows/columns/cells),
     │       │                #   note (private, per person), personal_note (the notepad),
     │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
+    │       │                #   export (a ZIP build, requester-only, autodeletes),
     │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   notification,
@@ -198,6 +199,7 @@ ayeayecaptain/
     │       │                #   conversations.py — comments ARE the thread
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
+    │       │                #   exports.py — yours only, not even an admin's
     │       │                #   reminders.py presence.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
@@ -1512,6 +1514,103 @@ Two things that cost time here:
   forgot to import it?" and nothing else happens. `tests/test_task_registry.py`
   now fails the build instead.
 
+## Data export
+
+Read `services/exports.py` and `models/export.py`. "Take your data" — a ZIP
+per organisation or per project, one directory per task, its files inside.
+Built in the worker (`tasks/exports.py`), the same reasoning `thumbnails.py`
+already established: an organisation-wide export can mean hundreds of tasks
+and their attachments, and building that inline would risk an HTTP timeout
+and hold a request open for no reason when this container exists for
+exactly this shape of work.
+
+**Privacy: no branch that grants anybody else access, not even an admin —
+the one rule that matters most here.** The zip's contents are the
+*requester's own* `access.visible_tasks_stmt` result at build time, not
+"everything in the organisation," so letting a different member — even an
+org admin — download someone else's export would leak tasks that member
+couldn't otherwise see. Every read in `services/exports.py` filters on
+`requested_by_user_id == caller`, the identical absence-of-a-branch
+discipline `services/notes.py` and `services/personal_notes.py` already
+hold for their own private data. `scripts/e2e-exports.sh` proves this is
+the one property worth testing hardest: an admin gets an empty list and a
+404 on both status and download for a colleague's export.
+
+**Autodelete after a confirmed download.** The server can't observe the
+actual browser → storage transfer — that GET goes straight to S3, same as
+every other download in this product (see Attachments) — so "confirmed"
+means the one honest signal actually available: the person asked for the
+file. `GET .../download` stamps `downloaded_at` the first time only (a
+second click just re-mints the presigned URL without moving the clock, so
+double-clicking Download can't postpone deletion), and a new scheduled
+sweep, `sweep_expired_exports` (`:45` past the hour, next to
+reminders/deadlines/the digest at `:05`/`:15`/`:25`), deletes the object and
+flips `status` to `expired` once either that stamp is past a grace window
+(`EXPORT_GRACE`, five minutes — long enough for a large zip on a slow
+connection to finish) or, for one nobody ever downloads,
+`created_at` is past a longer ceiling (`EXPORT_MAX_AGE`, seven days) — the
+same "never claimed still shouldn't leak forever" reasoning applied to a
+second, independent condition in the same claim. Re-requesting a download
+on an `expired` row is `410 Gone`, not `404` — it existed and is gone on
+purpose, a different fact from "never existed" (wrong owner) or "not ready
+yet" (`409`).
+
+**`services/exports.py::claim_expired` clears `storage_key` in a *second*,
+separate statement from the one that claims the row — found writing it, not
+guessed.** `RETURNING` reflects the row *after* an `UPDATE`, so a single
+statement that both nulls `storage_key` and returns it hands back `NULL`
+every time — exactly the key the caller needs to actually delete the S3
+object. The claim itself (the part that has to be race-safe, the identical
+`UPDATE … WHERE … RETURNING` shape `reminders.claim` already uses) is
+entirely in the first statement; by the time the second one runs, only the
+winner holds those ids, so it needs no claim of its own.
+
+**Two new batched-by-many-task-ids functions, because this is the one
+caller that would otherwise be N+1 across however many tasks are in
+scope**, the same discipline every list endpoint in this codebase already
+follows for a single page: `services/attachments.py::for_tasks` (mirrors
+the existing `for_messages`'s batched-by-ids shape exactly) and
+`services/conversations.py::for_tasks` (mirrors `list_messages`, minus the
+tombstones — a removed comment already has its body cleared by `remove()`,
+so there's nothing of the person's own words left to export, and it's left
+out entirely rather than shown as a placeholder). `services/tags.py::for_tasks`
+already existed and needed no counterpart. Checklists don't get one:
+`checklists_service.for_task` stays a per-task loop in the builder, on
+purpose — this is a background job with no request latency to protect, not
+a live list endpoint, and the "one statement" discipline is specifically
+about the requests a person is waiting on.
+
+**The description in `task.md` is deliberately *not*
+`richtext.to_plain_text()`.** That function collapses everything to one
+line for a search snippet, which would turn a multi-paragraph description
+into a wall of text here. `tasks/exports.py::_description_text` is a
+second, small, export-only converter — block tags become line breaks, `<li>`
+becomes a bullet, then the rest strips the same way — kept local to this
+module specifically so the shared single-line contract other callers
+(search) depend on stays untouched.
+
+**Folder naming checks for *any* alphanumeric character before calling
+`slugify`, not after.** A title of nothing but punctuation (`"!!!"`) has
+nothing for `slugify` to keep, and its own fallback for that case is
+`"org"` — the right word for a URL stem with no organisation name, the
+wrong one for a task folder with no readable title. `_task_folder` decides
+`"untitled"` itself rather than letting that fallback leak into a context
+it wasn't written for. The first 8 characters of the task's own id are
+appended regardless, so two tasks slugifying to the same stem still land in
+different folders — and the identical short-id-prefix trick disambiguates
+two attachments on the same task that happen to share a filename, which a
+plain `filename` can't guarantee on its own.
+
+**An org-wide export nests task folders one level under a project
+folder** (or `no-project/` for a loose task); a project-scoped export skips
+that level, since the scope is already the folder root. **A task-level
+grant can reach further than its project's own** — the same gap
+`effective_task_level` documents elsewhere — so the builder resolves every
+project a *visible task* points at directly, not "projects this caller can
+see": the task screen's own breadcrumb already established that a task's
+project name is fair to show even without project-level access, and this
+is the identical case.
+
 ## Voice notes
 
 `lib/audio.ts` and `components/voice-note.tsx`. They ride the attachment
@@ -2269,6 +2368,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose
+./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

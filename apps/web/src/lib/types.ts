@@ -570,6 +570,17 @@ export type Notification = {
   created_at: string;
 };
 
+export type ExportStatus = "pending" | "ready" | "failed" | "expired";
+
+export type Export = {
+  id: string;
+  project_id: string | null;
+  status: ExportStatus;
+  file_size: number | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
 // --- organisation roles -------------------------------------------------------
 
 export const canManageMembers = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;

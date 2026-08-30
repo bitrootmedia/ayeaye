@@ -154,6 +154,35 @@ async def list_messages(
     return [(m, u) for m, u in rows]
 
 
+async def for_tasks(
+    db: AsyncSession, task_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[tuple[Message, User | None]]]:
+    """Every comment across many tasks' threads, in one statement — oldest
+    first within each. The batched-by-ids sibling `list_messages` doesn't
+    need: built for the data export, which would otherwise open one
+    conversation's thread at a time across however many tasks are in scope.
+
+    Removed comments are left out entirely rather than shown as a tombstone
+    — `remove()` already clears the body to "", so there is nothing of the
+    person's own words left to export.
+    """
+    if not task_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Conversation.task_id, Message, User)
+            .join(Message, Message.conversation_id == Conversation.id)
+            .outerjoin(User, User.id == Message.user_id)
+            .where(Conversation.task_id.in_(task_ids), Message.deleted_at.is_(None))
+            .order_by(Conversation.task_id, Message.id)
+        )
+    ).all()
+    grouped: dict[uuid.UUID, list[tuple[Message, User | None]]] = {}
+    for task_id, message, user in rows:
+        grouped.setdefault(task_id, []).append((message, user))
+    return grouped
+
+
 async def post(
     db: AsyncSession,
     ctx: OrgContext,

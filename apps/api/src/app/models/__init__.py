@@ -7,6 +7,7 @@ from app.models.conversation import (
     Message,
     MessageRead,
 )
+from app.models.export import Export
 from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
@@ -38,6 +39,7 @@ __all__ = [
     "Attachment",
     "Message",
     "MessageRead",
+    "Export",
     "LoginEvent",
     "MfaBackupCode",
     "MfaTotpDevice",

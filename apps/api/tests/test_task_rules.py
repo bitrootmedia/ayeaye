@@ -301,4 +301,7 @@ def test_notification_kinds_are_a_closed_set():
         # together in one notification, so there's nothing for a second kind
         # to distinguish.
         "daily_summary",
+        # A data export finished — success and failure share this one kind,
+        # distinguished by the notification's own title/body.
+        "export_ready",
     }

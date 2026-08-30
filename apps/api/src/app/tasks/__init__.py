@@ -12,6 +12,7 @@ from taskiq.schedule_sources import LabelScheduleSource
 from app.tasks import (
     daily_summary,  # noqa: F401  registers sweep_daily_summaries
     deadlines,  # noqa: F401  registers sweep_deadlines
+    exports,  # noqa: F401  registers build_export, sweep_expired_exports
     invites,  # noqa: F401  registers send_invite_email
     notifications,  # noqa: F401  registers send_notification_email
     recurrence,  # noqa: F401  registers sweep_recurring_tasks
@@ -33,6 +34,7 @@ __all__ = [
     "scheduler",
     "daily_summary",
     "deadlines",
+    "exports",
     "invites",
     "notifications",
     "recurrence",

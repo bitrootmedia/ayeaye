@@ -12,6 +12,7 @@ import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { AccessPanel } from "@/components/access-panel";
 import { CommentThread } from "@/components/comment-thread";
+import { ExportCard } from "@/components/export-card";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -228,6 +229,8 @@ export default function ProjectDetail() {
             teams={teams}
             onChanged={load}
           />
+
+          <ExportCard orgId={org.id} projectId={project.id} />
 
           {admin && (
             <DangerZone

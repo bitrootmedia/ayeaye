@@ -15,6 +15,7 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { CopyLink } from "@/components/copy-link";
+import { ExportCard } from "@/components/export-card";
 import { PageHeader } from "@/components/page-header";
 import { PendingBadge, RoleBadge } from "@/components/role-badge";
 import { Button } from "@/components/ui/button";
@@ -394,6 +395,8 @@ export default function OrganisationDetail() {
           )}
         </CardContent>
       </Card>
+
+      <ExportCard orgId={org.id} projectId={null} />
 
       {(canRename(org.role) || canDeleteOrg(org.role)) && (
         <OrgSettings org={org} onDone={reload} />

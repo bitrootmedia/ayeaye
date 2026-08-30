@@ -39,6 +39,11 @@ KIND_DEADLINE_TOMORROW = "task_deadline_tomorrow"
 # halves — they always arrive together in a single notification, never
 # separately, so there's nothing for two kinds to distinguish either.
 KIND_DAILY_SUMMARY = "daily_summary"
+# A data export (services/exports.py) finished building, one way or the
+# other — the same kind covers both success and failure, distinguished by
+# the notification's own title/body, the same reasoning KIND_DAILY_SUMMARY
+# already uses for its own two halves.
+KIND_EXPORT_READY = "export_ready"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_TASK_OWNER,
@@ -49,6 +54,7 @@ NOTIFICATION_KINDS = (
     KIND_REMINDER_DUE,
     KIND_DEADLINE_TOMORROW,
     KIND_DAILY_SUMMARY,
+    KIND_EXPORT_READY,
 )
 
 
