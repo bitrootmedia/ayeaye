@@ -1,4 +1,14 @@
-import { CopyIcon, KeyRoundIcon, PlaneIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
+import {
+  BellIcon,
+  CopyIcon,
+  KeyRoundIcon,
+  MailIcon,
+  PlaneIcon,
+  SendIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  WebhookIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -9,6 +19,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +31,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import type { Absence, AccessToken } from "@/lib/types";
+import {
+  NOTIFICATION_KIND_LABEL,
+  type Absence,
+  type AccessToken,
+  type NotificationChannel,
+} from "@/lib/types";
 
 /**
  * Your account: who you are, how to reach you, and when you aren't here.
@@ -141,6 +157,7 @@ export default function Account() {
         <TwoFactorCard />
         <OutOfOfficeCard />
         <AccessTokensCard />
+        <NotificationsSection />
       </div>
     </>
   );
@@ -606,6 +623,328 @@ function AccessTokensCard() {
           Start with read-only. A write token lets an assistant create tasks and comment as you —
           useful, and worth deciding on purpose.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Notification channels and their routing.
+ *
+ * Two cards sharing one list, lifted up here rather than each fetching its
+ * own — adding a webhook changes what the routing matrix has columns for,
+ * and two independent fetches would mean one card going stale until its own
+ * next reload caught up.
+ */
+function NotificationsSection() {
+  const [channels, setChannels] = useState<NotificationChannel[]>([]);
+
+  const load = useCallback(async () => {
+    setChannels(await api<NotificationChannel[]>("/me/notification-channels").catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <>
+      <NotificationChannelsCard channels={channels} onChanged={load} />
+      <NotificationRoutingCard channels={channels} onChanged={load} />
+    </>
+  );
+}
+
+const CHANNEL_ICON = { email: MailIcon, telegram: SendIcon, webhook: WebhookIcon } as const;
+
+function NotificationChannelsCard({
+  channels,
+  onChanged,
+}: {
+  channels: NotificationChannel[];
+  onChanged: () => Promise<void>;
+}) {
+  const toast = useToastManager();
+  const [deepLink, setDeepLink] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookLabel, setWebhookLabel] = useState("");
+  const [freshSecret, setFreshSecret] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const fail = (err: unknown, title: string) => {
+    const detail = err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+    toast.add({ title, description: detail });
+  };
+
+  const linkTelegram = async () => {
+    setBusy(true);
+    try {
+      const { deep_link } = await api<{ deep_link: string }>(
+        "/me/notification-channels/telegram/link-start",
+        { method: "POST" },
+      );
+      setDeepLink(deep_link);
+    } catch (err) {
+      fail(err, "Couldn't start the Telegram link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addWebhook = async () => {
+    if (!webhookUrl.trim() || busy) return;
+    setBusy(true);
+    try {
+      const made = await api<NotificationChannel & { secret: string }>(
+        "/me/notification-channels/webhook",
+        {
+          method: "POST",
+          body: JSON.stringify({ url: webhookUrl.trim(), label: webhookLabel.trim() }),
+        },
+      );
+      setFreshSecret(made.secret);
+      setWebhookUrl("");
+      setWebhookLabel("");
+      await onChanged();
+    } catch (err) {
+      fail(err, "Couldn't add that webhook");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (channel: NotificationChannel) => {
+    try {
+      await api(`/me/notification-channels/${channel.id}`, { method: "DELETE" });
+      await onChanged();
+    } catch (err) {
+      fail(err, `Couldn't remove ${channel.label}`);
+    }
+  };
+
+  const telegram = channels.find((c) => c.kind === "telegram");
+
+  return (
+    <Card className="lg:col-span-2" role="region" aria-label="Notification channels">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BellIcon className="size-4" />
+          Notification channels
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Where a notification can reach you, beyond the inbox here. Pick which kinds go where in
+          the table below.
+        </p>
+
+        {channels.map((channel) => {
+          const Icon = CHANNEL_ICON[channel.kind];
+          return (
+            <div
+              key={channel.id}
+              className="flex flex-wrap items-center gap-3 rounded-lg border p-2 pl-3"
+            >
+              <Icon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{channel.label}</span>
+              {channel.url && (
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                  {channel.url}
+                </span>
+              )}
+              {channel.kind === "telegram" && !channel.verified_at && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  Waiting for /start
+                </Badge>
+              )}
+              {channel.kind !== "email" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Remove ${channel.label}`}
+                  onClick={() => remove(channel)}
+                >
+                  <Trash2Icon />
+                </Button>
+              )}
+            </div>
+          );
+        })}
+
+        <div className="flex flex-wrap gap-2 border-t pt-4">
+          <Button variant="outline" disabled={busy} onClick={linkTelegram}>
+            <SendIcon />
+            {telegram ? "Re-link Telegram" : "Link Telegram"}
+          </Button>
+        </div>
+
+        {deepLink && (
+          <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+            <p className="text-sm font-medium">Open this link and tap Start in Telegram.</p>
+            <a
+              href={deepLink}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate font-mono text-xs text-primary underline"
+            >
+              {deepLink}
+            </a>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard.writeText(deepLink);
+                  toast.add({ title: "Copied" });
+                }}
+              >
+                <CopyIcon />
+                Copy link
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setDeepLink(null)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {freshSecret && (
+          <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+            <p className="text-sm font-medium">
+              Copy the signing secret now — it won&rsquo;t be shown again.
+            </p>
+            <code className="block overflow-x-auto rounded bg-background px-2 py-1 font-mono text-xs">
+              {freshSecret}
+            </code>
+            <p className="text-xs text-muted-foreground">
+              Every delivery carries{" "}
+              <code className="font-mono">X-Ayeaye-Signature: sha256=…</code>, signed over the raw
+              body with this secret.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard.writeText(freshSecret);
+                  toast.add({ title: "Copied" });
+                }}
+              >
+                <CopyIcon />
+                Copy secret
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setFreshSecret(null)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-end gap-2 border-t pt-4">
+          <div className="space-y-2">
+            <Label htmlFor="webhook-url">Webhook URL</Label>
+            <Input
+              id="webhook-url"
+              className="w-64"
+              placeholder="https://…"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addWebhook()}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="webhook-label">Label</Label>
+            <Input
+              id="webhook-label"
+              className="w-40"
+              placeholder="My relay"
+              value={webhookLabel}
+              onChange={(e) => setWebhookLabel(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addWebhook()}
+            />
+          </div>
+          <Button disabled={!webhookUrl.trim() || busy} onClick={addWebhook}>
+            <WebhookIcon />
+            Add webhook
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NotificationRoutingCard({
+  channels,
+  onChanged,
+}: {
+  channels: NotificationChannel[];
+  onChanged: () => Promise<void>;
+}) {
+  const toast = useToastManager();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const toggle = async (channel: NotificationChannel, kind: string, checked: boolean) => {
+    const key = `${channel.id}:${kind}`;
+    setBusy(key);
+    const next = checked
+      ? [...channel.enabled_kinds, kind]
+      : channel.enabled_kinds.filter((k) => k !== kind);
+    try {
+      await api(`/me/notification-channels/${channel.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled_kinds: next }),
+      });
+      await onChanged();
+    } catch {
+      toast.add({ title: "Couldn't update that", description: "Try again in a moment." });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (channels.length === 0) return null;
+
+  return (
+    <Card className="lg:col-span-2" role="region" aria-label="Notification routing">
+      <CardHeader>
+        <CardTitle>Which notification goes where</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="py-2 pr-4 font-normal">Notification</th>
+                {channels.map((c) => (
+                  <th key={c.id} className="px-2 py-2 text-center font-normal">
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(NOTIFICATION_KIND_LABEL).map(([kind, label]) => (
+                <tr key={kind} className="border-b last:border-0">
+                  <td className="py-2 pr-4">{label}</td>
+                  {channels.map((channel) => (
+                    <td key={channel.id} className="px-2 py-2">
+                      {/* A `<td>` is not a flex container and Base UI's
+                          Checkbox root is a plain inline `<span>` — without
+                          this wrapper it collapses to a hairline. See
+                          CLAUDE.md's Sheets section. */}
+                      <div className="flex justify-center">
+                        <Checkbox
+                          aria-label={`${label} via ${channel.label}`}
+                          checked={channel.enabled_kinds.includes(kind)}
+                          disabled={busy === `${channel.id}:${kind}`}
+                          onCheckedChange={(checked) => toggle(channel, kind, checked === true)}
+                        />
+                      </div>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   );

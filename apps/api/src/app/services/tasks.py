@@ -22,6 +22,7 @@ Five rules, from PLAN.md §5 and the product decisions in CLAUDE.md:
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from fastapi import HTTPException
 from fastapi import status as http_status
@@ -40,6 +41,7 @@ from app.models import (
 )
 from app.models.notification import (
     KIND_ACTION_REQUIRED,
+    KIND_ACTION_REQUIRED_CLEARED,
     KIND_TASK_CLOSED,
     KIND_TASK_OWNER,
     KIND_TASK_SHARED,
@@ -128,6 +130,28 @@ def should_notify_action_required(
     if incoming is None or incoming == previous:
         return False
     return incoming != actor
+
+
+def should_notify_handback(
+    *, previous: uuid.UUID | None, incoming: uuid.UUID | None, owner_id: uuid.UUID, actor: uuid.UUID
+) -> bool:
+    """The other half of rule 3: tell the owner when the ball is back in
+    their court. Fires only on the clearing transition — someone was
+    action-required and now nobody is — and, like the rule above, never
+    about yourself: an owner who clears their own task's action-required
+    already knows.
+    """
+    if previous is None or incoming is not None:
+        return False
+    return owner_id != actor
+
+
+def _as_decimal(hours: float | None) -> Decimal | None:
+    """`Decimal(str(x))`, not `Decimal(x)` — the indirection through `str`
+    is what avoids carrying a binary float's own rounding noise (`2.1`
+    becoming `2.100000000000000088817841970012523...`) into a column
+    someone will read back and expect to match what they typed."""
+    return None if hours is None else Decimal(str(hours)).quantize(Decimal("0.1"))
 
 
 def describe_status(status: str) -> str:
@@ -346,6 +370,8 @@ async def create(
     owner_user_id: uuid.UUID | None = None,
     action_required_user_id: uuid.UUID | None = None,
     due_on: date | None = None,
+    estimated_start_on: date | None = None,
+    estimated_hours: float | None = None,
 ) -> Task:
     """Create a task. **You own it unless you say otherwise.**"""
     title = title.strip()
@@ -381,6 +407,8 @@ async def create(
         action_required_user_id=action_required_user_id,
         created_by_user_id=user.id,
         due_on=due_on,
+        estimated_start_on=estimated_start_on,
+        estimated_hours=_as_decimal(estimated_hours),
     )
     db.add(task)
     await db.flush()
@@ -470,6 +498,7 @@ async def update(
 
     notify_action_required: uuid.UUID | None = None
     notify_new_owner: uuid.UUID | None = None
+    notify_handback = False
 
     if "title" in fields:
         title = (fields["title"] or "").strip()
@@ -525,6 +554,15 @@ async def update(
     if "position" in fields:
         task.position = int(fields["position"])
 
+    # Both purely informational planning fields — no task_events row, the
+    # same silent-set treatment `position` already gets, deliberately not
+    # the due_on/status/priority treatment: nothing reads these back to
+    # decide access, notify anyone, or drive a sweep.
+    if "estimated_start_on" in fields:
+        task.estimated_start_on = fields["estimated_start_on"]
+    if "estimated_hours" in fields:
+        task.estimated_hours = _as_decimal(fields["estimated_hours"])
+
     if "project_id" in fields and fields["project_id"] != task.project_id:
         new_project = fields["project_id"]
         if new_project is not None:
@@ -560,6 +598,10 @@ async def update(
         # names the same person again sends nothing.
         if should_notify_action_required(previous=previous, incoming=incoming, actor=user.id):
             notify_action_required = incoming
+        if should_notify_handback(
+            previous=previous, incoming=incoming, owner_id=task.owner_user_id, actor=user.id
+        ):
+            notify_handback = True
 
     if "owner_user_id" in fields and fields["owner_user_id"] != task.owner_user_id:
         # Handing a task over is not an edit — it decides who may close it.
@@ -599,6 +641,15 @@ async def update(
             user_id=notify_new_owner,
             kind=KIND_TASK_OWNER,
             title=f"{_who(user)} made you the owner of “{task.title}”",
+            link_path=link,
+        )
+    if notify_handback:
+        await notifications.notify(
+            db,
+            user_id=task.owner_user_id,
+            kind=KIND_ACTION_REQUIRED_CLEARED,
+            title=f"Back to you: “{task.title}”",
+            body="Nobody else needs to act on this anymore.",
             link_path=link,
         )
     return task

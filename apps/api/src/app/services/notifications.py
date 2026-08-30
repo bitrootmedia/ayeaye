@@ -1,14 +1,19 @@
 """Raising a notification.
 
 **Everything that notifies anyone goes through `notify()`.** One place that
-writes the row and queues the email, so there is exactly one answer to "why did
+writes the row and queues delivery, so there is exactly one answer to "why did
 this person get a message" and exactly one place to add rate limiting the day
 it's needed.
 
-The email is a *nudge*: it says something happened and where to look, and
-carries no detail. Two reasons, and the second is the one that matters — a
-task title in an inbox is a task title outside the access model, still sitting
-there after the access is revoked.
+Every nudge — email, Telegram, webhook — carries no detail beyond a title,
+an optional body and where to look. Two reasons, and the second is the one
+that matters — a task title in an inbox we don't control is a task title
+outside the access model, still sitting there after the access is revoked.
+
+**Delivery fans out to every channel enabled for this `kind`**, not "always
+email" — see `services/notification_channels.py`. That module owns the
+routing decision entirely; this one just asks it who to tell and queues
+whichever jobs come back.
 """
 
 import logging
@@ -18,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Notification, User
+from app.models.notification_channel import CHANNEL_EMAIL, CHANNEL_TELEGRAM, CHANNEL_WEBHOOK
 
 logger = logging.getLogger("app.services.notifications")
 
@@ -52,13 +58,24 @@ async def notify(
     try:
         # Imported here, not at module scope: app.tasks imports handlers which
         # import services, and a top-level import would close that loop.
+        from app.services import notification_channels as channels_service
+        from app.tasks.notification_channels import (
+            send_telegram_message,
+            send_webhook_notification,
+        )
         from app.tasks.notifications import send_notification_email
 
-        await send_notification_email.kiq(str(row.id))
+        for channel in await channels_service.channels_for(db, user_id, kind=kind):
+            if channel.kind == CHANNEL_EMAIL:
+                await send_notification_email.kiq(str(row.id))
+            elif channel.kind == CHANNEL_TELEGRAM:
+                await send_telegram_message.kiq(str(row.id), str(channel.id))
+            elif channel.kind == CHANNEL_WEBHOOK:
+                await send_webhook_notification.kiq(str(row.id), str(channel.id))
     except Exception as exc:
         # The worker being unreachable must not cost the in-app notification,
         # which is the part people actually read.
-        logger.warning("could not queue the email for notification %s: %s", row.id, exc)
+        logger.warning("could not queue delivery for notification %s: %s", row.id, exc)
     return row
 
 

@@ -34,6 +34,11 @@ dependencies = [
     # Renders the enrollment QR server-side (a data: URI in the response) so
     # the frontend needs no new dependency for it.
     "qrcode[pil]>=8.0",
+    # Was only transitive (via supertokens-python) until the Telegram Bot API
+    # and webhook notification channels needed an HTTP client of their own —
+    # promoted deliberately, the same "not stdlib, add it on purpose"
+    # treatment pyotp/qrcode got for MFA.
+    "httpx>=0.27",
 ]
 
 [dependency-groups]

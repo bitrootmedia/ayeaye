@@ -38,6 +38,9 @@ from app.schemas.tasks import (
     TaskAccessOut,
     TaskCloseIn,
     TaskCreate,
+    TaskDependenciesOut,
+    TaskDependencyIn,
+    TaskDependencyOut,
     TaskEventOut,
     TaskFileOut,
     TaskGrantIn,
@@ -45,12 +48,14 @@ from app.schemas.tasks import (
     TaskOut,
     TaskRecurrenceIn,
     TaskRecurrenceOut,
+    TaskSummaryOut,
     TaskUpdate,
 )
 from app.services import access as access_service
 from app.services import attachments as attachments_service
 from app.services import checklists as checklists_service
 from app.services import conversations as conversations_service
+from app.services import dependencies as dependencies_service
 from app.services import notes as notes_service
 from app.services import pins as pins_service
 from app.services import projects as projects_service
@@ -272,6 +277,8 @@ def _task_out(
         if task.action_required_user_id
         else None,
         due_on=task.due_on,
+        estimated_start_on=task.estimated_start_on,
+        estimated_hours=float(task.estimated_hours) if task.estimated_hours is not None else None,
         position=task.position,
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -443,6 +450,8 @@ async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: 
         if body.action_required_user_id
         else None,
         due_on=body.due_on,
+        estimated_start_on=body.estimated_start_on,
+        estimated_hours=body.estimated_hours,
     )
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
@@ -500,7 +509,22 @@ async def update_task(
         fields[name] = value
 
     task = await tasks_service.update(db, tctx, ctx, user, fields=fields)
-    fresh = await tasks_service.context_for(db, ctx, task_id, user)
+    try:
+        # Re-resolved rather than reused outright: project access can have
+        # changed via a different route mid-request, and an ownership
+        # handover in this same call means `tctx.is_owner` is stale.
+        fresh = await tasks_service.context_for(db, ctx, task_id, user)
+        level, is_owner = fresh.level, fresh.is_owner
+    except HTTPException:
+        # A caller can lose their own last route to a task by editing it —
+        # clearing action-required when that was their only way in is the
+        # common case. The edit still succeeded and they're still the one
+        # being told about it, so fall back to the access they used to make
+        # it, the same "don't re-resolve a level a successful commit just
+        # took away" reasoning the ownership-handover endpoint already
+        # documents for its own 204-no-body response — this is the
+        # identical shape, just with a body to still build.
+        level, is_owner = tctx.level, tctx.is_owner
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
@@ -509,10 +533,10 @@ async def update_task(
     recurrence = await _recurrence_for(db, [task], user, ctx)
     return _task_out(
         task,
-        fresh.level,
+        level,
         people=people,
         project_names=names,
-        is_owner=fresh.is_owner,
+        is_owner=is_owner,
         tags=tags,
         image_urls=images,
         pinned=pinned,
@@ -1133,6 +1157,70 @@ async def task_history(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, d
         )
         for event, actor in await tasks_service.list_events(db, task_id)
     ]
+
+
+# --- dependencies ----------------------------------------------------------------
+
+
+def _dependency_out(edge: "dependencies_service.DependencyEdge") -> TaskDependencyOut:
+    task = None
+    if edge.task is not None:
+        task = TaskSummaryOut(
+            id=str(edge.task.id),
+            title=edge.task.title,
+            status=edge.task.status,
+            is_open=edge.task.closed_at is None,
+        )
+    return TaskDependencyOut(id=str(edge.dependency_id), task=task)
+
+
+@router.get("/tasks/{task_id}/dependencies", response_model=TaskDependenciesOut)
+async def list_task_dependencies(
+    task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    await tasks_service.context_for(db, ctx, task_id, user)
+    depends_on, blocks = await dependencies_service.list_dependencies(db, ctx, user, task_id)
+    return TaskDependenciesOut(
+        depends_on=[_dependency_out(e) for e in depends_on],
+        blocks=[_dependency_out(e) for e in blocks],
+    )
+
+
+@router.post(
+    "/tasks/{task_id}/dependencies",
+    response_model=TaskDependencyOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_task_dependency(
+    task_id: uuid.UUID, body: TaskDependencyIn, ctx: CurrentOrg, user: CurrentUser, db: DbSession
+):
+    """`write` on this task; read on the one it's pointed at — see
+    `services/dependencies.py`. Purely informational: nothing about closing
+    this task changes because of it."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    row = await dependencies_service.add_dependency(
+        db, tctx, ctx, user, depends_on_task_id=uuid.UUID(body.depends_on_task_id)
+    )
+    other = await tasks_service.context_for(db, ctx, row.depends_on_task_id, user)
+    return _dependency_out(
+        dependencies_service.DependencyEdge(
+            dependency_id=row.id, other_task_id=row.depends_on_task_id, task=other.task
+        )
+    )
+
+
+@router.delete(
+    "/tasks/{task_id}/dependencies/{dependency_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def remove_task_dependency(
+    task_id: uuid.UUID,
+    dependency_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    await dependencies_service.remove_dependency(db, tctx, user, dependency_id)
 
 
 # --- files ---------------------------------------------------------------------

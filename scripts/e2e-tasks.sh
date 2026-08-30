@@ -94,6 +94,37 @@ patch /tmp/tc.jar $B/api/organisations/$OID/tasks/$LID '{"action_required_user_i
 ok "clearing notifies nobody"   "$(curl -s -b /tmp/td.jar $B/api/notifications | j "sum(1 for n in d if n['kind']=='task_action_required')")" "1"
 ok "and access goes with it"    "$(code -b /tmp/td.jar $B/api/organisations/$OID/tasks/$LID)" "404"
 
+echo "== handing it back: the owner is notified when action-required clears"
+BODY="{\"title\":\"Review the draft\",\"action_required_user_id\":\"$DUID\"}"
+HB=$(post /tmp/tc.jar $B/api/organisations/$OID/tasks "$BODY")
+HID=$(echo "$HB" | j "d['id']")
+ok "dave was asked"             "$(curl -s -b /tmp/td.jar $B/api/notifications | j "sum(1 for n in d if n['kind']=='task_action_required')")" "2"
+BODY='{"action_required_user_id": null}'
+# Dave clearing his OWN action-required was his only route into this task —
+# the response still has to be 200 with a real body, not a 404 on a commit
+# that already succeeded. Same class of bug the ownership-handover endpoint
+# already had to solve for itself.
+ok "dave clears it himself: 200, not 404" "$(code -b /tmp/td.jar -H 'Content-Type: application/json' -X PATCH $B/api/organisations/$OID/tasks/$HID -d "$BODY")" "200"
+ok "carol (the owner) is told"  "$(curl -s -b /tmp/tc.jar $B/api/notifications | j "sum(1 for n in d if n['kind']=='task_action_required_cleared')")" "1"
+ok "dave lost access with it"   "$(code -b /tmp/td.jar $B/api/organisations/$OID/tasks/$HID)" "404"
+# The owner clearing their own doesn't notify themselves.
+BODY="{\"title\":\"Self-assigned\",\"action_required_user_id\":\"$CUID\"}"
+SELF=$(post /tmp/tc.jar $B/api/organisations/$OID/tasks "$BODY" | j "d['id']")
+BEFORE=$(curl -s -b /tmp/tc.jar $B/api/notifications | j "sum(1 for n in d if n['kind']=='task_action_required_cleared')")
+patch /tmp/tc.jar $B/api/organisations/$OID/tasks/$SELF '{"action_required_user_id": null}' >/dev/null
+AFTER=$(curl -s -b /tmp/tc.jar $B/api/notifications | j "sum(1 for n in d if n['kind']=='task_action_required_cleared')")
+ok "clearing your own notifies nobody" "$([ "$BEFORE" = "$AFTER" ] && echo same)" "same"
+
+echo "== estimate fields: purely informational, round-trip cleanly"
+BODY='{"title":"Estimate this","estimated_start_on":"2026-09-01","estimated_hours":6.5}'
+EST=$(post /tmp/tc.jar $B/api/organisations/$OID/tasks "$BODY")
+EID=$(echo "$EST" | j "d['id']")
+ok "start date persisted"       "$(echo "$EST" | j "d['estimated_start_on']")" "2026-09-01"
+ok "hours persisted"            "$(echo "$EST" | j "d['estimated_hours']")" "6.5"
+ok "rounds to one decimal"      "$(patch /tmp/tc.jar $B/api/organisations/$OID/tasks/$EID '{"estimated_hours": 3.14}' | j "d['estimated_hours']")" "3.1"
+ok "both clear independently"   "$(patch /tmp/tc.jar $B/api/organisations/$OID/tasks/$EID '{"estimated_start_on": null}' | j "d['estimated_hours']")" "3.1"
+ok "…and the other still clears" "$(patch /tmp/tc.jar $B/api/organisations/$OID/tasks/$EID '{"estimated_hours": null}' | j "str(d['estimated_hours'])")" "None"
+
 echo "== per-task grants are additive"
 ok "grant read on the loose task" "$(code -b /tmp/tc.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$LID/access -d '{"user_id":"'$DUID'","level":"read"}')" "201"
 ok "dave reads it"              "$(curl -s -b /tmp/td.jar $B/api/organisations/$OID/tasks/$LID | j "d['access']")" "read"

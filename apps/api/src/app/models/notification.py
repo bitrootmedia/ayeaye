@@ -21,6 +21,10 @@ from app.db.base import Base
 # render properly. A unit test pins this tuple against the constraint so the
 # two can't drift.
 KIND_ACTION_REQUIRED = "task_action_required"
+# The other half of the loop: action-required, then cleared. Fires on the
+# owner, once, when nobody is action-required anymore — see
+# services/tasks.py's should_notify_handback.
+KIND_ACTION_REQUIRED_CLEARED = "task_action_required_cleared"
 KIND_TASK_OWNER = "task_owner_changed"
 KIND_TASK_CLOSED = "task_closed"
 KIND_TASK_SHARED = "task_shared"
@@ -46,6 +50,7 @@ KIND_DAILY_SUMMARY = "daily_summary"
 KIND_EXPORT_READY = "export_ready"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
+    KIND_ACTION_REQUIRED_CLEARED,
     KIND_TASK_OWNER,
     KIND_TASK_CLOSED,
     KIND_TASK_SHARED,

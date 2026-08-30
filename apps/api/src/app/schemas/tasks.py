@@ -25,6 +25,8 @@ class TaskCreate(BaseModel):
     owner_user_id: str | None = None
     action_required_user_id: str | None = None
     due_on: date | None = None
+    estimated_start_on: date | None = None
+    estimated_hours: float | None = Field(default=None, ge=0, le=9999.9)
 
 
 class TaskUpdate(BaseModel):
@@ -43,6 +45,8 @@ class TaskUpdate(BaseModel):
     owner_user_id: str | None = None
     action_required_user_id: str | None = None
     due_on: date | None = None
+    estimated_start_on: date | None = None
+    estimated_hours: float | None = Field(default=None, ge=0, le=9999.9)
     position: int | None = None
 
 
@@ -77,6 +81,8 @@ class TaskOut(BaseModel):
     owner: PersonOut | None
     action_required: PersonOut | None
     due_on: date | None
+    estimated_start_on: date | None
+    estimated_hours: float | None
     position: int
     created_at: datetime
     # "Last activity", not "last row update": a comment, a file, a tag or an
@@ -323,3 +329,35 @@ class TaskFileOut(BaseModel):
     from_comment: bool
     uploaded_by: PersonOut | None
     created_at: datetime
+
+
+class TaskSummaryOut(BaseModel):
+    """Just enough of another task to tell, at a glance, whether it's
+    blocking — no description, no owner, nothing this endpoint would have to
+    re-check access for beyond what `list_dependencies` already resolved."""
+
+    id: str
+    title: str
+    status: str
+    is_open: bool
+
+
+class TaskDependencyIn(BaseModel):
+    depends_on_task_id: str
+
+
+class TaskDependencyOut(BaseModel):
+    """One edge. `task` is `None` when the other side is invisible to the
+    caller — never its title or status, only that something is there."""
+
+    id: str
+    task: TaskSummaryOut | None
+
+
+class TaskDependenciesOut(BaseModel):
+    """Both directions. `depends_on` is the edit surface — what this task is
+    waiting on; `blocks` is read-only here — what's waiting on *this* task,
+    editable only from that task's own list."""
+
+    depends_on: list[TaskDependencyOut]
+    blocks: list[TaskDependencyOut]

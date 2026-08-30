@@ -39,15 +39,17 @@ import {
  * unremovable, which is exactly what it is.
  */
 export function AccessPanel({
-  orgId,
-  projectId,
+  basePath,
   access,
   members,
   teams,
   onChanged,
 }: {
-  orgId: string;
-  projectId: string;
+  /** `/organisations/{orgId}/projects/{projectId}` or
+   *  `/organisations/{orgId}/tasks/{taskId}` — both resources expose the
+   *  identical `POST/PATCH/DELETE {basePath}/access[/...]` shape, so this
+   *  panel doesn't need to know which one it's sharing. */
+  basePath: string;
   access: ProjectAccess;
   members: Member[];
   teams: Team[];
@@ -114,7 +116,7 @@ export function AccessPanel({
                     onChange={(level) =>
                       act(
                         () =>
-                          api(`/organisations/${orgId}/projects/${projectId}/access/${grant.id}`, {
+                          api(`${basePath}/access/${grant.id}`, {
                             method: "PATCH",
                             body: JSON.stringify({ level }),
                           }),
@@ -130,7 +132,7 @@ export function AccessPanel({
                     onClick={() =>
                       act(
                         () =>
-                          api(`/organisations/${orgId}/projects/${projectId}/access/${grant.id}`, {
+                          api(`${basePath}/access/${grant.id}`, {
                             method: "DELETE",
                           }),
                         "Access removed",
@@ -167,8 +169,7 @@ export function AccessPanel({
 
         {access.can_manage && (
           <ShareRow
-            orgId={orgId}
-            projectId={projectId}
+            basePath={basePath}
             busy={busy}
             people={members
               .filter((m) => m.status === "active" && m.user_id && !spokenFor.has(m.user_id))
@@ -263,16 +264,14 @@ function LevelSelect({
 }
 
 function ShareRow({
-  orgId,
-  projectId,
+  basePath,
   people,
   teams,
   busy,
   alreadyShared,
   onChanged,
 }: {
-  orgId: string;
-  projectId: string;
+  basePath: string;
   people: Person[];
   teams: Team[];
   busy: boolean;
@@ -294,7 +293,7 @@ function ShareRow({
     const [kind, id] = who.split(":");
     const label = items.find((i) => i.value === who)?.label ?? "them";
     try {
-      await api(`/organisations/${orgId}/projects/${projectId}/access`, {
+      await api(`${basePath}/access`, {
         method: "POST",
         body: JSON.stringify({
           [kind === "u" ? "user_id" : "team_id"]: id,

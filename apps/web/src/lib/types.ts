@@ -348,6 +348,10 @@ export type Task = {
   owner: Person | null;
   action_required: Person | null;
   due_on: string | null;
+  /** Both purely informational planning fields — neither feeds the access
+   *  model, the board, or any sweep the way `due_on` does. */
+  estimated_start_on: string | null;
+  estimated_hours: number | null;
   position: number;
   created_at: string;
   /** **Last activity, not last row update.** A comment, a file, a tag, an
@@ -609,6 +613,53 @@ export type SearchHit = {
   score: number;
   /** Closed or archived. Shown, struck through, not hidden. */
   inactive: boolean;
+};
+
+/** One dependency edge. `task` is `null` when the other side is invisible to
+ *  the caller — task-level access can differ between two people looking at
+ *  the same edge, and this never leaks a title or status past that. */
+export type TaskDependency = {
+  id: string;
+  task: { id: string; title: string; status: TaskStatus; is_open: boolean } | null;
+};
+
+export type TaskDependencies = {
+  /** What this task is waiting on — the edit surface. */
+  depends_on: TaskDependency[];
+  /** What's waiting on this task — read-only here; edited from that task's
+   *  own list instead. */
+  blocks: TaskDependency[];
+};
+
+/** Where a notification actually goes. Email always exists — provisioned on
+ *  first read — and is the only kind that can't be deleted, only narrowed. */
+export type NotificationChannel = {
+  id: string;
+  kind: "email" | "telegram" | "webhook";
+  label: string;
+  enabled_kinds: string[];
+  /** `null` for a Telegram link nobody has tapped `/start` on yet. */
+  verified_at: string | null;
+  created_at: string;
+  /** The webhook's own URL. `null` for email and Telegram. */
+  url: string | null;
+};
+
+/** The closed `NOTIFICATION_KINDS` set, human-labelled for the routing
+ *  matrix — the inbox itself renders every kind uniformly and never needed
+ *  one of these. */
+export const NOTIFICATION_KIND_LABEL: Record<string, string> = {
+  task_action_required: "Asked to act on a task",
+  task_action_required_cleared: "Handed back to you",
+  task_owner_changed: "Given ownership of a task",
+  task_closed: "A task you own was closed",
+  task_shared: "A task was shared with you",
+  project_shared: "A project was shared with you",
+  reminder_soon: "Reminder, the day before",
+  reminder_due: "Reminder, on the day",
+  task_deadline_tomorrow: "A task is due tomorrow",
+  daily_summary: "Daily summary",
+  export_ready: "A data export finished",
 };
 
 // --- time ------------------------------------------------------------------

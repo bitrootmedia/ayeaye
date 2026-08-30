@@ -20,6 +20,7 @@ from app.api.routers import (
     reminders,
     structure,
     tasks,
+    telegram_webhook,
     time,
     users,
 )
@@ -88,3 +89,8 @@ api_router.include_router(invites.router)
 # Data exports — a ZIP built in the worker, one directory per task. Every
 # read filters on the requester; see services/exports.py.
 api_router.include_router(exports.router)
+
+# Telegram's own callback for the notification-channel linking flow. No auth
+# dependency here at all — Telegram is not a browser and carries no session
+# cookie or access token, the same reasoning /health has for skipping one.
+api_router.include_router(telegram_webhook.router)

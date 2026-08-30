@@ -10,6 +10,7 @@ the organisation, and it is deliberately *not* visible to everyone in it. See
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     text,
@@ -108,6 +110,8 @@ EVENT_TIME_DELETED = "time_deleted"
 EVENT_PRIORITY_CHANGED = "priority_changed"
 EVENT_HIDDEN = "hidden"
 EVENT_UNHIDDEN = "unhidden"
+EVENT_DEPENDENCY_ADDED = "dependency_added"
+EVENT_DEPENDENCY_REMOVED = "dependency_removed"
 EVENT_KINDS = (
     EVENT_CREATED,
     EVENT_STATUS_CHANGED,
@@ -127,6 +131,8 @@ EVENT_KINDS = (
     EVENT_PRIORITY_CHANGED,
     EVENT_HIDDEN,
     EVENT_UNHIDDEN,
+    EVENT_DEPENDENCY_ADDED,
+    EVENT_DEPENDENCY_REMOVED,
 )
 
 
@@ -236,6 +242,13 @@ class Task(Base):
     )
 
     due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Planning fields, both optional and both purely informational — neither
+    # feeds the access model, the board, or any sweep the way `due_on` does.
+    estimated_start_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # One decimal place ("2.5 hours"), not a float — a number people type by
+    # eye shouldn't carry binary-rounding surprises the way a plain float can.
+    estimated_hours: Mapped[Decimal | None] = mapped_column(Numeric(6, 1), nullable=True)
 
     # A claim, not an audit trail — same discipline as `Reminder.notified_
     # ahead_at`. Set by one conditional UPDATE in the deadline sweep so a

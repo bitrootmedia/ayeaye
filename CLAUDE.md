@@ -331,7 +331,39 @@ Things that will bite:
 - **Handing over ownership can cost you the project.** `POST .../owner` returns
   204 with no body on purpose: re-resolving the caller's level to build a
   response 404s, on a commit that already succeeded. Task ownership (Phase 4)
-  has the identical shape — don't rediscover it.
+  has the identical shape — don't rediscover it. **It wasn't rediscovered in
+  time.** `update_task`'s `PATCH` handler *did* re-resolve the caller's level
+  after every edit, to build the response — and a member clearing their own
+  `action_required` (their only route into a loose task) got a 404 on a save
+  that had just succeeded: the mutation committed, the owner's notification
+  sent, and the response itself claimed the task no longer existed. Fixed by
+  wrapping the re-resolution in `try/except HTTPException`, falling back to
+  the pre-update level on failure — the same "don't re-resolve a level a
+  successful commit just took away" rule as the bullet above, just with a
+  body to still build rather than a 204 to skip. `scripts/e2e-tasks.sh` pins
+  it: clearing your own action-required now asserts `200`, not `404`.
+- **A task can be shared without sharing its project.** `TaskDetail.tsx`'s
+  "Who can see this" card is `components/access-panel.tsx` — the identical
+  component `ProjectDetail.tsx` already used — reused, not duplicated.
+  Generalizing it took one prop: `projectId: string` became
+  `basePath: string` (the caller passes
+  `` `/organisations/{orgId}/projects/{projectId}` `` or
+  `` `/organisations/{orgId}/tasks/{taskId}` ``), and the three URL template
+  literals inside it (share, change level, revoke) read `${basePath}/access...`
+  instead of rebuilding the project path by hand. The `access` prop needed no
+  type change at all: `TaskAccess` is a strict structural superset of
+  `ProjectAccess` (same four fields, plus `action_required`, `project_name`,
+  `inherits_from_project`), and TypeScript accepts a wider-typed variable
+  wherever the narrower type is expected — excess-property checks only fire
+  on object literals, never on variables — so the panel stays typed against
+  `ProjectAccess` and a task's own access state passes straight through with
+  no cast. The task screen's own `TaskAccessCard` kept only what
+  `AccessPanel` doesn't know about — the hidden-task banner, the
+  action-required row, and the "Anyone who can see {project}" sentence — and
+  stopped rendering owner/grants/admins itself. `scripts/e2e-task-sharing.sh`
+  is the dedicated regression: a colleague with zero project access gains
+  exactly the one task they were granted, never the project it's filed in,
+  and a `read` grantee can't re-share it (sharing is `write`).
 
 ## Tasks
 
@@ -356,6 +388,91 @@ than showing one that 403s.
 is the whole rule: same person again → nothing, clearing → nothing, yourself →
 nothing. Every save resubmits the whole form, so a naive `if incoming: send`
 pings that person on every keystroke-save.
+
+**Clearing it notifies back, the symmetric other half.** The owner set
+someone as action-required because they were waiting on them; the moment
+that clears, the ball is back in the owner's court and they should hear
+about it without having to keep checking. `should_notify_handback` is the
+mirror of the rule above — fires only on the clearing transition (someone
+*was* action-required, now nobody is), never on setting it or moving it to
+someone else, and never notifies the owner about their own edit, the same
+"never about yourself" shape. It fires regardless of *who* clears it — the
+common case is the assignee marking themselves done, not the owner — which
+is exactly why the self-check is on the *owner*, not the *actor*: an owner
+clearing their own task's action-required already knows, but an assignee
+clearing it is news to the owner. `KIND_ACTION_REQUIRED_CLEARED` is one
+more entry in the closed `NOTIFICATION_KINDS` set (another CHECK-constraint
+migration, following 0019/0028's own pattern), and needed no frontend
+change — `Notifications.tsx` already renders every kind uniformly.
+
+**`estimated_start_on` and `estimated_hours` are purely informational.**
+Both optional, both on the task screen, and neither feeds anything else —
+not the access model, not the board, not a sweep, the way `due_on` does.
+That's also why setting or clearing either writes no `task_events` row: the
+same silent-set treatment `position` already gets, because nothing reads
+either field back to decide access, notify anyone, or drive a scheduler
+job. `estimated_hours` is `Numeric(6, 1)`, not a float — `_as_decimal()`
+goes through `Decimal(str(x))`, not `Decimal(x)`, specifically to avoid
+carrying a binary float's own rounding noise (`2.1` becoming
+`2.100000000000000088817841970012523...`) into a column someone will read
+back and expect to match what they typed. Deliberately *not* on
+`NewTaskDialog`: that dialog doesn't even capture `due_on` today, by design
+— title/description/status/priority/project only, so a quick add stays
+quick — and adding two more optional fields there would be the wrong kind
+of inconsistency to introduce for two fields with no urgency behind them.
+
+**"Depends on" is informational, and there is no enforcement to find.**
+`task_dependencies` (`models/task_dependency.py`, `services/dependencies.py`)
+records that one task is waiting on another — closing a task with open
+dependencies still works. The ask was visibility ("to see if it's not
+blocking"), not a gate, and this codebase doesn't invent enforcement beyond
+what's asked; a search for a `can_close` check against open dependencies
+will come up empty on purpose.
+
+- **You can only point a dependency at a task you can already open.** Adding
+  a link reuses `tasks_service.context_for` for the *other* task exactly the
+  way every other cross-task reference in this codebase already does — there
+  is no second access path written in `services/dependencies.py`. A task
+  neither side can see fails the ordinary way: 404.
+- **The graph stays a DAG, checked with one recursive query, not a Python
+  walk.** Before inserting `task_id → depends_on_task_id`,
+  `_reachable_from()` walks forward through existing edges starting at
+  `depends_on_task_id` — everything it already (transitively) depends on. If
+  `task_id` turns up in that set, the new edge would close a cycle and is
+  refused with 409. One statement regardless of how many hops the cycle
+  would take to close, the same "one statement, not a query per hop"
+  discipline every list endpoint in this codebase follows once a graph is
+  involved. `scripts/e2e-dependencies.sh` proves it past the trivial
+  reversed-edge case with a three-node cycle (A→B, B→C, C→A refused).
+- **Reads are two-directional; the edit surface is one.**
+  `GET .../tasks/{id}/dependencies` returns both `depends_on` (what blocks
+  this task — add/remove lives here) and `blocks` (the reverse query, free
+  off the same table — what's waiting on *this* task, read-only on this
+  screen, because editing it means editing the *other* task's own list).
+- **Each referenced task resolves through the caller's own visibility, not
+  the requester's.** Task-level access can differ between two people looking
+  at the same edge — the same "task access has six routes in" fact the
+  bullets below explain. `list_dependencies` batches this as one visibility
+  check across every id on the page (`access.visible_task_ids_stmt`, the
+  identical builder the dashboard's Pinned card re-applies for the same
+  reason), never a lookup per row. A dependency the viewer can't see comes
+  back with `task: null`; the frontend renders it as a muted "a task you
+  don't have access to" row and never shows a title or status for it.
+- **Every add and remove writes a `task_events` row** — `dependency_added` /
+  `dependency_removed`, two more entries in the closed `EVENT_KINDS` set,
+  needing the same CHECK-constraint drop/recreate migration every other
+  addition to it already uses.
+- **The frontend picker is deliberately not `EntityPicker`.**
+  `components/task-search-picker.tsx` calls the existing
+  `GET /organisations/{id}/search` endpoint per keystroke — already
+  access-scoped and fuzzy, no new backend search path — because
+  `EntityPicker` filters an already-fully-fetched array client-side, which
+  is fine for people or projects and wrong for "every task in the
+  organisation." It reuses `search-palette.tsx`'s debounced,
+  sequence-checked, abortable request shape (stale out-of-order answers and
+  a mid-flight "nothing found" are both real bugs on a real connection) but
+  keeps `EntityPicker`'s `Popover.Portal` shell, because a field inside a
+  `Card` needs the identical clipping fix either way.
 
 Task access has **six routes in**, three more than a project — see
 `effective_task_level`. Two worth knowing:
@@ -1753,6 +1870,103 @@ and a back-and-forth is one email per line, too lazy and the notification
 nobody got is the one that mattered — so `scripts/e2e-comments.sh` tests both
 sides of it.
 
+## Notification channels
+
+Read `services/notification_channels.py`. Telegram and a generic webhook,
+alongside email — configurable per notification kind, from `/account`.
+
+**Email becomes a row in `notification_channels`, not a special case beside
+it.** Every user gets one, auto-provisioned lazily the first time anything
+needs to notify them (`get_or_create_email_channel`, the identical lazy
+`get_or_create` shape `services/users.py` already uses for the local user
+row) — not at signup, so existing accounts pick it up the moment they're
+next notified rather than needing a backfill. `notify()` changed from
+"always email" to "deliver to every channel with this `kind` enabled",
+which is what makes adding Telegram and webhook *routing*, not two new
+special cases bolted beside the old unconditional email send. A fresh
+channel starts with every `NOTIFICATION_KINDS` value enabled — matching
+today's "email always sends" default, so nobody who never opens the
+settings screen notices anything changed.
+
+**The webhook secret is stored in plaintext, deliberately — the one place
+in this codebase a credential isn't hashed at rest, and that's a
+considered exception, not an oversight.** A personal access token
+(`services/tokens.py`) is a bearer credential the server only ever
+*verifies*: hash it, and the server never needs the plaintext again. A
+webhook signing secret is the opposite — a symmetric key the server has to
+*use*, computing a fresh HMAC on every delivery, for the life of the
+channel. There is no way to do that from a one-way hash. What makes this
+an acceptable trade: the secret only ever signs nudges that carry no task
+detail by design (the same "carries no detail" rule `services/
+notifications.py`'s own docstring has always stated), it's scoped to one
+channel and revocable independently of every other credential on the
+account, and it is never sent back to the browser after creation — only a
+preview (its own URL), the same "which one do I revoke" purpose
+`PersonalAccessToken.prefix` already serves. Every delivery carries
+`X-Ayeaye-Signature: sha256=...`, the same header shape GitHub and Stripe
+already taught people to expect.
+
+**Neither Telegram nor webhook gets the email job's per-notification
+idempotency flag, and that's a scope trade, not an omission.**
+`Notification.emailed` works because there's exactly one email channel per
+person — one flag on the notification row is enough to say "this went."
+Telegram and webhook are N channels per person, and a flag per
+(notification, channel) pair was traded away: a webhook receiver is
+expected to dedupe on the notification id in its own payload, the
+identical at-least-once contract GitHub and Stripe already teach people to
+expect, and a duplicate Telegram message on a worker retry is a minor
+cosmetic cost, not a correctness one.
+
+**Telegram linking is a two-step handshake through a pending channel row,
+not a second table.** `POST /me/notification-channels/telegram/link-start`
+deletes any existing Telegram channel for that person (linked or still
+pending — a person has one Telegram account, and starting a fresh link is
+how they'd re-point it at a different chat) and inserts a new one with
+`verified_at IS NULL` and a one-time code in `config.link_code`. Tapping
+`/start {code}` in the bot hits the new top-level `POST /api/telegram/
+webhook` route — not organisation-scoped, not user-authenticated, because
+Telegram has no session cookie and no idea what either concept is — which
+resolves the code, sets `config.chat_id` and stamps `verified_at`. The
+code expires after `LINK_CODE_TTL` (15 minutes); an expired or unknown
+code is not an error, just nothing to do, and the route always 200s
+regardless — Telegram retries a webhook call that doesn't, and there is
+nothing here worth retrying.
+
+**Two partial unique indexes, not a plain one, because webhook is the odd
+one out.** `uq_notification_channels_user_email` and `_user_telegram` are
+both `UNIQUE (user_id) WHERE kind = '...'` — at most one of each, the same
+"a person has one inbox and one Telegram account" reasoning the linking
+flow already relies on. Webhook carries no such index: several are
+expected, one relay per destination. `get_or_create_email_channel`'s race
+recovery — catch the `IntegrityError` from two concurrent `notify()` calls
+provisioning email at once, then re-read what the winner inserted — is the
+identical shape `tasks_service.grant()` already uses for its own
+unique-grant race.
+
+**`httpx` is now a direct dependency**, not just transitive via
+supertokens-python — `services/telegram.py`'s Bot API calls and the
+webhook delivery job both need a real HTTP client. `TELEGRAM_BOT_TOKEN` /
+`TELEGRAM_BOT_USERNAME` are both optional and empty by default, the
+identical "optional infrastructure" contract `SMTP_HOST` already holds —
+every function in `services/telegram.py` becomes a silent no-op with an
+empty token, and `link-start` refuses with 422 rather than minting a code
+for a bot that can't be reached, so the browser gets an honest reason
+rather than a link nobody can ever open. Registering the webhook itself
+(`setWebhook`, pointed at `{SITE_URL}/api/telegram/webhook`) is a one-time
+operator step — see the README — because it needs `SITE_URL` to already
+be a real HTTPS address Telegram's own servers can reach.
+
+**`scripts/e2e-notification-channels.sh` proves the webhook path against a
+real local HTTP listener** standing in for a receiver, the same "throwaway
+local server standing in for a provider" precedent `diagnose.sh`'s own
+CORS check already uses — and verifies the HMAC byte for byte, not just
+"did a request arrive." Telegram's own Bot API isn't reachable from a dev
+stack without a real bot token, so its linking logic is proved by calling
+`services/notification_channels.py` directly rather than through the
+router's `settings.telegram_bot_username` gate, alongside the HTTP-facing
+parts that need no bot at all: the webhook route surviving a malformed
+update, an irrelevant message, and a stale code without ever 500ing.
+
 ## The day planner
 
 Read the `services/planner.py` docstring. A personal board over the tasks a
@@ -2369,6 +2583,9 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose
 ./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
+./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
+./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
+./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed webhook delivery
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

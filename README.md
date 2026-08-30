@@ -207,6 +207,30 @@ is a supported way to run this, not a broken one:
 Set the `SMTP_*` variables when you want real mail. `MAIL_FROM` has to be on a
 domain your provider has verified or every message is rejected at submission.
 
+## Telegram notifications are optional too
+
+Leave `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` empty and the feature is
+fully inert — nobody can link a Telegram chat, and "Link Telegram" on the
+Account screen tells them why rather than offering a dead link. To turn it on:
+
+1. **Make a bot.** Message [@BotFather](https://t.me/BotFather) on Telegram,
+   `/newbot`, and copy the token it gives you into `TELEGRAM_BOT_TOKEN`. Put
+   the bot's username (no leading `@`) into `TELEGRAM_BOT_USERNAME` — that's
+   what builds the `t.me/<username>?start=...` link people tap to link.
+2. **Point Telegram at your server**, once, from a terminal that can reach the
+   internet:
+   ```
+   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<SITE_URL>/api/telegram/webhook"
+   ```
+   This needs a real `https://` `SITE_URL` — Telegram's own servers have to be
+   able to reach it, so it doesn't work against `http://localhost`.
+3. Restart the stack (`docker compose up -d`) so `api` and `worker` pick up
+   the new variables. From Account → Notification channels, "Link Telegram"
+   now opens a real deep link.
+
+A generic webhook needs no configuration at all — anyone can add one from the
+same screen, with the signing secret shown once at creation.
+
 ## Your own assistant
 
 Anyone with an account can connect an MCP client. Nothing to configure on the

@@ -15,9 +15,11 @@ import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom
 import { ApiError, api } from "@/api";
 import { useRealtime } from "@/hooks/use-realtime";
 import type { Shell } from "@/App";
+import { AccessPanel } from "@/components/access-panel";
 import { ChecklistsPanel } from "@/components/checklist-panel";
 import { SheetsPanel } from "@/components/sheet-panel";
 import { CommentThread } from "@/components/comment-thread";
+import { DependenciesPanel } from "@/components/dependencies-panel";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
 import { PriorityGlyph } from "@/components/priority";
@@ -67,6 +69,7 @@ import {
   type Task,
   type TaskAccess,
   type TaskEvent,
+  type Team,
   type TaskPriority,
   type TaskStatus,
 } from "@/lib/types";
@@ -82,6 +85,7 @@ export default function TaskDetail() {
   const [accessInfo, setAccessInfo] = useState<TaskAccess | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [gone, setGone] = useState(false);
   // Comments can carry files, so posting one has to reach the Files panel.
@@ -91,6 +95,7 @@ export default function TaskDetail() {
   // `load()`.
   const [checklistsKey, setChecklistsKey] = useState(0);
   const [sheetsKey, setSheetsKey] = useState(0);
+  const [dependenciesKey, setDependenciesKey] = useState(0);
   // Type-the-title-to-confirm — the same bar as deleting an organisation or a
   // project, and for the same reason: a bare "Are you sure?" is exactly the
   // dialog a habitual double-click sails through.
@@ -102,16 +107,18 @@ export default function TaskDetail() {
     try {
       const t = await api<Task>(`/organisations/${orgId}/tasks/${taskId}`);
       setTask(t);
-      const [acc, evs, ms, ps] = await Promise.all([
+      const [acc, evs, ms, ps, tms] = await Promise.all([
         api<TaskAccess>(`/organisations/${orgId}/tasks/${taskId}/access`),
         api<TaskEvent[]>(`/organisations/${orgId}/tasks/${taskId}/events`),
         api<Member[]>(`/organisations/${orgId}/members`),
         api<Project[]>(`/organisations/${orgId}/projects`),
+        api<Team[]>(`/organisations/${orgId}/teams`),
       ]);
       setAccessInfo(acc);
       setEvents(evs);
       setMembers(ms);
       setProjects(ps);
+      setTeams(tms);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setGone(true);
     }
@@ -136,11 +143,12 @@ export default function TaskDetail() {
       (event) => {
         if (event.type === "task" && event.task_id === taskId) {
           void load();
-          // The Files, Checklists and Sheets panels fetch separately, so
-          // each needs its own nudge.
+          // The Files, Checklists, Sheets and Dependencies panels fetch
+          // separately, so each needs its own nudge.
           setFilesKey((k) => k + 1);
           setChecklistsKey((k) => k + 1);
           setSheetsKey((k) => k + 1);
+          setDependenciesKey((k) => k + 1);
         }
       },
       [taskId, load],
@@ -365,6 +373,13 @@ export default function TaskDetail() {
             refreshKey={sheetsKey}
           />
 
+          <DependenciesPanel
+            orgId={org.id}
+            taskId={task.id}
+            canEdit={editable}
+            refreshKey={dependenciesKey}
+          />
+
           {/* Above the thread: the files are part of what the task *is*, and
               a panel below a conversation that grows all day is a panel
               nobody finds twice. */}
@@ -496,6 +511,41 @@ export default function TaskDetail() {
                   onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
                 />
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <Label htmlFor="estimated-start">Est. start</Label>
+                  <Input
+                    id="estimated-start"
+                    type="date"
+                    disabled={!editable}
+                    value={task.estimated_start_on ?? ""}
+                    onChange={(e) =>
+                      patch(
+                        { estimated_start_on: e.target.value || null },
+                        "Estimated start updated",
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="estimated-hours">Est. hours</Label>
+                  <Input
+                    id="estimated-hours"
+                    type="number"
+                    min={0}
+                    max={9999.9}
+                    step={0.1}
+                    disabled={!editable}
+                    value={task.estimated_hours ?? ""}
+                    onChange={(e) =>
+                      patch(
+                        { estimated_hours: e.target.value === "" ? null : Number(e.target.value) },
+                        "Estimated hours updated",
+                      )
+                    }
+                  />
+                </div>
+              </div>
               <RecurrenceControl orgId={org.id} task={task} editable={editable} onChanged={load} />
             </CardContent>
           </Card>
@@ -573,6 +623,19 @@ export default function TaskDetail() {
                     )
                 : undefined
             }
+          />
+
+          {/* Share this one task without sharing its whole project — the
+              same component ProjectDetail's own access card already uses,
+              pointed at the task's identical POST/PATCH/DELETE .../access
+              shape. Sharing stays set up while hidden (see TaskAccessCard's
+              own copy above), so this isn't gated on task.is_hidden. */}
+          <AccessPanel
+            basePath={`/organisations/${org.id}/tasks/${task.id}`}
+            access={accessInfo}
+            members={members}
+            teams={teams}
+            onChanged={load}
           />
 
           {accessInfo.can_manage && (
@@ -877,16 +940,18 @@ function TaskAccessCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Who can see this</CardTitle>
+        <CardTitle>Visibility</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {/* While hidden, the list below is not the answer to the question this
-            card asks — so the card says so first and greys the list out,
-            rather than showing names of people who currently see nothing. */}
+        {/* The full list of who — owner, grants, admins — is the "Who can
+            see this" card below, not repeated here. This card is only the
+            things that aren't a plain grant: hidden overrides everything,
+            a project passes its own access down, and action-required is a
+            route in of its own. */}
         {task.is_hidden ? (
           <p className="text-muted-foreground">
             <span className="font-medium text-foreground">Only you.</span> Hiding overrides
-            everything below — this task is invisible to the people listed, to anyone in its
+            everything else — this task is invisible to anyone it's shared with, to anyone in its
             project, and to the organisation&rsquo;s admins.
           </p>
         ) : access.inherits_from_project ? (
@@ -906,27 +971,16 @@ function TaskAccessCard({
           </p>
         ) : (
           <p className="text-muted-foreground">
-            This task has no project, so only the people below can see it — not everyone in the
-            organisation.
+            This task has no project, so only the people it's shared with can see it — not
+            everyone in the organisation.
           </p>
         )}
 
-        <dl className={`space-y-1 ${task.is_hidden ? "opacity-50" : ""}`}>
-          <Row label="Owner" value={personName(access.owner)} />
-          {access.action_required && (
+        {access.action_required && (
+          <dl className={task.is_hidden ? "opacity-50" : ""}>
             <Row label="Action required" value={personName(access.action_required)} />
-          )}
-          {access.grants.map((grant) => (
-            <Row
-              key={grant.id}
-              label={grant.team ? `${grant.team.name} (team)` : personName(grant.user)}
-              value={LEVEL_LABEL[grant.level]}
-            />
-          ))}
-          {access.organisation_admins.map((admin) => (
-            <Row key={admin.id} label={personName(admin)} value="Organisation admin" muted />
-          ))}
-        </dl>
+          </dl>
+        )}
 
         {onToggleHidden && (
           <div className="space-y-2 border-t pt-3">

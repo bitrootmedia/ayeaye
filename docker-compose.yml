@@ -115,6 +115,10 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_START_TLS: ${SMTP_START_TLS:-true}
       MAIL_FROM: ${MAIL_FROM:-}
+      # Both empty disables Telegram entirely — same "optional infra"
+      # contract as SMTP_HOST above.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -158,6 +162,9 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_START_TLS: ${SMTP_START_TLS:-true}
       MAIL_FROM: ${MAIL_FROM:-}
+      # The worker is what actually calls the Telegram Bot API.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

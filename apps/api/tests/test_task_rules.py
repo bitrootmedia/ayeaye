@@ -22,6 +22,7 @@ from app.services.tasks import (
     describe_status,
     is_valid_status,
     should_notify_action_required,
+    should_notify_handback,
 )
 
 A, B, C = (uuid.uuid4() for _ in range(3))
@@ -109,6 +110,33 @@ def test_putting_it_on_yourself_notifies_nobody():
 
 def test_moving_it_to_someone_else_notifies_them():
     assert should_notify_action_required(previous=B, incoming=C, actor=A)
+
+
+# --- the other half: notify the owner on handback -----------------------------
+
+
+def test_clearing_it_notifies_the_owner():
+    assert should_notify_handback(previous=B, incoming=None, owner_id=C, actor=A)
+
+
+def test_the_owner_clearing_their_own_notifies_nobody():
+    """The common case: an owner clears action-required on their own task.
+    They already know."""
+    assert not should_notify_handback(previous=B, incoming=None, owner_id=A, actor=A)
+
+
+def test_setting_it_does_not_trigger_a_handback():
+    assert not should_notify_handback(previous=None, incoming=B, owner_id=C, actor=A)
+
+
+def test_moving_it_to_someone_else_is_not_a_handback():
+    """Still with someone — just not this someone. The new assignee already
+    gets their own notification from should_notify_action_required."""
+    assert not should_notify_handback(previous=B, incoming=C, owner_id=A, actor=A)
+
+
+def test_there_was_nothing_to_hand_back():
+    assert not should_notify_handback(previous=None, incoming=None, owner_id=C, actor=A)
 
 
 # --- task access: the routes in ------------------------------------------------
@@ -286,6 +314,9 @@ def test_notification_kinds_are_a_closed_set():
     somebody."""
     assert set(NOTIFICATION_KINDS) == {
         "task_action_required",
+        # The other half of the loop — nobody is action-required anymore,
+        # notify the owner it's back with them.
+        "task_action_required_cleared",
         "task_owner_changed",
         "task_closed",
         "task_shared",

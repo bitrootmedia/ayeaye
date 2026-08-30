@@ -222,8 +222,7 @@ export default function ProjectDetail() {
 
         <div className="space-y-4">
           <AccessPanel
-            orgId={org.id}
-            projectId={project.id}
+            basePath={`/organisations/${org.id}/projects/${project.id}`}
             access={accessInfo}
             members={members}
             teams={teams}

@@ -12,6 +12,7 @@ from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
 from app.models.notification import Notification
+from app.models.notification_channel import NotificationChannel
 from app.models.organisation import Organisation, OrganisationMember
 from app.models.personal_note import PersonalNote
 from app.models.pin import TaskPin
@@ -28,6 +29,7 @@ from app.models.structure import (
 )
 from app.models.tag import Tag, TaskTag
 from app.models.task import Task, TaskEvent, TaskGrant
+from app.models.task_dependency import TaskDependency
 from app.models.task_series import TaskSeries
 from app.models.time_entry import TimeEntry
 from app.models.token import PersonalAccessToken
@@ -44,6 +46,7 @@ __all__ = [
     "MfaBackupCode",
     "MfaTotpDevice",
     "Notification",
+    "NotificationChannel",
     "Organisation",
     "PersonalAccessToken",
     "OutOfOffice",
@@ -58,6 +61,7 @@ __all__ = [
     "Task",
     "TaskChecklist",
     "TaskChecklistItem",
+    "TaskDependency",
     "TaskEvent",
     "TaskGrant",
     "TaskNote",

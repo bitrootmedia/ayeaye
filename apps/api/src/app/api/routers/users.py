@@ -14,8 +14,10 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.types import RecipeUserId
 
 from app.api.deps import CurrentUser, DbSession
+from app.core.config import settings
 from app.security.authn import MfaPendingSession, mark_mfa_satisfied
 from app.services import mfa as mfa_service
+from app.services import notification_channels as channels_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
 
@@ -285,3 +287,109 @@ async def redeem_backup_code(body: BackupCodeRedeem, session: MfaPendingSession,
     await mark_mfa_satisfied(session)
     remaining = await mfa_service.codes_remaining(db, user)
     return BackupCodeRedeemed(codes_remaining=remaining)
+
+
+# --- notification channels --------------------------------------------------------
+
+
+class NotificationChannelOut(BaseModel):
+    id: str
+    kind: str
+    label: str
+    enabled_kinds: list[str]
+    # NULL for a Telegram link nobody has tapped `/start` on yet. Always set
+    # for email and webhook — there's nothing to verify for either.
+    verified_at: datetime | None
+    created_at: datetime
+    # The webhook's own URL, never its secret. `None` for email and Telegram.
+    url: str | None = None
+
+
+class NotificationChannelUpdate(BaseModel):
+    enabled_kinds: list[str]
+
+
+class WebhookChannelIn(BaseModel):
+    url: str
+    label: str = ""
+
+
+class WebhookChannelCreated(NotificationChannelOut):
+    # Returned **once**, at creation — see services/notification_channels.py
+    # for why the secret itself is stored in plaintext even though this is
+    # shown only this one time, the identical UX `TokenCreated` uses for a
+    # very different reason.
+    secret: str
+
+
+class TelegramLinkOut(BaseModel):
+    deep_link: str
+
+
+def _channel_out(row) -> NotificationChannelOut:
+    return NotificationChannelOut(
+        id=str(row.id),
+        kind=row.kind,
+        label=row.label,
+        enabled_kinds=list(row.enabled_kinds),
+        verified_at=row.verified_at,
+        created_at=row.created_at,
+        url=row.config.get("url") if row.kind == "webhook" else None,
+    )
+
+
+@router.get("/me/notification-channels", response_model=list[NotificationChannelOut])
+async def list_notification_channels(user: CurrentUser, db: DbSession):
+    """Every destination a notification can reach — email is provisioned on
+    first read if it doesn't exist yet, so this list is never missing the
+    one channel everyone effectively already has."""
+    return [_channel_out(c) for c in await channels_service.mine(db, user)]
+
+
+@router.patch("/me/notification-channels/{channel_id}", response_model=NotificationChannelOut)
+async def update_notification_channel(
+    channel_id: uuid.UUID,
+    body: NotificationChannelUpdate,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """The per-kind routing toggle: which notification kinds this channel
+    receives."""
+    row = await channels_service.update_enabled_kinds(
+        db, user, channel_id, enabled_kinds=body.enabled_kinds
+    )
+    return _channel_out(row)
+
+
+@router.delete("/me/notification-channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification_channel(channel_id: uuid.UUID, user: CurrentUser, db: DbSession):
+    """Unlink Telegram, or remove a webhook. Email can be narrowed to
+    nothing but not removed outright — `services/notification_channels.py`
+    refuses that with 422."""
+    await channels_service.delete_channel(db, user, channel_id)
+
+
+@router.post(
+    "/me/notification-channels/webhook",
+    response_model=WebhookChannelCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_webhook_channel(body: WebhookChannelIn, user: CurrentUser, db: DbSession):
+    row, secret = await channels_service.create_webhook(db, user, url=body.url, label=body.label)
+    return WebhookChannelCreated(**_channel_out(row).model_dump(), secret=secret)
+
+
+@router.post("/me/notification-channels/telegram/link-start", response_model=TelegramLinkOut)
+async def start_telegram_link(user: CurrentUser, db: DbSession):
+    """A deep link that opens the bot with a one-time code pre-filled. Tapping
+    `/start` in Telegram is what finishes the link — see
+    `api/routers/telegram_webhook.py`."""
+    if not settings.telegram_bot_username:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Telegram notifications aren't configured on this installation",
+        )
+    code = await channels_service.start_telegram_link(db, user)
+    return TelegramLinkOut(
+        deep_link=f"https://t.me/{settings.telegram_bot_username}?start={code}"
+    )

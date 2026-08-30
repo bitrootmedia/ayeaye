@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     # Falls back to a brand-derived address when unset — see mailer.from_address().
     mail_from: str = ""
 
+    # --- notification channels: Telegram --------------------------------
+    # Empty disables the feature entirely, the identical "optional
+    # infrastructure" contract SMTP_HOST already holds — nothing hard-depends
+    # on a bot existing. Get a token from @BotFather; the username (without
+    # the leading @) is what builds the `t.me/{username}?start=...` deep
+    # link. See services/notification_channels.py and CLAUDE.md.
+    telegram_bot_token: str = ""
+    telegram_bot_username: str = ""
+
     @property
     def api_domain(self) -> str:
         """What SuperTokens is told the API's origin is. Same as the site: the
