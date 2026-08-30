@@ -273,10 +273,39 @@ function NoteEditorDialog({
 
   useEffect(() => () => flush(), [flush]);
 
+  // `flush()` on unmount only covers closing the dialog *within the app* —
+  // Escape, the X, a backdrop click all unmount React gracefully. A hard
+  // reload or closing the tab tears down the whole JS context immediately,
+  // and no unmount lifecycle runs at all, so a debounce armed but not yet
+  // fired is silently lost with it. There's no way to *guarantee* the save
+  // completes at that point — a PATCH can't be awaited from `beforeunload` —
+  // so this is the standard fallback instead: warn before leaving while
+  // something is still queued, the same prompt any editor with unsaved
+  // changes shows.
+  useEffect(() => {
+    const warnIfPending = (e: BeforeUnloadEvent) => {
+      if (timer.current !== null || Object.keys(pending.current).length > 0) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warnIfPending);
+    return () => window.removeEventListener("beforeunload", warnIfPending);
+  }, []);
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
+      {/* Almost full screen, not the default small centered box — a
+          notepad is somewhere you actually write, and a cramped textarea
+          fought that. flex-col + a flex-1 textarea is what lets the body
+          claim every pixel of height the title and footer don't need,
+          instead of a fixed row count. */}
+      <DialogContent className="flex h-[90vh] max-h-[90vh] w-full flex-col gap-0 p-0 sm:max-w-4xl">
+        {/* pr-12 reserves room for DialogContent's own corner X (absolutely
+            positioned, top-2 right-2) — without it, a long title's text
+            runs directly under the close button instead of stopping short
+            of it. */}
+        <DialogHeader className="shrink-0 border-b py-3 pr-12 pl-4">
           <DialogTitle className="sr-only">Edit note</DialogTitle>
           <DialogDescription className="sr-only">
             Edit this note&rsquo;s title and body. Changes save automatically.
@@ -284,7 +313,7 @@ function NoteEditorDialog({
           <Input
             aria-label="Note title"
             value={title}
-            className="border-none px-0 text-base font-medium shadow-none focus-visible:ring-0"
+            className="border-none px-0 text-xl font-semibold shadow-none focus-visible:ring-0 md:text-xl"
             onChange={(e) => {
               setTitle(e.target.value);
               queueSave({ title: e.target.value });
@@ -293,10 +322,10 @@ function NoteEditorDialog({
           />
         </DialogHeader>
         <Textarea
-          rows={10}
           aria-label="Note body"
           placeholder="Start typing…"
           value={body}
+          className="min-h-0 flex-1 resize-none rounded-none border-none px-4 py-3 text-base shadow-none [field-sizing:fixed] focus-visible:ring-0 md:text-base"
           onChange={(e) => {
             setBody(e.target.value);
             queueSave({ body: e.target.value });
@@ -307,7 +336,7 @@ function NoteEditorDialog({
             closes it, and there's nothing to confirm on the way out — this
             autosaves, so a second "Close" button would just be a redundant
             way to do what the X already does. */}
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-t px-4 py-3">
           <span className="text-xs text-muted-foreground">
             {state === "saving" ? "Saving…" : `Saved ${ago(savedAt)}`}
           </span>

@@ -1696,6 +1696,32 @@ also confuses the browser's own click handling. The card carries `role=
 `tabIndex`/`onKeyDown` for keyboard access instead, and Delete's own click
 handler stops propagation rather than relying on DOM nesting to isolate it.
 
+**The editor is almost full screen, not the default small centered
+`Dialog`.** A notepad is somewhere you actually write, and the default
+`sm:max-w-sm` box fought that — `DialogContent` gets a large className
+override (`h-[90vh] sm:max-w-4xl flex flex-col`) with the body `Textarea`
+as `flex-1` instead of a fixed `rows={10}`, so it claims whatever height
+the title and footer don't need. Two things worth knowing if this is
+touched again: `DialogContent`'s corner close button is absolutely
+positioned (`top-2 right-2`) against the *outer* popup, not the header, so
+the header needs its own `pr-12` or a long title's text runs under it; and
+`Textarea`'s default `field-sizing-content` (auto-grows to fit its own
+text) has to be overridden to `[field-sizing:fixed]` or `flex-1` never
+actually gets to claim the space — the two sizing modes fight for the same
+axis.
+
+**`flush()`-on-unmount only covers closing the dialog *within the app* —
+Escape, the X, a backdrop click. A hard reload or closing the tab tears
+down the whole JS context immediately, with no React unmount lifecycle at
+all**, so a debounce armed but not yet fired is lost with it, silently.
+Found by a test that filled the body and reloaded immediately, mirroring
+exactly what a real hard refresh does. There is no way to *guarantee* a
+`PATCH` completes from a `beforeunload` handler, so the fallback is the
+standard one any autosaved editor uses instead: warn before leaving while
+`pending.current` or the debounce timer is non-empty, the same native
+"leave with unsaved changes?" prompt any editor shows. It doesn't fix the
+race — it gives the person a chance to not trigger it.
+
 ## Time tracking
 
 Read the `services/time_tracking.py` docstring. Four rules, and the first is a
