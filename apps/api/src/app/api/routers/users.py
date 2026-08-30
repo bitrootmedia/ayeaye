@@ -14,6 +14,8 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.types import RecipeUserId
 
 from app.api.deps import CurrentUser, DbSession
+from app.security.authn import MfaPendingSession, mark_mfa_satisfied
+from app.services import mfa as mfa_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
 
@@ -160,3 +162,126 @@ async def change_password(body: PasswordChange, user: CurrentUser):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result.failure_reason
         )
+
+
+async def _mfa_user(session: MfaPendingSession, db: DbSession):
+    return await users_service.get_or_create(db, supertokens_user_id=session.get_user_id())
+
+
+class MfaStatusOut(BaseModel):
+    enrolled: bool
+    codes_remaining: int
+
+
+class TotpDeviceOut(BaseModel):
+    # The secret is shown once, alongside the QR — neither is stored until
+    # `verify_totp` confirms the person actually has it in an authenticator
+    # app. There is no "pending device" row to abandon if they never finish.
+    secret: str
+    qr_data_uri: str
+
+
+class TotpVerify(BaseModel):
+    secret: str
+    code: str
+
+
+class BackupCodesOut(BaseModel):
+    # Returned **once**, at creation — the identical "plaintext exists once"
+    # rule TokenCreated makes for an access token. Only the hashes are
+    # stored, so no endpoint can show these again.
+    codes: list[str]
+
+
+class BackupCodeRedeem(BaseModel):
+    code: str
+
+
+class BackupCodeRedeemed(BaseModel):
+    codes_remaining: int
+
+
+# Every route below uses MfaPendingSession, not CurrentUser — not just the
+# challenge endpoints (verifying a code, redeeming a backup code, which are
+# *how* the session claim gets satisfied), but plain enrollment too: turning
+# 2FA on can itself be what satisfies a freshly forced organisation's
+# requirement, in the same session, with no second sign-in. See
+# `MfaPendingSession`'s own docstring in security/authn.py.
+
+
+@router.get("/me/mfa/status", response_model=MfaStatusOut)
+async def mfa_status(session: MfaPendingSession, db: DbSession):
+    user = await _mfa_user(session, db)
+    return MfaStatusOut(
+        enrolled=await mfa_service.is_enrolled(db, user),
+        codes_remaining=await mfa_service.codes_remaining(db, user),
+    )
+
+
+@router.post("/me/mfa/totp", response_model=TotpDeviceOut)
+async def create_totp_device(session: MfaPendingSession, db: DbSession):
+    """Generate a fresh secret and its QR. Nothing is persisted until
+    `verify_totp` confirms it against a real code."""
+    user = await _mfa_user(session, db)
+    secret = mfa_service.new_secret()
+    return TotpDeviceOut(
+        secret=secret, qr_data_uri=mfa_service.provisioning_qr_data_uri(user, secret)
+    )
+
+
+@router.post("/me/mfa/totp/verify", status_code=status.HTTP_204_NO_CONTENT)
+async def verify_totp(body: TotpVerify, session: MfaPendingSession, db: DbSession):
+    user = await _mfa_user(session, db)
+    ok = await mfa_service.activate_device(db, user, body.secret, body.code)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="that code is wrong")
+    await mark_mfa_satisfied(session)
+
+
+@router.post("/me/mfa/totp/challenge", status_code=status.HTTP_204_NO_CONTENT)
+async def challenge_totp(body: BackupCodeRedeem, session: MfaPendingSession, db: DbSession):
+    """The login-time check against an already-enrolled device — `code`
+    only, no secret. `BackupCodeRedeem`'s shape (`{code}`) happens to be
+    identical, reused rather than declaring a second one-field schema."""
+    user = await _mfa_user(session, db)
+    if not await mfa_service.challenge(db, user, body.code):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="that code is wrong")
+    await mark_mfa_satisfied(session)
+
+
+@router.delete("/me/mfa/totp", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_totp_device(session: MfaPendingSession, db: DbSession):
+    """Turn 2FA off for yourself. Also clears backup codes — see
+    services/mfa.py's reset_totp for why a device gone but its old codes
+    still redeemable is a state nobody should be able to reach."""
+    user = await _mfa_user(session, db)
+    await mfa_service.reset_totp(db, user)
+
+
+@router.post(
+    "/me/mfa/backup-codes", response_model=BackupCodesOut, status_code=status.HTTP_201_CREATED
+)
+async def create_backup_codes(session: MfaPendingSession, db: DbSession):
+    """Mint a fresh set of ten, replacing any that already existed. Called
+    once right after enrolling a TOTP device, and again on demand as
+    "Regenerate codes" from the Account screen."""
+    user = await _mfa_user(session, db)
+    codes = await mfa_service.generate_backup_codes(db, user)
+    return BackupCodesOut(codes=codes)
+
+
+@router.post("/me/mfa/backup-codes/redeem", response_model=BackupCodeRedeemed)
+async def redeem_backup_code(body: BackupCodeRedeem, session: MfaPendingSession, db: DbSession):
+    """The one route in the codebase reachable before the MFA claim is
+    satisfied — see `MfaPendingSession`. A match marks the claim satisfied
+    directly, without a real TOTP code ever existing."""
+    user = await _mfa_user(session, db)
+    ok = await mfa_service.redeem_backup_code(db, user, body.code)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="that code is wrong or already used"
+        )
+
+    await mark_mfa_satisfied(session)
+    remaining = await mfa_service.codes_remaining(db, user)
+    return BackupCodeRedeemed(codes_remaining=remaining)

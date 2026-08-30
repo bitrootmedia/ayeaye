@@ -16,6 +16,7 @@ from app.services.organisations import (
     can_grant_role,
     can_manage_members,
     can_rename_organisation,
+    can_require_mfa,
     role_at_least,
     slugify,
 )
@@ -107,6 +108,13 @@ def test_managing_members_needs_admin_or_above():
     assert can_manage_members(ROLE_OWNER)
     assert can_manage_members(ROLE_ADMIN)
     assert not can_manage_members(ROLE_MEMBER)
+
+
+def test_admins_and_owners_require_mfa():
+    """Same rank as renaming — an admin-level org setting, not owner-only."""
+    assert can_require_mfa(ROLE_OWNER)
+    assert can_require_mfa(ROLE_ADMIN)
+    assert not can_require_mfa(ROLE_MEMBER)
 
 
 def test_role_at_least_is_closed_against_unknown_roles():

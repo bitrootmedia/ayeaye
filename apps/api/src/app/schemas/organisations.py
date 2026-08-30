@@ -27,7 +27,14 @@ class OrganisationOut(BaseModel):
     # The caller's own role, resolved server-side. The UI never re-derives
     # permissions — it branches on this.
     role: str
+    # Unions with a member's own TOTP enrollment rather than replacing it —
+    # see services/mfa.py's account_requires_mfa.
+    require_mfa: bool
     created_at: datetime
+
+
+class RequireMfaUpdate(BaseModel):
+    enabled: bool
 
 
 class MemberOut(BaseModel):

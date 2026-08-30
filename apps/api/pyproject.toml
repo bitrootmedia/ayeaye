@@ -27,6 +27,13 @@ dependencies = [
     "pillow>=11.0",
     "nh3>=0.3.6",
     "mcp>=2.0.0",
+    # RFC 6238 TOTP. SuperTokens' own totp/multifactorauth recipes require a
+    # paid core license even self-hosted — see services/mfa.py — so this is
+    # hand-rolled on top of the free session recipe's custom-claim support.
+    "pyotp>=2.9",
+    # Renders the enrollment QR server-side (a data: URI in the response) so
+    # the frontend needs no new dependency for it.
+    "qrcode[pil]>=8.0",
 ]
 
 [dependency-groups]

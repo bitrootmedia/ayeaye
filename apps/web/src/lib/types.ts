@@ -34,6 +34,9 @@ export type Organisation = {
   slug: string;
   /** The caller's role, resolved server-side. */
   role: Role;
+  /** Unions with a member's own TOTP enrollment rather than replacing it —
+   *  see services/mfa.py's account_requires_mfa. */
+  require_mfa: boolean;
   created_at: string;
 };
 
@@ -572,6 +575,7 @@ export type Notification = {
 export const canManageMembers = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 export const canRename = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 export const canDeleteOrg = (role: Role) => role === "owner";
+export const canRequireMfa = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 
 /** You cannot appoint someone above yourself. */
 export const grantableRoles = (actor: Role): Role[] =>

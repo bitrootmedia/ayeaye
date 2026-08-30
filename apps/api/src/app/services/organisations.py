@@ -102,6 +102,14 @@ def can_delete_organisation(role: str) -> bool:
     return role == ROLE_OWNER
 
 
+def can_require_mfa(role: str) -> bool:
+    """Same rank as renaming — an admin-level org setting, not owner-only.
+    Kept as its own named check rather than reused from `can_rename_organisation`
+    per this module's one-rule-per-action convention, even though the rank
+    threshold is identical."""
+    return role_at_least(role, ROLE_ADMIN)
+
+
 # --- the organisation, plus the caller's place in it ------------------------
 
 
@@ -319,6 +327,44 @@ async def delete(db: AsyncSession, ctx: OrgContext) -> None:
     ctx.require(can_delete_organisation(ctx.role), "only an owner can delete an organisation")
     await db.delete(ctx.organisation)
     await db.commit()
+
+
+async def set_require_mfa(db: AsyncSession, ctx: OrgContext, enabled: bool) -> Organisation:
+    """Toggle the organisation-wide requirement. See `services/mfa.py`'s
+    `account_requires_mfa` for the one place this column is read — it unions
+    with each member's own TOTP enrollment rather than replacing it, so
+    turning this off never revokes anyone's personal setup."""
+    ctx.require(can_require_mfa(ctx.role), "only an admin or owner can require two-factor auth")
+    ctx.organisation.require_mfa = enabled
+    await db.commit()
+    await db.refresh(ctx.organisation)
+    return ctx.organisation
+
+
+async def reset_member_mfa(db: AsyncSession, ctx: OrgContext, member: OrganisationMember) -> None:
+    """Clear a member's TOTP device and backup codes so they re-enroll from
+    scratch next time it's required. The escape hatch for "lost the device" —
+    same "an org admin can do anything" reasoning as offboarding, not a rule
+    invented just for this.
+
+    Also rank-checked, unlike `set_require_mfa`: this acts on a specific
+    person, the same shape `disable_member`/`remove_member` already have, so
+    it follows rule 3 (you cannot act on someone above you) the identical
+    way they do."""
+    ctx.require(can_require_mfa(ctx.role), "only an admin or owner can reset someone's 2FA")
+    ctx.require(can_act_on_member(ctx.role, member.role), "you cannot reset someone above you")
+    if member.user_id is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT, detail="that person hasn't joined yet"
+        )
+    # Imported here: services.mfa imports pyotp/qrcode, which have no
+    # business being pulled in by every module that touches a membership row.
+    from app.services import mfa as mfa_service
+    from app.services import users as users_service
+
+    target = await users_service.get_by_local_id(db, member.user_id)
+    if target is not None:
+        await mfa_service.reset_totp(db, target)
 
 
 async def change_role(

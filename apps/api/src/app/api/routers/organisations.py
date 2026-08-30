@@ -21,6 +21,7 @@ from app.schemas.organisations import (
     OrganisationCreate,
     OrganisationOut,
     OrganisationUpdate,
+    RequireMfaUpdate,
 )
 from app.services import invites as invites_service
 from app.services import organisations as orgs_service
@@ -31,7 +32,12 @@ router = APIRouter(prefix="/organisations", tags=["organisations"])
 
 def _org_out(org, role: str) -> OrganisationOut:
     return OrganisationOut(
-        id=str(org.id), name=org.name, slug=org.slug, role=role, created_at=org.created_at
+        id=str(org.id),
+        name=org.name,
+        slug=org.slug,
+        role=role,
+        require_mfa=org.require_mfa,
+        created_at=org.created_at,
     )
 
 
@@ -96,6 +102,15 @@ async def rename_organisation(body: OrganisationUpdate, ctx: CurrentOrg, db: DbS
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_organisation(ctx: CurrentOrg, db: DbSession):
     await orgs_service.delete(db, ctx)
+
+
+@router.post("/{org_id}/require-mfa", response_model=OrganisationOut)
+async def set_require_mfa(body: RequireMfaUpdate, ctx: CurrentOrg, db: DbSession):
+    """Force (or stop forcing) two-factor auth for everyone in this
+    organisation. See services/mfa.py for how this combines with a member's
+    own TOTP enrollment."""
+    org = await orgs_service.set_require_mfa(db, ctx, body.enabled)
+    return _org_out(org, ctx.role)
 
 
 @router.get("/{org_id}/members", response_model=list[MemberOut])
@@ -177,6 +192,15 @@ async def enable_member(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
     member = await orgs_service.get_member(db, ctx.organisation.id, member_id)
     updated = await orgs_service.enable_member(db, ctx, member)
     return _member_out(updated, None, None, show_invite_url=False)
+
+
+@router.post("/{org_id}/members/{member_id}/reset-mfa", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_member_mfa(member_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
+    """Clear a member's TOTP device and backup codes — they'll be asked to
+    set up two-factor auth again next time it's required. The escape hatch
+    for a lost device; see services/organisations.py."""
+    member = await orgs_service.get_member(db, ctx.organisation.id, member_id)
+    await orgs_service.reset_member_mfa(db, ctx, member)
 
 
 @router.post("/{org_id}/members/{member_id}/invite-link", response_model=MemberOut)

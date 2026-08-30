@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -53,6 +54,13 @@ class Organisation(Base):
     # organisation full of other people's work — that needs a real flow.
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    # Admin-set. Unions with a member's own TOTP enrollment rather than
+    # replacing it — see services/mfa.py's get_mfa_requirements_for_auth
+    # override, the one place this column is actually read.
+    require_mfa: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -4,8 +4,9 @@ import { signOut } from "supertokens-auth-react/recipe/session";
 
 import { BellIcon, PlusIcon } from "lucide-react";
 
-import { api } from "@/api";
+import { ApiError, api } from "@/api";
 import { AppSidebar } from "@/components/app-sidebar";
+import { MfaGate } from "@/components/mfa-gate";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { TimerBar } from "@/components/timer-bar";
 import {
@@ -89,7 +90,21 @@ export type Shell = {
   openCreateOrg: () => void;
 };
 
-type Gate = "loading" | "ok" | "error";
+type Gate = "loading" | "ok" | "error" | "mfa";
+
+/** Is this the specific 403 SuperTokens sends when a session's claim isn't
+ *  satisfied — `security/authn.py`'s `MfaSatisfiedClaim` — rather than some
+ *  other failure `GET /me` could hit? Checked by shape, not status code
+ *  alone, so an unrelated 403 doesn't get misread as "needs 2FA". */
+function isMfaClaimError(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 403) return false;
+  try {
+    const body = JSON.parse(err.body) as { claimValidationErrors?: { id?: string }[] };
+    return (body.claimValidationErrors ?? []).some((c) => c.id === "st-mfa-ok");
+  } catch {
+    return false;
+  }
+}
 
 export default function App() {
   return (
@@ -169,7 +184,7 @@ function Shell() {
     setMe(who);
   }, []);
 
-  useEffect(() => {
+  const bootstrap = useCallback(() => {
     // `GET /me` is the request that creates the local user row and binds any
     // invitation waiting on this address, so it has to land before anything
     // else asks about organisations.
@@ -180,8 +195,12 @@ function Shell() {
         await reload();
         setGate("ok");
       })
-      .catch(() => setGate("error"));
+      .catch((err) => setGate(isMfaClaimError(err) ? "mfa" : "error"));
   }, [reload]);
+
+  useEffect(() => {
+    bootstrap();
+  }, [bootstrap]);
 
   const refreshUnread = useCallback(async () => {
     try {
@@ -244,6 +263,17 @@ function Shell() {
         <Spinner />
         <span className="sr-only">Loading</span>
       </div>
+    );
+  }
+
+  if (gate === "mfa") {
+    return (
+      <MfaGate
+        onSatisfied={() => {
+          setGate("loading");
+          bootstrap();
+        }}
+      />
     );
   }
 

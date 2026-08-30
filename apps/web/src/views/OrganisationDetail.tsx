@@ -4,6 +4,7 @@ import {
   LinkIcon,
   MailIcon,
   RefreshCwIcon,
+  ShieldOffIcon,
   Trash2Icon,
   UserCheckIcon,
   UserPlusIcon,
@@ -63,6 +64,7 @@ import {
   canDeleteOrg,
   canManageMembers,
   canRename,
+  canRequireMfa,
   grantableRoles,
   type InviteCreated,
   type Member,
@@ -332,6 +334,25 @@ export default function OrganisationDetail() {
                               {member.status === "disabled" ? <UserCheckIcon /> : <BanIcon />}
                             </Button>
                           )}
+                          {mayAct && member.status === "active" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label="Reset their two-factor authentication"
+                              onClick={() =>
+                                act(
+                                  () =>
+                                    api(
+                                      `/organisations/${org.id}/members/${member.id}/reset-mfa`,
+                                      { method: "POST" },
+                                    ),
+                                  "They'll be asked to set up two-factor authentication again next time they sign in",
+                                )
+                              }
+                            >
+                              <ShieldOffIcon />
+                            </Button>
+                          )}
                           {(mayAct || isMe) && (
                             <Button
                               variant="ghost"
@@ -569,7 +590,7 @@ function OrgSettings({
   org,
   onDone,
 }: {
-  org: { id: string; name: string; role: Role };
+  org: { id: string; name: string; role: Role; require_mfa: boolean };
   onDone: () => Promise<void>;
 }) {
   const navigate = useNavigate();
@@ -577,6 +598,7 @@ function OrgSettings({
   const [name, setName] = useState(org.name);
   const [confirming, setConfirming] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
 
   return (
     <Card>
@@ -612,6 +634,41 @@ function OrgSettings({
             {/* Worth saying out loud: people bookmark and share these. */}
             <p className="text-xs text-muted-foreground">
               The URL stays the same — renaming changes the label, not the address.
+            </p>
+          </div>
+        )}
+
+        {canRequireMfa(org.role) && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={org.require_mfa}
+                disabled={mfaBusy}
+                onChange={async (e) => {
+                  setMfaBusy(true);
+                  try {
+                    await api(`/organisations/${org.id}/require-mfa`, {
+                      method: "POST",
+                      body: JSON.stringify({ enabled: e.target.checked }),
+                    });
+                    await onDone();
+                    toast.add({
+                      title: e.target.checked
+                        ? "Two-factor authentication required"
+                        : "Two-factor authentication no longer required",
+                    });
+                  } finally {
+                    setMfaBusy(false);
+                  }
+                }}
+              />
+              Require two-factor authentication for all members
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Anyone who hasn&rsquo;t already turned it on for themselves is asked to set it up
+              at their next sign-in. Turning this off never removes a member&rsquo;s own
+              enrollment.
             </p>
           </div>
         )}

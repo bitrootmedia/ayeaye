@@ -1,13 +1,21 @@
-import { CopyIcon, KeyRoundIcon, PlaneIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, KeyRoundIcon, PlaneIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
+import { TotpEnroll } from "@/components/mfa-enroll";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToastManager } from "@/components/ui/toast";
@@ -130,6 +138,7 @@ export default function Account() {
         </Card>
 
         <PasswordCard />
+        <TwoFactorCard />
         <OutOfOfficeCard />
         <AccessTokensCard />
       </div>
@@ -202,6 +211,151 @@ function PasswordCard() {
           shouldn&rsquo;t be enough to lock you out of your own account.
         </p>
       </CardContent>
+    </Card>
+  );
+}
+
+function TwoFactorCard() {
+  const toast = useToastManager();
+  const [enrolled, setEnrolled] = useState<boolean | null>(null);
+  const [codesRemaining, setCodesRemaining] = useState(0);
+  const [enrolling, setEnrolling] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [freshCodes, setFreshCodes] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const status = await api<{ enrolled: boolean; codes_remaining: number }>("/me/mfa/status");
+    setEnrolled(status.enrolled);
+    setCodesRemaining(status.codes_remaining);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const disable = async () => {
+    if (busy || !window.confirm("Turn off two-factor authentication? This removes your device and your backup codes.")) return;
+    setBusy(true);
+    try {
+      await api("/me/mfa/totp", { method: "DELETE" });
+      await load();
+      toast.add({ title: "Two-factor authentication turned off" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const regenerate = async () => {
+    setBusy(true);
+    try {
+      const { codes } = await api<{ codes: string[] }>("/me/mfa/backup-codes", {
+        method: "POST",
+      });
+      setFreshCodes(codes);
+      setRegenerating(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheckIcon className="size-4" />
+          Two-factor authentication
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {enrolled === null ? null : enrolled ? (
+          <>
+            <p className="text-sm">
+              <span className="font-medium text-foreground">Enabled.</span>{" "}
+              <span className="font-mono text-muted-foreground">{codesRemaining}</span> backup
+              code{codesRemaining === 1 ? "" : "s"} left.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={regenerate} disabled={busy}>
+                Regenerate backup codes
+              </Button>
+              <Button size="sm" variant="ghost" onClick={disable} disabled={busy}>
+                Turn off
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Not enabled. Turning it on requires a code from your authenticator app every time
+              you sign in — unless an organisation you&rsquo;re in already requires it, in which
+              case you&rsquo;ll be asked to set this up at your next sign-in regardless.
+            </p>
+            <Button size="sm" onClick={() => setEnrolling(true)}>
+              Turn on
+            </Button>
+          </>
+        )}
+      </CardContent>
+
+      <Dialog open={enrolling} onOpenChange={setEnrolling}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set up two-factor authentication</DialogTitle>
+            <DialogDescription>
+              Scan the code with an authenticator app, then confirm it works.
+            </DialogDescription>
+          </DialogHeader>
+          <TotpEnroll
+            onDone={() => {
+              setEnrolling(false);
+              void load();
+              toast.add({ title: "Two-factor authentication turned on" });
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={regenerating} onOpenChange={setRegenerating}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New backup codes</DialogTitle>
+            <DialogDescription>
+              Your old codes stop working the moment these are generated.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <ul className="grid grid-cols-2 gap-1.5 rounded-lg border bg-muted/30 p-3 font-mono text-sm">
+              {(freshCodes ?? []).map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void navigator.clipboard.writeText((freshCodes ?? []).join("\n"));
+                  toast.add({ title: "Copied" });
+                }}
+              >
+                <CopyIcon />
+                Copy all
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setRegenerating(false);
+                  setFreshCodes(null);
+                  void load();
+                }}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

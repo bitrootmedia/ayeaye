@@ -182,6 +182,7 @@ ayeayecaptain/
     │       │                #   task (+ grants, events), tag (+ task_tags),
     │       │                #   checklist (+ items), sheet (+ rows/columns/cells),
     │       │                #   note (private, per person), personal_note (the notepad),
+    │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
     │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   notification,
@@ -196,6 +197,7 @@ ayeayecaptain/
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
+    │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   reminders.py presence.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
@@ -1256,6 +1258,126 @@ rather than breaking it, and that is exactly the regression nobody notices.
 The button label is literally the string "SIGN UP"; that is their copy, not a
 `text-transform`, and it is not worth overriding.
 
+## Two-factor authentication
+
+Read `services/mfa.py`. Optional per person, forceable per organisation —
+and **hand-rolled**, not SuperTokens' own `totp`/`multifactorauth` recipes.
+Both were tried first and both registered cleanly, but the first live call
+to create a device answered:
+
+```
+SuperTokens core threw an error … status code: 402 … MFA feature is not
+enabled. Please subscribe to a SuperTokens core license key to enable this
+feature.
+```
+
+That's a licensing gate in the self-hosted core binary itself, confirmed
+against a real core and against SuperTokens' own docs — not a config
+mistake, and not something a self-hoster can route around. It conflicts
+directly with this product's own bar (`docker compose up -d`, no paid
+dependency, no backoffice), so the paid recipes were pulled out entirely
+and TOTP was rebuilt on `pyotp` plus a **free** primitive the base `session`
+recipe already provides: a custom session claim.
+
+**One rule decides who needs a second factor**, in exactly one place —
+`account_requires_mfa`. TOTP is required for an account if *either* they
+already have a device (`mfa_totp_devices`, one per person — personal opt-in
+is sticky, that's what "enabling 2FA" means) *or* they're an active member
+of an organisation with `organisations.require_mfa` set. Union, not
+override: turning an organisation's requirement off never revokes someone's
+own enrollment, and enrolling personally is never a substitute for a
+different organisation's requirement.
+
+**Enforcement is a custom `BooleanClaim`, not the paid recipe's claim** —
+`security/authn.py`'s `MfaSatisfiedClaim`. `BooleanClaim` is part of the
+free, open-source `session` recipe (it's what "build your own MFA" looks
+like in SuperTokens' own docs), and it gives the identical shape a paid
+claim would: a value fetched into the access token payload, checked by a
+validator on every `verify_session()` call. The validator is added
+explicitly on the one shared `VerifiedSession` dependency
+(`_add_mfa_validator`, `override_global_claim_validators=`) rather than
+arriving for free the way a recipe's own claim would — there's no "default
+global validator" registration hook to attach to for a claim that isn't a
+recipe's own. That's the real security boundary; the frontend's `MfaGate`
+is UX only, same as every other place this codebase draws that line.
+
+**`default_max_age_in_sec=None` is deliberate.** With no max age, the claim
+framework only refetches `_fetch_mfa_satisfied` when the access token
+payload has no value yet — a brand-new session — never on a timer. The
+requirement is decided **once, at first use per session**, and completing
+TOTP or a backup code (`mark_mfa_satisfied`, calling `set_claim_value`
+directly) sticks for that session's whole life. An organisation turning
+`require_mfa` on reaches an already-open session at its *next* sign-in, not
+mid-session — `scripts/e2e-mfa.sh`'s "not kicked mid-session" case pins
+this on purpose, because it's the one behaviour most likely to read as a bug
+report from someone who just flipped the toggle and expected it instant.
+
+**No SuperTokens prebuilt UI is registered for this, on purpose.** Backup
+codes aren't a concept the prebuilt TOTP screen knows about, and there's no
+supported way to inject a "use a backup code instead" link into it. Both
+SDKs expose the low-level primitives instead (`TOTP.createDevice` and
+friends, on the paid recipe — unused here — but the same "build your own"
+shape applies to a hand-rolled one): `components/mfa-enroll.tsx`'s
+`TotpEnroll` (QR from a server-rendered `data:image/png;base64,…` URI, a
+secret fallback, a code field, then the backup-codes reveal) is shared
+between the Account screen's `TwoFactorCard` (turning 2FA on voluntarily)
+and `components/mfa-gate.tsx`'s `MfaGate` (an organisation forcing it and
+the account not enrolled yet) — one implementation of "scan a QR, confirm a
+code," not two. `MfaGate` itself is rendered by `App.tsx` in place of the
+whole shell whenever `GET /me` comes back with SuperTokens' own "invalid
+claim" shape naming `st-mfa-ok` (`isMfaClaimError` checks the shape, not
+just the status code, so an unrelated 403 doesn't get misread as "needs
+2FA") — the identical top-level-gating shape the `ErrorBoundary` already
+uses for "don't render a half-built app."
+
+**Every `/me/mfa/*` route uses `MfaPendingSession`, not `CurrentUser`.** Not
+just the challenge endpoints (verifying a code, redeeming a backup code —
+both are *how* the claim gets satisfied, so the route that does it can't
+itself require it) but plain enrollment too: turning 2FA on can itself be
+what satisfies a freshly forced organisation's requirement, in the same
+session, with no second sign-in. A session that already satisfies the claim
+reaches these routes exactly the same way — skipping a check nobody fails
+is a no-op for them.
+
+**The secret is stored in the clear**, deliberately — see `models/mfa.py`'s
+own comment. A TOTP secret can't be hashed the way a password or backup
+code can (verifying a code requires computing one *from* the secret), and
+it sits behind the identical trust boundary every other row in this
+database already sits behind. Encrypting one column would need its own
+key-management story — generation, a new required `.env` var, rotation —
+for a bar this product doesn't hold anywhere else yet.
+
+**Recovery, three layers, most to least self-service:**
+1. **Backup codes** — ten single-use codes (`secrets.token_hex`, ~40 bits
+   each), shown once at enrollment and on regeneration, hashed with
+   `services.tokens.hash_token` — reused, not reimplemented, the same
+   "plaintext exists once" rule access tokens already follow.
+2. **Admin reset** — an org admin clears a member's device and codes from
+   the People roster (`reset-mfa`, rank-checked the identical way
+   `disable_member`/`remove_member` are, unlike the org-wide toggle which
+   only needs admin rank with no target to rank-compare against). The same
+   "an org admin can do anything" escape hatch offboarding already grants.
+3. **`scripts/reset-mfa.sh <email>`** — an operator running
+   `services.mfa.reset_totp` directly from a shell, for the one gap an
+   admin can't reach: a lone owner locked out of their own account. Unlike
+   `diagnose.sh`'s Storage checks, this needs no SuperTokens call at all —
+   TOTP devices and backup codes are hand-rolled in this app's own tables,
+   not held by SuperTokens' core — so it's pure database work.
+
+**A bash gotcha that cost real time writing `scripts/e2e-mfa.sh`.** A
+multi-key JSON literal built inline — `-d "{\"a\":\"$x\",\"b\":\"$y\"}"` —
+and nested inside a `"$(...)"` capture (the `ok "label" "$(code … -d
+"{...}")" "status"` shape every `e2e-*.sh` script uses) is silently torn in
+two by bash: the comma inside `{...}` reads as a brace-expansion separator
+once it's nested two quote-levels deep, turning one `curl` call into two
+malformed ones — no error, no warning, just a request whose body is missing
+half its fields. It reproduces even though the *exact same shape with one
+key* (no comma, nothing to expand) is fine, which is what makes it so easy
+to write once and then hit the moment a second field is added. The fix,
+applied throughout `e2e-mfa.sh`: build the body into a variable first
+(`BODY="{\"a\":\"$x\",\"b\":\"$y\"}"; … -d "$BODY"`) rather than ever
+writing a literal `{…}` containing a comma inside a nested capture.
+
 ## Login history
 
 Read `models/login_event.py` and `services/login_history.py`. Every
@@ -2146,6 +2268,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
+./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

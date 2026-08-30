@@ -8,6 +8,7 @@ from app.models.conversation import (
     MessageRead,
 )
 from app.models.login_event import LoginEvent
+from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.organisation import Organisation, OrganisationMember
@@ -38,6 +39,8 @@ __all__ = [
     "Message",
     "MessageRead",
     "LoginEvent",
+    "MfaBackupCode",
+    "MfaTotpDevice",
     "Notification",
     "Organisation",
     "PersonalAccessToken",

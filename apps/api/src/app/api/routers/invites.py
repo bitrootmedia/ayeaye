@@ -61,7 +61,12 @@ async def accept_invite(token: str, user: CurrentUser, db: DbSession):
         )
     ).scalar_one()
     return OrganisationOut(
-        id=str(org.id), name=org.name, slug=org.slug, role=member.role, created_at=org.created_at
+        id=str(org.id),
+        name=org.name,
+        slug=org.slug,
+        role=member.role,
+        require_mfa=org.require_mfa,
+        created_at=org.created_at,
     )
 
 
@@ -133,7 +138,12 @@ async def accept_my_invite(member_id: uuid.UUID, user: CurrentUser, db: DbSessio
         )
     ).scalar_one()
     return OrganisationOut(
-        id=str(org.id), name=org.name, slug=org.slug, role=member.role, created_at=org.created_at
+        id=str(org.id),
+        name=org.name,
+        slug=org.slug,
+        role=member.role,
+        require_mfa=org.require_mfa,
+        created_at=org.created_at,
     )
 
 

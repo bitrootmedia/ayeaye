@@ -16,6 +16,7 @@ from supertokens_python.recipe import emailpassword, session
 from supertokens_python.recipe.emailpassword import InputFormField, InputSignUpFeature
 from supertokens_python.recipe.emailpassword.constants import FORM_FIELD_PASSWORD_ID
 from supertokens_python.recipe.session import SessionContainer
+from supertokens_python.recipe.session.claim_base_classes.boolean_claim import BooleanClaim
 from supertokens_python.recipe.session.framework.fastapi import verify_session
 from supertokens_python.recipe.session.interfaces import RecipeInterface
 from supertokens_python.recipe.session.utils import SessionOverrideConfig
@@ -23,9 +24,93 @@ from supertokens_python.recipe.session.utils import SessionOverrideConfig
 from app.core.config import settings
 from app.security.email import MailerEmailDelivery
 
-# The canonical "this request has a valid session" dependency. Declared here so
-# everything shares one instance instead of building its own verifier.
-VerifiedSession = Annotated[SessionContainer, Depends(verify_session())]
+
+async def _fetch_mfa_satisfied(user_id, _recipe_user_id, _tenant_id, _payload, _user_context):
+    """The one rule that decides who needs a second factor — see
+    `services/mfa.py`'s own docstring for the full reasoning. Called exactly
+    once per session, the first time anything checks the claim (SuperTokens'
+    claim framework fetches lazily on first need, then keeps whatever value
+    is in the payload — see `MfaSatisfiedClaim`'s own comment for why that's
+    the right cadence here). Returns `True` ("satisfied") when nothing is
+    required at all; a required-but-incomplete account gets `False`, which
+    the validator below turns into a blocked session until TOTP or a backup
+    code flips it — see `mark_mfa_satisfied`.
+    """
+    from app.db import SessionLocal
+    from app.services import mfa as mfa_service
+
+    async with SessionLocal() as db:
+        return not await mfa_service.account_requires_mfa(db, user_id)
+
+
+# A custom, free/open-source session claim — SuperTokens' own `multifactorauth`
+# recipe would do this natively, but it requires a paid core license even
+# self-hosted (confirmed against a real core: "MFA feature is not enabled.
+# Please subscribe to a SuperTokens core license key"). `BooleanClaim` is part
+# of the base `session` recipe instead, and gives the same shape: a value
+# fetched into the access token payload and checked by a validator on every
+# `verify_session()` call.
+#
+# `default_max_age_in_sec=None` is deliberate, not an oversight: with no max
+# age, the claim framework only refetches when the payload has no value yet
+# (a brand-new session) — never on a timer. So the requirement is decided once,
+# at first use per session, and completing TOTP or a backup code (which calls
+# `mark_mfa_satisfied`, setting the value directly) sticks for that session's
+# whole life rather than being silently recomputed and reset. An organisation
+# turning `require_mfa` on reaches existing sessions at their *next* sign-in,
+# not mid-session — the same "eventual, not instant" trade-off a paid claim
+# with a refresh interval would also have made, just decided at a different
+# point (session boundary instead of a timer).
+MfaSatisfiedClaim = BooleanClaim(key="st-mfa-ok", fetch_value=_fetch_mfa_satisfied)
+
+
+async def mark_mfa_satisfied(session_container: SessionContainer) -> None:
+    """Called after a TOTP code or backup code is accepted. See
+    `api/routers/users.py`'s `verify_totp`/`redeem_backup_code`."""
+    await session_container.set_claim_value(MfaSatisfiedClaim, True)
+
+
+def _add_mfa_validator(default_validators, _session, _user_context):
+    """Passed to `verify_session(override_global_claim_validators=...)` on the
+    one shared `VerifiedSession` dependency every router builds on — this is
+    the actual security boundary, not the frontend's `MfaGate`. There is no
+    "default global validator" registration to hook for a custom claim the
+    way a recipe gets for free, so it's added explicitly here instead."""
+    return [*default_validators, MfaSatisfiedClaim.validators.is_true(None)]
+
+
+# The canonical "this request has a valid session" dependency. Declared here
+# so everything shares one instance instead of building its own verifier —
+# and, since `_add_mfa_validator` is baked in, so every router enforces the
+# MFA claim with no per-route change.
+VerifiedSession = Annotated[
+    SessionContainer, Depends(verify_session(override_global_claim_validators=_add_mfa_validator))
+]
+
+
+def _skip_mfa_validator(_default, _session, _user_context):
+    """Passed to `verify_session(override_global_claim_validators=...)` for
+    every `/me/mfa/*` route — see `MfaPendingSession`. Returns an empty list
+    rather than filtering `_default` down: nothing else in this codebase adds
+    a global validator, so the two are equivalent today, but this is correct
+    even the day something else does."""
+    return []
+
+
+# A verified session that does NOT enforce the MFA claim. Every `/me/mfa/*`
+# route uses this instead of `VerifiedSession`/`CurrentUser` — not just the
+# challenge endpoints (verifying a code, redeeming a backup code, both of
+# which are *how* the claim gets satisfied, so the route that does it can't
+# itself require it), but also plain enrollment: turning 2FA on for the first
+# time from the Account screen can itself be the thing that satisfies a
+# freshly forced organisation's requirement, in the same session, with no
+# second sign-in. A session that already satisfies the claim reaches these
+# routes exactly the same way — skipping a check nobody fails is a no-op for
+# them.
+MfaPendingSession = Annotated[
+    SessionContainer,
+    Depends(verify_session(override_global_claim_validators=_skip_mfa_validator)),
+]
 
 # SuperTokens' own default (8 characters, one letter, one digit) passes
 # "aaaaaaa1" — length and mixed case are what actually resist guessing, and
