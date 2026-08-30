@@ -2005,6 +2005,18 @@ Read these before starting Phase 6.
   `getByRole("link", { name })` matches it exactly like a real `<a>` —
   proving "this is not a link" needs `locator('a:has-text(...)')`, not a
   role query, or the assertion passes for the wrong reason.
+  **The breadcrumb's destination changed again afterwards, and the two
+  links earned different answers.** The crumb now goes to
+  `/orgs/{id}/tasks?project={projectId}` — the task list filtered to that
+  project — instead of the project's own detail page: "Tasks" then
+  "ProjectName" reads as a drill-down, and it's the screen a board or list
+  click actually came from. The access card's "Anyone who can see
+  {project}" sentence keeps linking to the project detail page on purpose —
+  that sentence is specifically about the project's sharing settings, which
+  live on that page, so redirecting it to a filtered task list would
+  disagree with its own wording. Same
+  `projects.some(p => p.id === task.project_id)` guard on both, only the
+  breadcrumb's target moved.
 - **The notification inbox's body span had no `whitespace-pre-wrap`, and it
   took the daily digest to notice.** Every notification before it was
   effectively one line, so the missing wrap was invisible; a digest body with

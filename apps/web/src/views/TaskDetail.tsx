@@ -236,10 +236,15 @@ export default function TaskDetail() {
         crumbs={[
           { label: org.name, to: `/orgs/${org.id}` },
           { label: "Tasks", to: `/orgs/${org.id}/tasks` },
-          // Linked only when the caller can actually open it. A task-level
-          // grant can reach further than the project's own — the same gap
+          // Goes to the task list filtered to this project, not the
+          // project's own detail page — "Tasks" then "ProjectName" reads as
+          // a drill-down (all tasks -> this project's tasks -> this task),
+          // and it's the screen you actually came from when you opened a
+          // task off a board or list. Linked only when the caller can
+          // actually see the filtered result. A task-level grant can reach
+          // further than the project's own — the same gap
           // effective_task_level documents — so seeing the project's name
-          // here doesn't mean seeing the project page. `projects` is already
+          // here doesn't mean seeing its tasks. `projects` is already
           // scoped to what this caller can see (the same fetch behind the
           // move-task picker), so membership in it is the real answer rather
           // than a guess from a structural field like `inherits_from_project`.
@@ -248,7 +253,7 @@ export default function TaskDetail() {
                 {
                   label: task.project_name,
                   to: projects.some((p) => p.id === task.project_id)
-                    ? `/orgs/${org.id}/projects/${task.project_id}`
+                    ? `/orgs/${org.id}/tasks?project=${task.project_id}`
                     : undefined,
                 },
               ]
