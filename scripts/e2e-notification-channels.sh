@@ -117,6 +117,47 @@ ok "gone from the list" "$(curl -s -b /tmp/nca.jar $B/api/me/notification-channe
 echo "== Telegram: inert without a configured bot"
 ok "link-start refused when unconfigured (422)" "$(code -b /tmp/nca.jar -X POST $B/api/me/notification-channels/telegram/link-start)" "422"
 
+echo "== Telegram: creating tasks from chat (/task, /org)"
+# Linking itself needs the service layer directly (no real bot token in a
+# dev stack, same reasoning as the linking-flow tests above); everything
+# after that — /task, /org — goes through the real HTTP webhook route,
+# because that IS the code path a real chat message takes.
+TC_CHAT=900${S: -6}
+TC_ORG1=$(post /tmp/ncb.jar $B/api/organisations "{\"name\":\"Task Chat A $S\"}" | j "d['id']")
+TC_ORG2=$(post /tmp/ncb.jar $B/api/organisations "{\"name\":\"Task Chat B $S\"}" | j "d['id']")
+docker compose exec -T api env PYTHONPATH=/app/src uv run python3 - "$BB" "$TC_CHAT" << 'PYEOF'
+import asyncio, sys
+from app.db import SessionLocal
+from app.services import notification_channels as channels_service
+from app.models import User
+from sqlalchemy import select
+
+email, chat_id = sys.argv[1], sys.argv[2]
+
+async def main():
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.email == email))).scalar_one()
+        code = await channels_service.start_telegram_link(db, user)
+        linked = await channels_service.complete_telegram_link(db, code=code, chat_id=chat_id)
+        assert linked
+
+asyncio.run(main())
+PYEOF
+
+hook(){ curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/telegram/webhook -H 'Content-Type: application/json' \
+  -d "{\"message\":{\"chat\":{\"id\":$TC_CHAT},\"text\":\"$1\"}}"; }
+tasks_of(){ curl -s -b /tmp/ncb.jar "$B/api/organisations/$1/tasks" | j "[t['title'] for t in d]"; }
+
+ok "no default with 2 orgs: /task refuses, creates nothing" "$(hook '/task Should not land anywhere')|$(tasks_of $TC_ORG1)|$(tasks_of $TC_ORG2)" "200|[]|[]"
+ok "/org exact match sets the default"  "$(hook "/org Task Chat A $S")" "200"
+ok "/task now files into org 1"         "$(hook '/task Filed via chat')|$(tasks_of $TC_ORG1)" "200|['Filed via chat']"
+ok "/org switches to the other org"     "$(hook "/org Task Chat B $S")" "200"
+ok "/task now files into org 2"         "$(hook '/task Second one')|$(tasks_of $TC_ORG2)" "200|['Second one']"
+ok "/org with an unknown name changes nothing" "$(hook '/org Nonexistent Org Entirely')|$(curl -s -b /tmp/ncb.jar $B/api/me/notification-channels | j "[c['default_organisation_id'] for c in d if c['kind']=='telegram'][0]")" "200|$TC_ORG2"
+hook "/task $(python3 -c 'print("x"*400)')" >/dev/null
+LONG_TITLE_LEN=$(curl -s -b /tmp/ncb.jar "$B/api/organisations/$TC_ORG2/tasks" | j "max(len(t['title']) for t in d)")
+ok "a title over 300 chars is truncated, not rejected" "$LONG_TITLE_LEN" "300"
+
 echo "== Telegram webhook route never 500s on garbage"
 ok "malformed body"       "$(code -X POST $B/api/telegram/webhook -H 'Content-Type: application/json' -d 'not json')" "200"
 ok "irrelevant message"   "$(code -X POST $B/api/telegram/webhook -H 'Content-Type: application/json' -d '{"message":{"chat":{"id":1},"text":"hello"}}')" "200"

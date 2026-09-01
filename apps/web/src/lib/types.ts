@@ -643,6 +643,10 @@ export type NotificationChannel = {
   created_at: string;
   /** The webhook's own URL. `null` for email and Telegram. */
   url: string | null;
+  /** Where a linked Telegram chat's `/task` files new tasks. Set from
+   *  inside Telegram via `/org`, never from here — read-only display. `null`
+   *  for email and webhook, and for a Telegram link with no default yet. */
+  default_organisation_id: string | null;
 };
 
 /** The closed `NOTIFICATION_KINDS` set, human-labelled for the routing

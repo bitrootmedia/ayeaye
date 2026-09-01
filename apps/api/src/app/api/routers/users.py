@@ -303,6 +303,10 @@ class NotificationChannelOut(BaseModel):
     created_at: datetime
     # The webhook's own URL, never its secret. `None` for email and Telegram.
     url: str | None = None
+    # Where `/task` files new tasks — set from inside Telegram via `/org`,
+    # never from here (see services/telegram_commands.py). `None` for email
+    # and webhook, and for a Telegram link with no default chosen yet.
+    default_organisation_id: str | None = None
 
 
 class NotificationChannelUpdate(BaseModel):
@@ -335,6 +339,9 @@ def _channel_out(row) -> NotificationChannelOut:
         verified_at=row.verified_at,
         created_at=row.created_at,
         url=row.config.get("url") if row.kind == "webhook" else None,
+        default_organisation_id=row.config.get("default_organisation_id")
+        if row.kind == "telegram"
+        else None,
     )
 
 

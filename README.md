@@ -207,7 +207,7 @@ is a supported way to run this, not a broken one:
 Set the `SMTP_*` variables when you want real mail. `MAIL_FROM` has to be on a
 domain your provider has verified or every message is rejected at submission.
 
-## Telegram notifications are optional too
+## Telegram — notifications, and creating tasks from chat — is optional too
 
 Leave `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` empty and the feature is
 fully inert — nobody can link a Telegram chat, and "Link Telegram" on the
@@ -227,6 +227,12 @@ Account screen tells them why rather than offering a dead link. To turn it on:
 3. Restart the stack (`docker compose up -d`) so `api` and `worker` pick up
    the new variables. From Account → Notification channels, "Link Telegram"
    now opens a real deep link.
+
+Once linked, send the bot `/help` for the full list. The short version:
+`/task <title>` creates a task (a second line onward becomes its
+description), `/org <name>` picks which organisation new tasks go into if
+you're in more than one — a plain message, without either command, creates
+nothing.
 
 A generic webhook needs no configuration at all — anyone can add one from the
 same screen, with the signing secret shown once at creation.

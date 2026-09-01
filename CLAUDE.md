@@ -2013,6 +2013,89 @@ router's `settings.telegram_bot_username` gate, alongside the HTTP-facing
 parts that need no bot at all: the webhook route surviving a malformed
 update, an irrelevant message, and a stale code without ever 500ing.
 
+### Creating tasks from Telegram
+
+Read `services/telegram_commands.py`. Four commands: `/start {code}` (the
+linking handshake, unchanged), `/task <title>`, `/org <name>` and `/help`.
+**A plain message creates nothing** — that was a deliberate call, not an
+oversight: the ask was a `/task` command, not "every message is a task,"
+because the second one is one accidental tap or stray reply away from a
+task nobody meant to file.
+
+**`/task`'s first line is the title, the rest is the description.**
+`rest.partition("\n")`, title truncated to 300 (the column's own limit —
+`tasks_service.create()` is called directly here, bypassing the `TaskCreate`
+schema that would otherwise enforce it, so this module has to). Owner
+defaults to the sender, exactly `tasks_service.create()`'s own "you own it
+unless you say otherwise" rule — the identical shape `app/mcp/server.py`'s
+own `create_task` tool already calls it with.
+
+**Which organisation `/task` files into lives in `NotificationChannel.
+config`, not a new table.** One more key, `default_organisation_id`,
+alongside the `chat_id` a linked Telegram channel already carries — the
+same "differs per kind, never queried on" reasoning the model's own
+docstring already gives for `config`. `/org` is the *only* writer of it;
+the Account screen shows it read-only ("/task creates tasks in {org
+name}"), a deliberate design fork — organisation switching was asked to
+happen inside Telegram, not from a second web picker duplicating the same
+write.
+
+**Membership is re-checked at `/task` time, not trusted from whenever
+`/org` last ran.** Someone can be removed from their default organisation
+between the two; `organisations_service.context_for` (the identical
+"no access reads as 404" call every other organisation-scoped route
+already makes) runs fresh on every `/task`, and its failure is a reply
+asking to `/org` again, never a task silently filed into an organisation
+the sender no longer belongs to.
+
+**The single-organisation case never needs `/org` at all.** If `/task`
+runs with no default set and the sender belongs to exactly one active
+organisation, that one is used *and persisted* as the default — the
+friction `/org` exists for only matters once there's an actual choice.
+Zero organisations, or more than one with nothing chosen yet, both reply
+pointing at `/org` with the real list of names.
+
+**`/org`'s name matching is a pure function**, `match_organisation` — no
+database, a real unit test (`tests/test_telegram_commands.py`), the same
+"pure function over plain data" shape `services/tasks.py`'s own
+notification rules already use. Exact (case-insensitive) match wins
+outright even when it's also a substring of another choice — typing
+"Acme" for an organisation literally named "Acme" must not get tangled up
+with a second one named "Acme Corp." Only when there's no exact match does
+a *unique* substring match get used; anything else (zero or several
+candidates) is reported by name, never guessed at.
+
+**A verified Telegram chat id is unique across every account, not just
+within one — found live, not designed in from the start.** Re-linking the
+same Telegram account to a *second* ayeaye account left two verified
+`NotificationChannel` rows both claiming the same `chat_id`, and
+`telegram_commands._channel_and_user`'s lookup by chat id had no way to
+know which one governed — whichever the database happened to return
+first, silently. `start_telegram_link` already deletes the *caller's own*
+previous Telegram channel on re-link; `complete_telegram_link` now also
+deletes any *other* account's channel already holding that exact chat id,
+the identical "re-linking transfers the claim" rule, just extended across
+accounts instead of within one — a real Telegram chat belongs to one
+Telegram account, which can only sensibly be linked to one ayeaye account
+at a time.
+
+**No `update_id` de-duplication, on purpose.** Telegram retries a webhook
+call that doesn't 200; this one (almost) always does, even on an internal
+error (`handle_update`'s own errors are caught by the router, which still
+replies `{"ok": true}`), so a retry double-filing a task is already rare.
+Tracking processed update ids would be real infrastructure — a table, or
+a Redis key — for a genuinely rare edge case on what is, at bottom, a
+personal capture tool. The identical trade-off this same section already
+makes for Telegram and webhook not getting the email job's
+per-notification idempotency flag.
+
+`scripts/e2e-notification-channels.sh` proves the whole loop against the
+real HTTP route once a channel is linked at the service layer: `/task`
+refusing with no default across two organisations, `/org` picking one,
+`/task` filing into it, switching with a second `/org`, an unknown `/org`
+query leaving the default untouched, and a 400-character title landing at
+exactly 300.
+
 ## The day planner
 
 Read the `services/planner.py` docstring. A personal board over the tasks a
@@ -2657,7 +2740,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
 ./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
-./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed webhook delivery
+./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

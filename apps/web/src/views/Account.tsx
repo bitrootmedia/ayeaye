@@ -36,6 +36,7 @@ import {
   type Absence,
   type AccessToken,
   type NotificationChannel,
+  type Organisation,
 } from "@/lib/types";
 
 /**
@@ -48,7 +49,7 @@ import {
  * somebody checks before asking you for something.
  */
 export default function Account() {
-  const { me, reload } = useOutletContext<Shell>();
+  const { me, reload, organisations } = useOutletContext<Shell>();
   const toast = useToastManager();
   const [displayName, setDisplayName] = useState(me?.display_name ?? "");
   const [status, setStatus] = useState(me?.status_message ?? "");
@@ -157,7 +158,7 @@ export default function Account() {
         <TwoFactorCard />
         <OutOfOfficeCard />
         <AccessTokensCard />
-        <NotificationsSection />
+        <NotificationsSection organisations={organisations} />
       </div>
     </>
   );
@@ -636,7 +637,7 @@ function AccessTokensCard() {
  * and two independent fetches would mean one card going stale until its own
  * next reload caught up.
  */
-function NotificationsSection() {
+function NotificationsSection({ organisations }: { organisations: Organisation[] }) {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
 
   const load = useCallback(async () => {
@@ -649,7 +650,7 @@ function NotificationsSection() {
 
   return (
     <>
-      <NotificationChannelsCard channels={channels} onChanged={load} />
+      <NotificationChannelsCard channels={channels} organisations={organisations} onChanged={load} />
       <NotificationRoutingCard channels={channels} onChanged={load} />
     </>
   );
@@ -659,9 +660,11 @@ const CHANNEL_ICON = { email: MailIcon, telegram: SendIcon, webhook: WebhookIcon
 
 function NotificationChannelsCard({
   channels,
+  organisations,
   onChanged,
 }: {
   channels: NotificationChannel[];
+  organisations: Organisation[];
   onChanged: () => Promise<void>;
 }) {
   const toast = useToastManager();
@@ -740,32 +743,50 @@ function NotificationChannelsCard({
 
         {channels.map((channel) => {
           const Icon = CHANNEL_ICON[channel.kind];
+          // Resolved client-side from the org list the shell already has —
+          // the channel itself only carries the id (see services/
+          // notification_channels.py — /org is the only writer of it).
+          const defaultOrg = organisations.find(
+            (o) => o.id === channel.default_organisation_id,
+          );
           return (
-            <div
-              key={channel.id}
-              className="flex flex-wrap items-center gap-3 rounded-lg border p-2 pl-3"
-            >
-              <Icon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{channel.label}</span>
-              {channel.url && (
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                  {channel.url}
+            <div key={channel.id} className="rounded-lg border p-2 pl-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <Icon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {channel.label}
                 </span>
-              )}
-              {channel.kind === "telegram" && !channel.verified_at && (
-                <Badge variant="outline" className="text-muted-foreground">
-                  Waiting for /start
-                </Badge>
-              )}
-              {channel.kind !== "email" && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Remove ${channel.label}`}
-                  onClick={() => remove(channel)}
-                >
-                  <Trash2Icon />
-                </Button>
+                {channel.url && (
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                    {channel.url}
+                  </span>
+                )}
+                {channel.kind === "telegram" && !channel.verified_at && (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    Waiting for /start
+                  </Badge>
+                )}
+                {channel.kind !== "email" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Remove ${channel.label}`}
+                    onClick={() => remove(channel)}
+                  >
+                    <Trash2Icon />
+                  </Button>
+                )}
+              </div>
+              {channel.kind === "telegram" && channel.verified_at && (
+                <p className="mt-1 pl-7 text-xs text-muted-foreground">
+                  {defaultOrg ? (
+                    <>
+                      /task creates tasks in <span className="font-medium">{defaultOrg.name}</span>
+                    </>
+                  ) : (
+                    "Not set — send /org <name> in Telegram, or just /task if you're only in one."
+                  )}
+                </p>
               )}
             </div>
           );

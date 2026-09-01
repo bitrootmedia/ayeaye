@@ -210,10 +210,40 @@ async def complete_telegram_link(db: AsyncSession, *, code: str, chat_id: str) -
     ).scalar_one_or_none()
     if row is None:
         return False
+
+    # A real Telegram chat id belongs to one Telegram account, which can be
+    # linked to at most one ayeaye account at a time — `start_telegram_link`
+    # already replaces the *caller's own* previous claim, but says nothing
+    # about a *different* account that verified this exact chat earlier
+    # (someone re-linking the same Telegram to a second ayeaye account, most
+    # plausibly). Without this, two verified rows can carry the same chat
+    # id, and `telegram_commands._channel_and_user`'s lookup by chat id
+    # becomes ambiguous. Deleting any other channel already holding it is
+    # the identical "re-linking transfers the claim" rule, just applied
+    # across accounts instead of within one.
+    await db.execute(
+        NotificationChannel.__table__.delete().where(
+            NotificationChannel.kind == CHANNEL_TELEGRAM,
+            NotificationChannel.id != row.id,
+            NotificationChannel.config["chat_id"].astext == chat_id,
+        )
+    )
     row.config = {"chat_id": chat_id}
     row.verified_at = datetime.now(UTC)
     await db.commit()
     return True
+
+
+async def set_telegram_default_organisation(
+    db: AsyncSession, channel: NotificationChannel, organisation_id: uuid.UUID
+) -> None:
+    """Which organisation `/task` files into. Written by `/org` (and by
+    `/task`'s own single-organisation auto-pick) — see `services/
+    telegram_commands.py`. Membership is the caller's job to have already
+    checked; this is pure persistence, the same split `services/
+    dependencies.py` draws between the access check and the write."""
+    channel.config = {**channel.config, "default_organisation_id": str(organisation_id)}
+    await db.commit()
 
 
 # --- webhook ------------------------------------------------------------------------
@@ -262,6 +292,7 @@ __all__ = [
     "delete_channel",
     "start_telegram_link",
     "complete_telegram_link",
+    "set_telegram_default_organisation",
     "sign",
     "create_webhook",
 ]
