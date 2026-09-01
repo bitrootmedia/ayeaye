@@ -419,5 +419,6 @@ docker compose exec api uv run alembic revision --autogenerate -m "what changed"
 database password, so pair it with `docker compose down -v` or you'll have a
 volume the new password can't open.
 
-Interactive API docs are at **http://localhost:8000/docs** — the API's own port,
-published in dev only. Use the app itself through `http://localhost`.
+Interactive API docs are at **`<your site>/api/docs`** (`http://localhost/api/docs`
+in dev) — same origin as everything else, so this works on a real deployment
+too, not just while developing.

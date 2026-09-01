@@ -19,6 +19,7 @@ import AcceptInvite from "@/views/AcceptInvite";
 import Account from "@/views/Account";
 import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
+import Help from "@/views/Help";
 import Landing, { Footer, Header } from "@/views/Landing";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import OrganisationSettings from "@/views/OrganisationSettings";
@@ -229,6 +230,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 {/* Personal and cross-organisation, like the inbox above it. */}
                 <Route path="reminders" element={<Reminders />} />
                 <Route path="account" element={<Account />} />
+                <Route path="help" element={<Help />} />
                 {/* A route that throws, so the error boundary can be tested
                     rather than assumed. **Dev only** — `import.meta.env.DEV` is
                     a compile-time constant, so this and the component below are

@@ -230,6 +230,9 @@ test("photograph the product", async ({ page }) => {
   await page.goto("/account");
   await shot(page, "14-account");
 
+  await page.goto("/help");
+  await shot(page, "14b-help");
+
   // The same product with the lights off. The tokens are one set with a `.dark`
   // override, so this is the check that nothing hard-codes a colour.
   await setTheme(page, "dark");

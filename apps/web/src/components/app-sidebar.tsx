@@ -14,6 +14,7 @@ import {
   CalendarDaysIcon,
   CalendarIcon,
   CircleDotIcon,
+  CircleHelpIcon,
   ClockIcon,
   FolderKanbanIcon,
   LogOutIcon,
@@ -226,6 +227,16 @@ export function AppSidebar({
             <div className="truncate px-2 py-1 font-mono text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
               {me?.display_name || me?.email || "signed in"}
             </div>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={isActive("/help")}
+              tooltip="Help"
+              render={<Link to="/help" />}
+            >
+              <CircleHelpIcon />
+              <span>Help</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton

@@ -1383,6 +1383,58 @@ other deep link) and only signed in does it actually show "Nothing here" —
 inside the shell, rail and header intact, because it's a 404 *inside* the
 app, not instead of it.
 
+## The in-app user manual
+
+`views/Help.tsx`, at `/help`. Landing.tsx already answers "what is this" for
+someone who hasn't signed up yet, deliberately with no feature list (see its
+own section above); Help answers a different question — "what can I actually
+do with this" — for someone who has, and who'd otherwise have to find each
+feature by clicking around. Linked from the bottom of the rail, beside the
+theme toggle and Log out rather than in the main navigation: **deliberately
+unobtrusive**, the exact placement asked for, because it's a reference
+screen you reach for on purpose, the identical reasoning the People roster's
+own move off the dashboard already established for this codebase.
+
+**One page, not a multi-page docs site.** Fifteen sections, a sticky anchor
+table of contents down the left on `lg` and up (`<nav>` of plain `<a
+href="#id">` links, no scroll-spy JS — a reader either arrives from the TOC
+or scrolls, and both already work with nothing fancier than
+`scroll-mt-4` on each `<section>`), content on the right. Each section's
+heading carries the identical icon the rail uses for the nav item it
+describes where one exists (Tasks the same glyph as the Tasks link, Time
+tracking the same as Time), so the two visibly correspond — a small thing,
+but it's what makes "which of these do I want" answerable at a glance
+rather than by reading every heading.
+
+**User-facing language throughout, not this file's own voice.** No
+`services/access.py`, no "resolves to owner", no file paths — a reader here
+is asking "how do I share a project," not "how is sharing implemented." Two
+sections link to real screens (`/account`, for tokens and notification
+channels) because those are personal, cross-organisation routes Help can
+name directly; nothing here links to an organisation-scoped screen like
+Tasks or Settings, because Help itself carries no organisation context to
+build that URL from — those are described in words ("your organisation's
+Settings screen, near the bottom of the rail") instead of guessed at.
+
+**Finding this prompted a real fix, not just a new page.** Writing the
+"your own assistant, and the API" section and wanting to point at
+interactive API docs surfaced that they were never reachable outside
+development. FastAPI's own defaults put `/docs`, `/redoc` and
+`/openapi.json` at the bare root; Caddy proxies only `/api/*`, `/mcp*`,
+`/health` and `/media/*`, and the API's own port is published in dev alone
+(see "Running and testing" below) — so in any real self-hosted deployment,
+a request to `/docs` fell through Caddy's catch-all to the SPA, which has
+no route there either, and rendered "Nothing here" instead of Swagger UI.
+`main.py::create_app` now passes `docs_url="/api/docs"`,
+`redoc_url="/api/redoc"` and `openapi_url="/api/openapi.json"` to
+`FastAPI(...)`, moving all three under the one prefix that's actually
+proxied everywhere — the identical "single origin, no flag to remember"
+reasoning behind decision 3 in this file's own opening section, just
+reaching a corner FastAPI's own defaults hadn't.
+
+`screenshots.spec.ts` photographs the page (`14b-help`, right after
+Account) in both themes, alongside everything else it already covers.
+
 ## The auth screens
 
 SuperTokens' pre-built UI ships its own look, and left alone it is the first
@@ -2710,9 +2762,12 @@ Read these before starting Phase 6.
 docker compose logs -f api
 ```
 
-Mailpit (dev only): http://localhost:8025. API docs: http://localhost:8000/docs
-— the API's own port, published in dev only because Caddy routes only `/api`
-and `/health`.
+Mailpit (dev only): http://localhost:8025. API docs: `SITE_URL/api/docs` —
+under `/api` rather than FastAPI's own default of the bare root, so it works
+identically through Caddy in dev and in production; the bare root would have
+worked only while the API's own port happens to be published (dev only) and
+been a dead end on every real deployment. `docs_url`/`redoc_url`/
+`openapi_url` are set explicitly in `main.py::create_app`.
 
 ```bash
 cd apps/api && uv run pytest && uv run ruff check src tests

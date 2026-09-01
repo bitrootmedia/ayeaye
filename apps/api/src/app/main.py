@@ -54,7 +54,22 @@ def create_app() -> FastAPI:
     # get_all_cors_headers() are called below.
     init_auth()
 
-    app = FastAPI(title=f"{settings.brand_name} API", lifespan=lifespan)
+    # Docs live under /api, not FastAPI's own default of the bare root —
+    # Caddy only ever proxies /api/*, /mcp*, /health and /media/*, and the
+    # API's own port is published in dev alone (see CLAUDE.md's "Running and
+    # testing"). Left at the default, interactive docs would work while
+    # developing and be genuinely unreachable on any real deployment: a
+    # request to the bare /docs falls through Caddy's catch-all to the SPA,
+    # which has no route there either. Under /api, the same URL — SITE_URL +
+    # /api/docs — works identically in dev and in production, no flag to
+    # remember, the same "one origin" reasoning everything else here follows.
+    app = FastAPI(
+        title=f"{settings.brand_name} API",
+        lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+    )
 
     # SuperTokens' own middleware must be added before CORS so its auth routes
     # (under /api/auth/*) get session/refresh handling.
