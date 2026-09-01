@@ -12,6 +12,7 @@ import {
   PackageIcon,
   SearchIcon,
   SendIcon,
+  ServerCogIcon,
   ShieldCheckIcon,
   UsersIcon,
   type LucideIcon,
@@ -42,6 +43,7 @@ const SECTIONS: Section[] = [
   { id: "export", title: "Taking your data out", icon: PackageIcon },
   { id: "api", title: "Your own assistant, and the API", icon: KeyRoundIcon },
   { id: "shortcuts", title: "Keyboard shortcuts", icon: CommandIcon },
+  { id: "admin", title: "Running this installation", icon: ServerCogIcon },
 ];
 
 const ICON_FOR: Record<string, LucideIcon> = Object.fromEntries(
@@ -339,6 +341,75 @@ export default function Help() {
               </li>
               <li>Arrow keys move through a picker&rsquo;s or search&rsquo;s results; Enter chooses one</li>
             </ul>
+          </Section>
+
+          <Section id="admin" title="Running this installation">
+            <p className="text-muted-foreground">
+              Only relevant if you&rsquo;re the one who set this installation up — everyone
+              else can skip this section.
+            </p>
+            <p>
+              Email and Telegram are both optional infrastructure: leave them unconfigured and
+              the product still works, with an honest message instead of a dead link wherever
+              they&rsquo;d otherwise be used. To turn Telegram on:
+            </p>
+            <ol className="list-decimal space-y-2 pl-5">
+              <li>
+                Message{" "}
+                <a
+                  href="https://t.me/BotFather"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  @BotFather
+                </a>{" "}
+                on Telegram, <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                  /newbot
+                </code>
+                . It gives you a token.
+              </li>
+              <li>
+                Set both variables in the server&rsquo;s <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">.env</code>:
+                <pre className="mt-1 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs">
+{`TELEGRAM_BOT_TOKEN=<the token BotFather gave you>
+TELEGRAM_BOT_USERNAME=<the bot's username, no leading @>`}
+                </pre>
+              </li>
+              <li>
+                Restart the stack so <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">api</code> and{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">worker</code> actually
+                pick up the new variables — editing <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">.env</code> alone
+                does nothing until they do:
+                <pre className="mt-1 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs">
+                  docker compose up -d
+                </pre>
+              </li>
+              <li>
+                Register the webhook once, from anywhere that can reach the internet — this is
+                what tells Telegram where to send messages. Needs a real{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">https://</code>{" "}
+                site address; Telegram&rsquo;s own servers have to be able to reach it, so it
+                won&rsquo;t work against <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                  http://localhost
+                </code>
+                :
+                <pre className="mt-1 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs">
+                  {"curl \"https://api.telegram.org/bot<TOKEN>/setWebhook?url=<SITE_URL>/api/telegram/webhook\""}
+                </pre>
+              </li>
+            </ol>
+            <p>
+              Still seeing "Telegram notifications aren&rsquo;t configured on this
+              installation" after all four steps? The two usual culprits are a typo in the
+              username (no <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">@</code>, exact case) or
+              the stack not having actually restarted.
+            </p>
+            <p>
+              Email works the same way, with <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">SMTP_HOST</code> and
+              friends — see the README that came with this installation for the full list of
+              settings, backups, and everything else about running it.
+            </p>
           </Section>
         </div>
       </div>
