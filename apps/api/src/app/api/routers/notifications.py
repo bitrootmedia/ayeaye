@@ -48,3 +48,8 @@ async def mark_read(notification_id: uuid.UUID, user: CurrentUser, db: DbSession
 @router.post("/read-all", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_all_read(user: CurrentUser, db: DbSession):
     await notifications_service.mark_all_read(db, user)
+
+
+@router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification(notification_id: uuid.UUID, user: CurrentUser, db: DbSession):
+    await notifications_service.delete(db, user, notification_id)

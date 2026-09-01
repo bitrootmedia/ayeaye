@@ -149,6 +149,12 @@ ok "mark all read"              "$(code -b /tmp/td.jar -X POST $B/api/notificati
 ok "count goes to zero"         "$(curl -s -b /tmp/td.jar $B/api/notifications/unread-count | j "d['unread']")" "0"
 ok "inbox is per person"        "$(curl -s -b /tmp/ta.jar $B/api/notifications | j "len(d)")" "0"
 
+COUNT_BEFORE=$(curl -s -b /tmp/td.jar $B/api/notifications | j "len(d)")
+ok "delete one"                 "$(code -b /tmp/td.jar -X DELETE $B/api/notifications/$NID)" "204"
+ok "it's gone"                  "$(curl -s -b /tmp/td.jar $B/api/notifications | j "len(d)")" "$((COUNT_BEFORE - 1))"
+ok "deleting again is still 204, not 404" "$(code -b /tmp/td.jar -X DELETE $B/api/notifications/$NID)" "204"
+ok "deleting someone else's is a silent no-op, not leaked" "$(code -b /tmp/ta.jar -X DELETE $B/api/notifications/$NID)" "204"
+
 echo "== you cannot file work into a project you only read"
 P2=$(post /tmp/ta.jar $B/api/organisations/$OID/projects '{"name":"Alice only"}' | j "d['id']")
 post /tmp/ta.jar $B/api/organisations/$OID/projects/$P2/access "{\"user_id\":\"$CUID\",\"level\":\"read\"}" >/dev/null

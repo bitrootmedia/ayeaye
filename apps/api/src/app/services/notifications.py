@@ -131,3 +131,19 @@ async def mark_all_read(db: AsyncSession, user: User) -> None:
     for row in rows:
         row.read_at = func.now()
     await db.commit()
+
+
+async def delete(db: AsyncSession, user: User, notification_id: uuid.UUID) -> None:
+    """Silently a no-op for a foreign or already-gone id — the same "not
+    found is fine" shape `mark_read` already has for this inbox, and DELETE
+    is supposed to be idempotent regardless."""
+    row = (
+        await db.execute(
+            select(Notification).where(
+                Notification.id == notification_id, Notification.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()

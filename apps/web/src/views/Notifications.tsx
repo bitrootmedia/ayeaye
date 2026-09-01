@@ -1,4 +1,4 @@
-import { BellIcon, CheckCheckIcon } from "lucide-react";
+import { BellIcon, CheckCheckIcon, CheckIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -40,6 +40,18 @@ export default function Notifications() {
     if (!item.read_at) await api(`/notifications/${item.id}/read`, { method: "POST" });
     if (item.link_path) navigate(item.link_path);
     else await load();
+  };
+
+  const markRead = async (item: Notification) => {
+    await api(`/notifications/${item.id}/read`, { method: "POST" });
+    await load();
+  };
+
+  const remove = async (item: Notification) => {
+    // Optimistic: nothing here is worth a round trip before the row leaves
+    // the list, and a failed delete just means it reappears on the next load.
+    setItems((rows) => rows?.filter((r) => r.id !== item.id) ?? rows);
+    await api(`/notifications/${item.id}`, { method: "DELETE" });
   };
 
   return (
@@ -84,11 +96,24 @@ export default function Notifications() {
       ) : (
         <div className="divide-y rounded-xl border bg-card">
           {items.map((item) => (
-            <button
+            // A `<button>` can't nest the Mark-as-read/Delete buttons inside
+            // it — invalid HTML, and the same trap the notepad's own card
+            // hit. `role="button"` on a plain `<div>` with `tabIndex`/
+            // `onKeyDown` keeps the whole row clickable and keyboard-
+            // reachable; each action button stops propagation so it doesn't
+            // also fire `open()`.
+            <div
               key={item.id}
-              type="button"
+              role="button"
+              tabIndex={0}
               onClick={() => open(item)}
-              className="flex w-full items-start gap-3 p-3 text-left transition-colors hover:bg-accent/50"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void open(item);
+                }
+              }}
+              className="flex w-full cursor-pointer items-start gap-3 p-3 text-left transition-colors hover:bg-accent/50"
             >
               {/* Unread is a dot, not a background wash: a list of highlighted
                   rows is harder to scan than a list with markers on it. */}
@@ -114,7 +139,33 @@ export default function Notifications() {
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 {ago(item.created_at)}
               </span>
-            </button>
+              <span className="flex shrink-0 items-center gap-1">
+                {!item.read_at && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Mark "${item.title}" as read`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void markRead(item);
+                    }}
+                  >
+                    <CheckIcon />
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Delete "${item.title}"`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void remove(item);
+                  }}
+                >
+                  <Trash2Icon />
+                </Button>
+              </span>
+            </div>
           ))}
         </div>
       )}

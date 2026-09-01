@@ -973,6 +973,30 @@ value is only ever the fallback for "no `?view=` at all," which is what
 happens the next time you navigate here from the rail rather than from a
 link.
 
+**Each project now carries a second, explicit link — straight to its
+board — alongside the name that has always gone to its own page.** Before
+this, the only way to a project's tasks was a detour through that page
+first (which itself already had an "Open the board" button once you got
+there); the list only ever offered the one destination. Added, not
+swapped: the name still goes to the project's own page — access, rename,
+export, the danger zone, everything that reads as "settings" — because
+`createProject`'s own e2e helper (and everything built on it, `access.
+spec.ts` among others) clicks that link and asserts it lands there, and
+changing what the primary link means out from under a shared helper would
+have been a silent, test-suite-wide regression for a UX call nobody asked
+to make. `KanbanSquareIcon`, not `LayoutGridIcon` — the page already uses
+that one for its own Cards/Table toggle, and reusing it here for an
+unrelated destination would read as the same button doing two things.
+
+**The card grid's outer element had to stop being a `<Link>`, not just
+grow a second link inside it.** An anchor can't nest another anchor — the
+identical "no interactive element inside another one" rule the notepad's
+own card and the notification inbox's row both hit — so the card became a
+plain `<div>` holding two sibling links (name, board icon) instead of one
+link wrapping everything. The table view never had this problem: its Name
+cell was always just the name, never the whole row, so the new board icon
+is simply one more cell.
+
 ## Rich task descriptions
 
 Read `services/richtext.py`. A description is **sanitised HTML** now, and that
@@ -2481,6 +2505,22 @@ Read these before starting Phase 6.
   rendered as one run-on sentence. Same fix as a comment or an announcement
   body — `views/Notifications.tsx`'s body `<span>` needed the class everyone
   else already has.
+- **Each inbox row got its own Mark-as-read and Delete buttons, not just
+  the page-level "Mark all read."** `DELETE /notifications/{id}` and
+  `POST /notifications/{id}/read` (already existed) sit beside each other
+  in `services/notifications.py` with the identical "not found is fine"
+  shape — a foreign or already-gone id 204s rather than 404ing, since
+  DELETE is supposed to be idempotent and there's nothing here worth a
+  second person ever seeing (no org scoping, no access check beyond
+  `user_id == caller`). The row itself couldn't stay a `<button>` once it
+  needed to contain two more buttons — nested interactive elements are
+  invalid HTML — so it's `role="button"` on a `<div>` with `tabIndex`/
+  `onKeyDown`, the identical shape the notepad's own card already
+  documents here, and for the identical reason: a Playwright role query for
+  the inner button matches the outer row too, since its computed
+  accessible name concatenates the row's own text with the nested button's
+  `aria-label`. Scoped to the real `<button>` tag instead of a role query
+  when this needed testing.
 - **`.env` beats a `${VAR:-default}` in the override.** `:-` only applies when
   the variable is *unset*, and `.env` is production-shaped. That is why
   `compose.override.yml` pins `SMTP_HOST: mailpit` / `SMTP_PORT: 1025`

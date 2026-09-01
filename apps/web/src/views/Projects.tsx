@@ -3,6 +3,7 @@ import {
   CircleAlertIcon,
   CircleDotIcon,
   FolderIcon,
+  KanbanSquareIcon,
   LayoutGridIcon,
   LockIcon,
   PlusIcon,
@@ -215,20 +216,42 @@ export default function Projects() {
               </h2>
             )}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* A plain `<div>`, not a `<Link>` — it now holds two links
+                  (the name, and "Open board"), and an anchor can't nest
+                  another one. The name keeps going to the project's own
+                  page (access, rename, export, danger zone — everything
+                  that reads as "settings"); the new board icon is the
+                  instant path to the board that used to take a detour
+                  through that page first. */}
               {section.projects.map((project) => (
-                <Link
+                <div
                   key={project.id}
-                  to={`/orgs/${org.id}/projects/${project.id}`}
-                  className="group flex flex-col gap-3 rounded-xl border bg-card p-4 transition-colors hover:bg-accent/50"
+                  className="flex flex-col gap-3 rounded-xl border bg-card p-4"
                 >
                   <div className="min-w-0">
                     <div className="flex items-start gap-2">
-                      <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
+                      <Link
+                        to={`/orgs/${org.id}/projects/${project.id}`}
+                        className="min-w-0 flex-1 truncate font-medium hover:underline"
+                      >
+                        {project.name}
+                      </Link>
                       {project.archived && (
                         <Badge variant="outline" className="shrink-0 text-muted-foreground">
                           Archived
                         </Badge>
                       )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0"
+                        aria-label={`Open board for ${project.name}`}
+                        title="Open board"
+                        render={<Link to={`/orgs/${org.id}/tasks?project=${project.id}`} />}
+                        nativeButton={false}
+                      >
+                        <KanbanSquareIcon />
+                      </Button>
                     </div>
                     {project.description && (
                       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
@@ -243,7 +266,7 @@ export default function Projects() {
                       {LEVEL_LABEL[project.access]}
                     </Badge>
                   </div>
-                </Link>
+                </div>
               ))}
             </div>
           </section>
@@ -305,6 +328,7 @@ function ProjectsTable({ orgId, projects }: { orgId: string; projects: Project[]
             <th className="px-3 py-2 font-medium">Access</th>
             <th className="px-3 py-2 text-right font-medium">Open</th>
             <th className="px-3 py-2 text-right font-medium">Important</th>
+            <th className="px-3 py-2" />
           </tr>
         </thead>
         <tbody>
@@ -332,6 +356,18 @@ function ProjectsTable({ orgId, projects }: { orgId: string; projects: Project[]
               </td>
               <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                 {project.important_task_count > 0 ? project.important_task_count : "—"}
+              </td>
+              <td className="px-3 py-2 text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Open board for ${project.name}`}
+                  title="Open board"
+                  render={<Link to={`/orgs/${orgId}/tasks?project=${project.id}`} />}
+                  nativeButton={false}
+                >
+                  <KanbanSquareIcon />
+                </Button>
               </td>
             </tr>
           ))}
