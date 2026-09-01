@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { useRealtime } from "@/hooks/use-realtime";
 import type { Shell } from "@/App";
 import { AccessPanel } from "@/components/access-panel";
@@ -83,6 +84,11 @@ export default function TaskDetail() {
   const navigate = useNavigate();
   const toast = useToastManager();
   const org = organisations.find((o) => o.id === orgId) ?? null;
+  // Mirrors the grid's own `2xl` breakpoint — see the comment above the
+  // grid for why this is decided in JS rather than with a second, hidden
+  // copy of <CommentThread> toggled by CSS. Called unconditionally, above
+  // every early `return` below, same as every other hook in this component.
+  const isWide = useMediaQuery("(min-width: 1536px)");
 
   const [task, setTask] = useState<Task | null>(null);
   const [accessInfo, setAccessInfo] = useState<TaskAccess | null>(null);
@@ -245,6 +251,19 @@ export default function TaskDetail() {
       hint: m.display_name ? (m.email ?? undefined) : undefined,
     }));
 
+  const commentThread = (
+    <CommentThread
+      orgId={org.id}
+      anchor="tasks"
+      anchorId={task.id}
+      onChanged={onCommentsChanged}
+      // Write access to switch it, same bar as the sidebar's own Action
+      // required field — a read-only viewer can still comment, just not
+      // reassign the task while doing it.
+      actionRequiredCandidates={editable ? people : undefined}
+    />
+  );
+
   // Only projects you can edit. Filing work into someone's project changes
   // what they see; the API enforces it, this avoids offering a 403.
   const projectItems: PickerItem[] = projects
@@ -362,31 +381,25 @@ export default function TaskDetail() {
         onChanged={load}
       />
 
-      {/* Three grid children below `lg`'s single sidebar column already had
-          (Details, Comments, History+note); a fourth breakpoint splits the
-          first of those into its own middle column once there's genuinely
-          room for it. `col-start` on all four is what makes that possible —
-          CSS Grid's own auto-placement, given no hints, would put the
-          second DOM child (Comments) into column 2 the moment there IS a
-          column 2 (at `lg`), landing it in the sidebar's own slot instead
-          of stacking under Details. Explicit placement at every breakpoint
-          that has more than one column is what keeps `lg`'s existing
-          two-column layout exactly as it was; `2xl` is the only breakpoint
-          that actually moves anything.
-
-          The sidebar also needs an explicit `row-start-1`, not just a
-          `col-start` — found by screenshotting the `2xl` layout and seeing
-          an empty gap where Status should be. Sparse auto-placement tracks
-          a single forward-moving cursor across the whole grid, in DOM
-          order: once History+note (the third child, `col-start-1`) can't
-          fit column 1's row 1 (Details is already there) and drops to row
-          2, the cursor advances to row 2 with it — so the sidebar (the
-          fourth child, auto row) resumes its own search from row 2 onward
-          and never backfills the still-empty row-1/col-3 cell above it.
-          `lg:row-start-1` pins the sidebar to row 1 outright, at both `lg`
-          and `2xl`, independent of that cursor. Comments needs the same
-          pin, but only from `2xl` on — at `lg` it must still auto-place
-          into column 1's row 2, stacked under Details as it always was. */}
+      {/* Comments gets its own column from `2xl` up, between this main
+          column and the sidebar. That can't be done with `col-start` alone:
+          an early version split this column into two grid children (Details
+          through Files, then History+note) so Comments could sit between
+          them at `lg` and move out at `2xl`, but that puts three siblings in
+          row 1 (Details-through-Files, Comments-or-sidebar) whose auto row
+          height is the *tallest* of them — the sidebar, being by far the
+          longest card — which stretched the shorter Details-through-Files
+          cell to match and left a dead gap between Files and History before
+          the next row even started. Two grid rows sharing a track with a
+          much taller sidebar is the trap; the fix is to not have two rows.
+          `isWide` (`useMediaQuery`, mirroring the grid's own `2xl` in JS —
+          both must stay at 1536px) decides, once, whether `<CommentThread>`
+          mounts inline inside this single column-1 div (below `2xl`, its
+          original position between Files and History) or as its own
+          sibling grid item (at `2xl`, between this column and the sidebar).
+          It only ever mounts once — never both at once behind a `hidden`
+          class — because it holds its own thread state and a realtime
+          subscription; mounting two copies live at once would double both. */}
       <div className="grid gap-4 lg:grid-cols-[1fr_22rem] 2xl:grid-cols-[1fr_28rem_22rem]">
         <div className="space-y-4 lg:col-start-1">
           <Card>
@@ -434,26 +447,9 @@ export default function TaskDetail() {
             canEdit={editable}
             refreshKey={filesKey}
           />
-        </div>
 
-        {/* Its own column from `2xl` up — crucial enough on a busy task to
-            not be buried below checklists, sheets and files every time.
-            Below `2xl` it stays exactly where it always was, stacked under
-            Files, via the same `lg:col-start-1` the surrounding cards get. */}
-        <div className="lg:col-start-1 2xl:col-start-2 2xl:row-start-1">
-          <CommentThread
-            orgId={org.id}
-            anchor="tasks"
-            anchorId={task.id}
-            onChanged={onCommentsChanged}
-            // Write access to switch it, same bar as the sidebar's own
-            // Action required field — a read-only viewer can still comment,
-            // just not reassign the task while doing it.
-            actionRequiredCandidates={editable ? people : undefined}
-          />
-        </div>
+          {!isWide && commentThread}
 
-        <div className="space-y-4 lg:col-start-1">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -487,6 +483,13 @@ export default function TaskDetail() {
               anyone with access can see" order. */}
           <PrivateNote orgId={org.id} taskId={task.id} />
         </div>
+
+        {/* Only rendered once `isWide`, at which point the grid is already
+            in its `2xl`, three-column configuration — so this needs no
+            `lg:`/`2xl:` prefixing of its own, unlike the sidebar below,
+            which must keep responding to the CSS breakpoint directly since
+            it renders at every width. */}
+        {isWide && <div className="col-start-2 row-start-1">{commentThread}</div>}
 
         <div className="space-y-4 lg:col-start-2 lg:row-start-1 2xl:col-start-3">
           <Card>

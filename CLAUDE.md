@@ -2003,40 +2003,48 @@ nobody got is the one that mattered — so `scripts/e2e-comments.sh` tests both
 sides of it.
 
 **On a wide screen, Comments gets its own column between Details and the
-sidebar — a fourth grid child, not a fifth breakpoint's worth of new
-layout.** `TaskDetail.tsx`'s content grid was two items (a main column, a
-sidebar) with an implicit single column below `lg`. Splitting Comments out
-into its own middle column only at `2xl` meant splitting the main column
-into three DOM children — Details-through-Files, Comments, then
-History-and-PrivateNote — each carrying its own `col-start` per breakpoint,
-so `lg` keeps the exact layout it always had (all three stacked in one
-column) and only `2xl` pulls Comments into a real second column between
-that stack and the sidebar's third.
+sidebar — decided in JS, not with a CSS breakpoint alone.** `TaskDetail.tsx`'s
+content grid was two items (a main column, a sidebar) with an implicit
+single column below `lg`. The first version split the main column into
+three DOM children so Comments could sit between Details-through-Files and
+History+PrivateNote at `lg`, and move to its own column at `2xl` — each
+child carrying its own `col-start`/`row-start` per breakpoint. That shipped
+two real bugs before landing on the current shape:
 
-**Every grid child needs an explicit `col-start`, and the two that must sit
-flush with the top of their column need an explicit `row-start` too — CSS
-Grid's own auto-placement will not put them there on its own, and the
-failure is invisible unless you screenshot the exact breakpoint.** Found
-exactly that way: at `2xl` the sidebar rendered in an empty-looking cell
-with nothing in row 1 above it, while Details and Comments sat correctly at
-the top. Sparse auto-placement (the default) tracks one cursor for the
-whole grid, in DOM order, and never backtracks it. Details (child 1,
-`col-start-1`) claims row 1. Comments (child 2) has an explicit column but
-no row, so it auto-places — fine, since at `2xl` its column is free in row
-1. History+PrivateNote (child 3, `col-start-1`, no row) wants column 1 too,
-finds row 1 already taken by Details, and drops to row 2 — advancing the
-cursor to row 2 with it. The sidebar (child 4) also has only a column, no
-row, and now resumes its own search *from row 2 onward*, walking straight
-past the still-empty row-1 cell in its own column that a naive reading of
-"sparse" would expect it to fill. The fix is `row-start-1` on whichever
-children must stay pinned to the top regardless of what a sibling did:
-the sidebar unconditionally (`lg:row-start-1`, since its row is always 1
-whether it's column 2 at `lg` or column 3 at `2xl`), and Comments only from
-`2xl` on (`2xl:row-start-1` — at `lg` it must still auto-place into column
-1's row 2, stacked under Details exactly as before). Once both axes are
-explicit for an item, the placement algorithm seats it directly rather than
-walking the cursor at all, so it can no longer be dragged along by an
-unrelated sibling's overflow.
+- **The sidebar rendered in an empty-looking cell, nothing in row 1 above
+  it.** CSS Grid's sparse auto-placement (the default) tracks one cursor
+  for the whole grid, in DOM order, and never backtracks it. History+note
+  (child 3, `col-start-1`, no row) wants column 1, finds row 1 already
+  taken by Details, and drops to row 2 — advancing the cursor to row 2
+  with it. The sidebar (child 4, only a column, no row) then resumes its
+  own search *from row 2 onward*, walking straight past the still-empty
+  row-1 cell in its own column. Pinning the sidebar and Comments to
+  `row-start-1` fixed the visible hole — but:
+- **That fix opened a second, worse one: a dead gap between Files and
+  History.** Once Details-through-Files, Comments and the sidebar all sit
+  in row 1, the row's *auto height* is the tallest of the three — the
+  sidebar, by far the longest card on the screen — and CSS Grid stretches
+  every item in that row to match. Details-through-Files (a few hundred
+  pixels of real content) got stretched to the sidebar's ~1800px, leaving
+  the extra space as dead air below Files before History (row 2) even
+  started. Two grid rows sharing a track with a much taller sidebar is the
+  actual trap; no combination of `row-start` fixes it, because the row
+  track's height doesn't care which item is aligned where within it.
+
+The fix that stuck: column 1 is **one single grid item**, always — Details
+through Files, then History+note, merged into the same `space-y-4` div, so
+its height is governed purely by its own content and can never be stretched
+by a taller sibling. `hooks/use-media-query.ts`'s `useMediaQuery` (mirroring
+the grid's own `2xl`, hardcoded to the same 1536px — both must stay in
+sync) decides, once per render, *where* the single `<CommentThread>`
+mounts: inline inside that merged div (below `2xl`, its original position
+between Files and History) or as its own sibling grid item, between column
+1 and the sidebar (at `2xl`). It only ever mounts once — never twice behind
+a `hidden` class toggled by CSS — because it owns a realtime subscription
+and its own thread state; two live copies would double both. This is
+generally the shape to reach for when a component needs to change *DOM
+position* by breakpoint, not just show/hide or restyle: Tailwind's
+responsive classes can express the latter, never the former.
 
 **The order toggle is a client-side reversal of an already-fetched array,
 not a second backend query.** `services/conversations.py::list_messages`
