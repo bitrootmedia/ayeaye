@@ -1,4 +1,5 @@
 import {
+  ArrowDownUpIcon,
   FileIcon,
   MessageSquareIcon,
   PaperclipIcon,
@@ -25,6 +26,7 @@ import { VoiceNotePlayer, VoiceNoteRecorder } from "@/components/voice-note";
 import { canRecord } from "@/lib/audio";
 import { personName, type Person } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { lastView, rememberView } from "@/lib/view-preference";
 
 type Attachment = {
   id: string;
@@ -100,7 +102,17 @@ export function CommentThread({
   // server-side already — sending is what gives them a home.
   const [staged, setStaged] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null);
+  // Oldest-first, unchanged from before this toggle existed — a thread
+  // reads as a conversation, the same "story, not a feed" reasoning
+  // CLAUDE.md gives for the task's own History card. Remembered per
+  // browser, the same `lib/view-preference.ts` shortcut every other
+  // display toggle in this product already uses, not per-thread: the
+  // preference is about how *you* like to read, not about this one task.
+  const [order, setOrder] = useState<"oldest" | "newest">(
+    lastView("comment-order") === "newest" ? "newest" : "oldest",
+  );
   const bottom = useRef<HTMLDivElement>(null);
+  const top = useRef<HTMLDivElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
 
   const base = `/organisations/${orgId}/${anchor}/${anchorId}/comments`;
@@ -227,7 +239,12 @@ export function CommentThread({
       setStaged([]);
       setActionRequired("");
       await refresh();
-      bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // A fresh comment lands at the visual start of the list in "newest
+      // first" — scrolling to the old bottom marker would show nothing new.
+      (order === "newest" ? top : bottom).current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
     } catch (err) {
       const detail =
         err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
@@ -244,21 +261,48 @@ export function CommentThread({
     !thread?.can_post || !!uploading,
   );
 
+  // The fetch order never changes — oldest-first, straight from the API.
+  // This only ever reverses a copy for display, so `refresh()` and the
+  // realtime path stay the one code path they've always been.
+  const orderedMessages = useMemo(
+    () => (order === "newest" ? [...(thread?.messages ?? [])].reverse() : (thread?.messages ?? [])),
+    [thread, order],
+  );
+
+  const toggleOrder = () => {
+    const next = order === "oldest" ? "newest" : "oldest";
+    setOrder(next);
+    rememberView("comment-order", next);
+  };
+
   return (
     // A named region, because the same picture can appear both here and in
     // the Files panel above — for a screen reader, and for anything else
     // trying to say *which* copy it means.
     <Card role="region" aria-label="Comments">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MessageSquareIcon className="size-4" />
-          Comments
-          {thread && thread.messages.length > 0 && (
-            <span className="font-mono text-sm font-normal text-muted-foreground">
-              {thread.messages.length}
-            </span>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquareIcon className="size-4" />
+            Comments
+            {thread && thread.messages.length > 0 && (
+              <span className="font-mono text-sm font-normal text-muted-foreground">
+                {thread.messages.length}
+              </span>
+            )}
+          </CardTitle>
+          {thread && thread.messages.length > 1 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleOrder}
+              aria-label={order === "oldest" ? "Show newest first" : "Show oldest first"}
+            >
+              <ArrowDownUpIcon />
+              {order === "oldest" ? "Newest first" : "Oldest first"}
+            </Button>
           )}
-        </CardTitle>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {thread === null ? (
@@ -270,11 +314,14 @@ export function CommentThread({
             No comments yet. Anyone who can see this can add one.
           </p>
         ) : (
-          <ul className="space-y-4">
-            {thread.messages.map((comment) => (
-              <CommentRow key={comment.id} orgId={orgId} comment={comment} onChanged={refresh} />
-            ))}
-          </ul>
+          <>
+            <div ref={top} />
+            <ul className="space-y-4">
+              {orderedMessages.map((comment) => (
+                <CommentRow key={comment.id} orgId={orgId} comment={comment} onChanged={refresh} />
+              ))}
+            </ul>
+          </>
         )}
         <div ref={bottom} />
 

@@ -362,8 +362,33 @@ export default function TaskDetail() {
         onChanged={load}
       />
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
-        <div className="space-y-4">
+      {/* Three grid children below `lg`'s single sidebar column already had
+          (Details, Comments, History+note); a fourth breakpoint splits the
+          first of those into its own middle column once there's genuinely
+          room for it. `col-start` on all four is what makes that possible —
+          CSS Grid's own auto-placement, given no hints, would put the
+          second DOM child (Comments) into column 2 the moment there IS a
+          column 2 (at `lg`), landing it in the sidebar's own slot instead
+          of stacking under Details. Explicit placement at every breakpoint
+          that has more than one column is what keeps `lg`'s existing
+          two-column layout exactly as it was; `2xl` is the only breakpoint
+          that actually moves anything.
+
+          The sidebar also needs an explicit `row-start-1`, not just a
+          `col-start` — found by screenshotting the `2xl` layout and seeing
+          an empty gap where Status should be. Sparse auto-placement tracks
+          a single forward-moving cursor across the whole grid, in DOM
+          order: once History+note (the third child, `col-start-1`) can't
+          fit column 1's row 1 (Details is already there) and drops to row
+          2, the cursor advances to row 2 with it — so the sidebar (the
+          fourth child, auto row) resumes its own search from row 2 onward
+          and never backfills the still-empty row-1/col-3 cell above it.
+          `lg:row-start-1` pins the sidebar to row 1 outright, at both `lg`
+          and `2xl`, independent of that cursor. Comments needs the same
+          pin, but only from `2xl` on — at `lg` it must still auto-place
+          into column 1's row 2, stacked under Details as it always was. */}
+      <div className="grid gap-4 lg:grid-cols-[1fr_22rem] 2xl:grid-cols-[1fr_28rem_22rem]">
+        <div className="space-y-4 lg:col-start-1">
           <Card>
             <CardHeader>
               <CardTitle>Details</CardTitle>
@@ -409,7 +434,13 @@ export default function TaskDetail() {
             canEdit={editable}
             refreshKey={filesKey}
           />
+        </div>
 
+        {/* Its own column from `2xl` up — crucial enough on a busy task to
+            not be buried below checklists, sheets and files every time.
+            Below `2xl` it stays exactly where it always was, stacked under
+            Files, via the same `lg:col-start-1` the surrounding cards get. */}
+        <div className="lg:col-start-1 2xl:col-start-2 2xl:row-start-1">
           <CommentThread
             orgId={org.id}
             anchor="tasks"
@@ -420,7 +451,9 @@ export default function TaskDetail() {
             // just not reassign the task while doing it.
             actionRequiredCandidates={editable ? people : undefined}
           />
+        </div>
 
+        <div className="space-y-4 lg:col-start-1">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -455,7 +488,7 @@ export default function TaskDetail() {
           <PrivateNote orgId={org.id} taskId={task.id} />
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 lg:col-start-2 lg:row-start-1 2xl:col-start-3">
           <Card>
             <CardHeader>
               <CardTitle>Status</CardTitle>

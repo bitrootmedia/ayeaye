@@ -1983,6 +1983,73 @@ and a back-and-forth is one email per line, too lazy and the notification
 nobody got is the one that mattered — so `scripts/e2e-comments.sh` tests both
 sides of it.
 
+**On a wide screen, Comments gets its own column between Details and the
+sidebar — a fourth grid child, not a fifth breakpoint's worth of new
+layout.** `TaskDetail.tsx`'s content grid was two items (a main column, a
+sidebar) with an implicit single column below `lg`. Splitting Comments out
+into its own middle column only at `2xl` meant splitting the main column
+into three DOM children — Details-through-Files, Comments, then
+History-and-PrivateNote — each carrying its own `col-start` per breakpoint,
+so `lg` keeps the exact layout it always had (all three stacked in one
+column) and only `2xl` pulls Comments into a real second column between
+that stack and the sidebar's third.
+
+**Every grid child needs an explicit `col-start`, and the two that must sit
+flush with the top of their column need an explicit `row-start` too — CSS
+Grid's own auto-placement will not put them there on its own, and the
+failure is invisible unless you screenshot the exact breakpoint.** Found
+exactly that way: at `2xl` the sidebar rendered in an empty-looking cell
+with nothing in row 1 above it, while Details and Comments sat correctly at
+the top. Sparse auto-placement (the default) tracks one cursor for the
+whole grid, in DOM order, and never backtracks it. Details (child 1,
+`col-start-1`) claims row 1. Comments (child 2) has an explicit column but
+no row, so it auto-places — fine, since at `2xl` its column is free in row
+1. History+PrivateNote (child 3, `col-start-1`, no row) wants column 1 too,
+finds row 1 already taken by Details, and drops to row 2 — advancing the
+cursor to row 2 with it. The sidebar (child 4) also has only a column, no
+row, and now resumes its own search *from row 2 onward*, walking straight
+past the still-empty row-1 cell in its own column that a naive reading of
+"sparse" would expect it to fill. The fix is `row-start-1` on whichever
+children must stay pinned to the top regardless of what a sibling did:
+the sidebar unconditionally (`lg:row-start-1`, since its row is always 1
+whether it's column 2 at `lg` or column 3 at `2xl`), and Comments only from
+`2xl` on (`2xl:row-start-1` — at `lg` it must still auto-place into column
+1's row 2, stacked under Details exactly as before). Once both axes are
+explicit for an item, the placement algorithm seats it directly rather than
+walking the cursor at all, so it can no longer be dragged along by an
+unrelated sibling's overflow.
+
+**The order toggle is a client-side reversal of an already-fetched array,
+not a second backend query.** `services/conversations.py::list_messages`
+already orders by `Message.id` ascending — oldest-first falls out of
+UUIDv7 for free, and always has — so there was nothing to add server-side.
+`comment-thread.tsx` keeps that as the source of truth and derives
+`orderedMessages` by reversing it in memory when the toggle is set to
+newest; the toggle itself persists through `lib/view-preference.ts`, the
+same brand-free `localStorage` helper board/list and cards/table already
+use, under a new `"comment-order"` key. Newest-first also flips which end
+of the list a fresh comment scrolls to — `top` when the newest lands first,
+`bottom` (the existing behaviour) otherwise — via a second ref that sits
+before the `<ul>`, not inside it: an early attempt put it as the list's
+first child, which is invalid HTML (`<ul>` may only contain `<li>`), caught
+before it shipped rather than by a test.
+
+**A Playwright gotcha worth carrying forward: the composer's own async
+clear can outrace the next keystroke, and a one-shot DOM read can outrace a
+render.** Posting several comments in a loop — type, click Send, assert
+posted, repeat — needs to wait for the *previous* send's `setDraft("")` to
+actually land before typing the next one; `send.click()` only waits for the
+click itself; whatever `onClick` triggers asynchronously keeps running
+after it resolves. Skipping that wait let the next comment's leading
+keystrokes land while the field was still being cleared by the last one,
+silently truncating "Second comment" down to "omment". And reading a
+comment's ordering back with `.allTextContents()` — a one-shot, non-polling
+query — can run a beat before React has painted the latest state update,
+reporting one fewer comment than actually exists a moment later. Both were
+mistaken for product bugs before turning out to be test-only races; the
+fix in both cases was to use Playwright's auto-retrying assertions
+(`toHaveValue`, `toHaveText`) instead of a manual read-then-compare.
+
 ## Notification channels
 
 Read `services/notification_channels.py`. Telegram and a generic webhook,
