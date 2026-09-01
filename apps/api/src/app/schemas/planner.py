@@ -34,4 +34,8 @@ class PlannerOut(BaseModel):
 
 class PlannerPlaceIn(BaseModel):
     bucket: str = Field(pattern=BUCKET_PATTERN)
-    position: int
+    # Required from the Planner board itself, which always knows where a
+    # drop landed relative to its new neighbours. Omit it — the task
+    # screen's own bucket picker does — and the task is appended to the end
+    # of the bucket instead; see `services/planner.py::place`.
+    position: int | None = None

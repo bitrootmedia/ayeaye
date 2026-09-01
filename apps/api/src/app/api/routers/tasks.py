@@ -9,7 +9,17 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
-from app.models import Attachment, Project, Tag, Task, TaskGrant, TaskSeries, Team, User
+from app.models import (
+    Attachment,
+    PlannerEntry,
+    Project,
+    Tag,
+    Task,
+    TaskGrant,
+    TaskSeries,
+    Team,
+    User,
+)
 from app.schemas.structure import GrantLevelIn, GrantOut, PersonOut, TeamOut
 from app.schemas.tasks import (
     BoardColumn,
@@ -220,6 +230,26 @@ async def _recurrence_for(
     return out
 
 
+async def _planner_bucket_for(db: DbSession, tasks: list[Task], user: User) -> dict[uuid.UUID, str]:
+    """Which bucket the caller has each of these tasks in, if any — one
+    lookup for the whole page, the same discipline as `_recurrence_for`
+    and used only where it's called from (the single-task endpoints, not
+    the list or board). Personal to the caller like `_pinned_for`: two
+    people can have the same task in two different buckets, or one planned
+    and the other not at all."""
+    if not tasks:
+        return {}
+    rows = (
+        await db.execute(
+            select(PlannerEntry.task_id, PlannerEntry.bucket).where(
+                PlannerEntry.task_id.in_([t.id for t in tasks]),
+                PlannerEntry.user_id == user.id,
+            )
+        )
+    ).all()
+    return {task_id: bucket for task_id, bucket in rows}
+
+
 async def _image_urls(db: DbSession, tasks: list[Task]) -> dict[uuid.UUID, str]:
     """Fresh presigned URLs for every image referenced by these descriptions.
 
@@ -261,6 +291,7 @@ def _task_out(
     image_urls: dict[uuid.UUID, str] | None = None,
     pinned: set[uuid.UUID] | None = None,
     recurrence: dict[uuid.UUID, TaskRecurrenceOut] | None = None,
+    planner_buckets: dict[uuid.UUID, str] | None = None,
 ) -> TaskOut:
     return TaskOut(
         id=str(task.id),
@@ -285,6 +316,7 @@ def _task_out(
         is_hidden=task.hidden_at is not None,
         is_pinned=task.id in (pinned or set()),
         recurrence=(recurrence or {}).get(task.id),
+        planner_bucket=(planner_buckets or {}).get(task.id),
         access=level,
         can_close=tasks_service.can_close(level=level, is_owner=is_owner),
         can_hide=tasks_service.can_hide(is_owner=is_owner),
@@ -477,6 +509,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     images = await _image_urls(db, [tctx.task])
     pinned = await _pinned_for(db, [tctx.task], user)
     recurrence = await _recurrence_for(db, [tctx.task], user, ctx)
+    planner_buckets = await _planner_bucket_for(db, [tctx.task], user)
     return _task_out(
         tctx.task,
         tctx.level,
@@ -487,6 +520,7 @@ async def get_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
         image_urls=images,
         pinned=pinned,
         recurrence=recurrence,
+        planner_buckets=planner_buckets,
     )
 
 
@@ -531,6 +565,7 @@ async def update_task(
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
     recurrence = await _recurrence_for(db, [task], user, ctx)
+    planner_buckets = await _planner_bucket_for(db, [task], user)
     return _task_out(
         task,
         level,
@@ -541,6 +576,7 @@ async def update_task(
         image_urls=images,
         pinned=pinned,
         recurrence=recurrence,
+        planner_buckets=planner_buckets,
     )
 
 
@@ -561,6 +597,7 @@ async def close_task(
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
     recurrence = await _recurrence_for(db, [task], user, ctx)
+    planner_buckets = await _planner_bucket_for(db, [task], user)
     return _task_out(
         task,
         tctx.level,
@@ -571,6 +608,7 @@ async def close_task(
         image_urls=images,
         pinned=pinned,
         recurrence=recurrence,
+        planner_buckets=planner_buckets,
     )
 
 
@@ -588,6 +626,7 @@ async def _task_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
     images = await _image_urls(db, [tctx.task])
     pinned = await _pinned_for(db, [tctx.task], user)
     recurrence = await _recurrence_for(db, [tctx.task], user, ctx)
+    planner_buckets = await _planner_bucket_for(db, [tctx.task], user)
     return _task_out(
         tctx.task,
         tctx.level,
@@ -598,6 +637,7 @@ async def _task_response(db: DbSession, ctx, tctx, user: User) -> TaskOut:
         image_urls=images,
         pinned=pinned,
         recurrence=recurrence,
+        planner_buckets=planner_buckets,
     )
 
 
@@ -1123,6 +1163,7 @@ async def hide_task(
     images = await _image_urls(db, [task])
     pinned = await _pinned_for(db, [task], user)
     recurrence = await _recurrence_for(db, [task], user, ctx)
+    planner_buckets = await _planner_bucket_for(db, [task], user)
     return _task_out(
         task,
         tctx.level,
@@ -1132,6 +1173,7 @@ async def hide_task(
         tags=tags,
         pinned=pinned,
         recurrence=recurrence,
+        planner_buckets=planner_buckets,
         image_urls=images,
     )
 

@@ -57,6 +57,8 @@ import { useToastManager } from "@/components/ui/toast";
 import { timestamp } from "@/lib/format";
 import {
   LEVEL_LABEL,
+  PLANNER_BUCKETS,
+  PLANNER_BUCKET_LABEL,
   PRIORITY_LABEL,
   STATUS_DOT,
   STATUS_LABEL,
@@ -65,6 +67,7 @@ import {
   canEdit,
   personName,
   type Member,
+  type PlannerBucket,
   type Project,
   type Task,
   type TaskAccess,
@@ -204,6 +207,23 @@ export default function TaskDetail() {
       toast.add({ title: "That didn't work", description: detail });
     }
   };
+
+  // Its own endpoint, not `patch()` — the planner is personal to the caller
+  // (`read` is enough, the identical bar `services/pins.py` sets for the
+  // same reason), not a property of the task the way status or due date
+  // are. `null` removes the entry rather than PUTting an empty bucket —
+  // "unplanned" is the absence of a row, not a sixth bucket.
+  const setPlanner = (bucket: PlannerBucket | null) =>
+    act(
+      () =>
+        bucket
+          ? api(`/organisations/${org.id}/planner/${task.id}`, {
+              method: "PUT",
+              body: JSON.stringify({ bucket }),
+            })
+          : api(`/organisations/${org.id}/planner/${task.id}`, { method: "DELETE" }),
+      bucket ? `Added to ${PLANNER_BUCKET_LABEL[bucket]}` : "Removed from your planner",
+    );
 
   const patch = (body: Record<string, unknown>, success: string) =>
     act(
@@ -511,6 +531,23 @@ export default function TaskDetail() {
                   onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
                 />
               </div>
+              <Field
+                label="Planner"
+                help="Yours alone — which bucket it sits in on your own Planner board."
+              >
+                <EntityPicker
+                  ariaLabel="Planner"
+                  items={PLANNER_BUCKETS.map((b) => ({
+                    value: b,
+                    label: PLANNER_BUCKET_LABEL[b],
+                  }))}
+                  value={task.planner_bucket}
+                  placeholder="Not planned"
+                  emptyLabel="Not planned"
+                  searchPlaceholder="Filter…"
+                  onChange={(v) => setPlanner(v as PlannerBucket | null)}
+                />
+              </Field>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-2">
                   <Label htmlFor="estimated-start">Est. start</Label>

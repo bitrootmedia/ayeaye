@@ -58,6 +58,22 @@ ok "move to tomorrow"           "$(put /tmp/pc.jar $B/api/organisations/$OID/pla
 ok "…gone from today"           "$(in_bucket /tmp/pc.jar "" "today" "$TID")" "0"
 ok "…exactly one entry, total"  "$(plan_count /tmp/pc.jar "")" "1"
 
+echo "== position is optional — appends to the end of the bucket"
+TID2=$(post /tmp/pc.jar $B/api/organisations/$OID/tasks "{\"title\":\"Second in bucket $S\"}" | j "d['id']")
+FIRST_POS=$(put /tmp/pc.jar $B/api/organisations/$OID/planner/$TID '{"bucket":"someday"}' | j "d['position']")
+SECOND_POS=$(put /tmp/pc.jar $B/api/organisations/$OID/planner/$TID2 '{"bucket":"someday"}' | j "d['position']")
+ok "the second placement lands after the first" "$([ "$SECOND_POS" -gt "$FIRST_POS" ] && echo yes)" "yes"
+curl -s -o /dev/null -b /tmp/pc.jar -X DELETE $B/api/organisations/$OID/planner/$TID2
+
+echo "== a task's own screen shows the caller's bucket, and only the caller's"
+ok "Carol's own view of the task shows the bucket" \
+   "$(curl -s -b /tmp/pc.jar $B/api/organisations/$OID/tasks/$TID | j "d['planner_bucket']")" "someday"
+ok "the list view doesn't pay for it (always null there)" \
+   "$(curl -s -b /tmp/pc.jar "$B/api/organisations/$OID/tasks?limit=5" | j "all(t['planner_bucket'] is None for t in d)")" "True"
+curl -s -o /dev/null -b /tmp/pc.jar -X DELETE $B/api/organisations/$OID/planner/$TID
+ok "unplanning clears it back to null" \
+   "$(curl -s -b /tmp/pc.jar $B/api/organisations/$OID/tasks/$TID | j "d['planner_bucket']")" "None"
+
 echo "== removing returns it to the pool"
 ok "unplan"                     "$(code -b /tmp/pc.jar -X DELETE $B/api/organisations/$OID/planner/$TID)" "204"
 ok "back in the pool"           "$(in_pool /tmp/pc.jar "" "$TID")" "1"

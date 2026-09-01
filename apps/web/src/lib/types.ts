@@ -368,6 +368,10 @@ export type Task = {
   /** Set only when this task is part of a recurring series. `null` on the
    *  list and board views — see services/recurrence.py. */
   recurrence: TaskRecurrence | null;
+  /** The caller's own day-planner bucket for this task — personal, like
+   *  `is_pinned`, and `null` on the list and board views for the same
+   *  reason `recurrence` is. `null` here means unplanned, not "unknown". */
+  planner_bucket: PlannerBucket | null;
   tags: Tag[];
 };
 

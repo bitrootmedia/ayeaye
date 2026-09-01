@@ -99,6 +99,11 @@ class TaskOut(BaseModel):
     # list and board views, which don't pay this lookup's cost per row — see
     # `_recurrence_for` in the router.
     recurrence: TaskRecurrenceOut | None = None
+    # The caller's own day-planner bucket for this task — personal, like
+    # `is_pinned`, and for the same reason `None` on the list and board
+    # views: see `_planner_bucket_for` in the router. `None` here means
+    # unplanned, not "no opinion" — there is no third state.
+    planner_bucket: str | None = None
     # Every tag on it. Sent with the task rather than fetched per card: the
     # board renders dozens at a time and one lookup covers the page.
     tags: list["TagOut"] = []

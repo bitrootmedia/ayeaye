@@ -122,7 +122,7 @@ async def place(
     org_id: uuid.UUID,
     task_id: uuid.UUID,
     bucket: str,
-    position: int,
+    position: int | None = None,
 ) -> tuple[PlannerEntry, Task]:
     """Put a task in a bucket, moving it if it's already in one.
 
@@ -133,6 +133,14 @@ async def place(
 
     Upsert on `(task_id, user_id)`, same shape as `services/notes.py`'s save:
     a double-submit from a fast drag must not create two rows for one task.
+
+    **`position=None` appends to the end of the bucket.** The Planner board
+    itself never omits it — it always knows the drop's new neighbours and
+    computes a midpoint or an end value itself, and nothing server-side ever
+    renumbers a bucket, unchanged. This is a second, narrower caller: the
+    task screen's own bucket picker has no visibility into the bucket's
+    existing rows (fetching the whole planner just to place one task would
+    be a strange trade), so it leaves position out and gets "last" for free.
     """
     row = (
         await db.execute(
@@ -144,6 +152,15 @@ async def place(
     if row is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="task not found")
     task, _rank = row
+
+    if position is None:
+        position = (
+            await db.execute(
+                select(func.coalesce(func.max(PlannerEntry.position), 0) + 1000).where(
+                    PlannerEntry.user_id == target_user_id, PlannerEntry.bucket == bucket
+                )
+            )
+        ).scalar_one()
 
     stmt = (
         insert(PlannerEntry)

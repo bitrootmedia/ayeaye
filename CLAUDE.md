@@ -1435,6 +1435,21 @@ reaching a corner FastAPI's own defaults hadn't.
 `screenshots.spec.ts` photographs the page (`14b-help`, right after
 Account) in both themes, alongside everything else it already covers.
 
+**"Running this installation," the last section, is the one deliberate
+exception to "user-facing language throughout."** It's operator content —
+the exact Telegram bot setup steps (a token from @BotFather, both env vars,
+restarting the stack, registering the webhook with `curl`) already in
+README's own "Telegram — notifications, and creating tasks from chat — is
+optional too" section — placed here too because a self-hoster hitting
+"Telegram notifications aren't configured on this installation" while
+signed into their own instance is faster served by a page already open
+than by finding the README on disk. Explicitly labelled as skippable
+("only relevant if you're the one who set this installation up") rather
+than gated on a role, because Help carries no notion of "administers this
+installation" at all — that's an operator role, not an organisation one,
+and this codebase has no account attribute for it (see the "no policy
+engine" decision at the top of this file) to gate on even if it wanted to.
+
 ## The auth screens
 
 SuperTokens' pre-built UI ships its own look, and left alone it is the first
@@ -2185,6 +2200,41 @@ after-mutation, not a socket. `position` is a plain integer, the same
 no-resequencing convention as `Task.position`: the client computes a value
 (the midpoint of its new neighbours, or ±1000 at an end) once per drop, and
 nothing server-side ever renumbers a bucket.
+
+**`position` is optional on `PUT`, and that's a second, narrower caller
+speaking, not a loosening of "the client always computes it."** The Planner
+board itself never omits it — it always knows a drop's new neighbours and
+still computes the value itself, unchanged. The task screen's own bucket
+picker is different: it has no visibility into a bucket's existing rows
+(fetching the whole planner just to place one task would be a strange
+trade for a single dropdown), so `services/planner.py::place` computes
+`MAX(position) + 1000` for that bucket server-side when `position` is left
+out — "append to the end," the one sensible default for a control that
+can't see the list it's appending to.
+
+**A task's own screen carries the caller's own bucket, read-only next to
+`is_pinned` in `TaskOut`, not built into `TaskUpdate`.** `planner_bucket`
+is set via `_planner_bucket_for` (`api/routers/tasks.py`) — one batched
+lookup, the identical shape `_recurrence_for` already uses for the same
+reason: called only from the single-task endpoints (`GET`, `PATCH`,
+`POST .../closed`, `POST .../hidden`, and the shared `_task_response` pin/
+recurrence rebuilder), never the list or board, which don't pay a personal
+per-row lookup's cost for a field only one screen renders. Setting it goes
+through the planner's own `PUT`/`DELETE`, not `PATCH /tasks/{id}` — a
+bucket assignment isn't a task field the way status or due date are, it's
+personal to whoever's looking, the identical "yours alone" bar pinning
+already clears. The task screen's picker (`views/TaskDetail.tsx`) is an
+ordinary `EntityPicker`, matching CLAUDE.md's own "short fixed lists use it
+too" rule for Status and Priority, with **both** `placeholder` and
+`emptyLabel` set to `"Not planned"` — matching Action Required's identical
+two-prop shape. Setting only `emptyLabel` looks right while the list is
+open (the row is there to clear it) and is wrong at rest: `EntityPicker`'s
+trigger button resolves its own label by finding `value` in the raw
+`items` array, which never contains the synthetic empty-label row — that
+row only exists in the *filtered* list shown while open. Skip `placeholder`
+and clearing the field silently reverts the button to the picker's own
+generic "Choose…" instead of "Not planned," found live testing this exact
+field, not by reading the component's source first.
 
 The frontend's drag-and-drop is `@dnd-kit` — the first dependency of its kind
 in this codebase, chosen for a first-class keyboard sensor. That sensor isn't
