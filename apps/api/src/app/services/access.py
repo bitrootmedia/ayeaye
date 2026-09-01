@@ -655,6 +655,13 @@ def board_stmt(
 
     Both windows ride the same scan as the access expression, so this stays
     one query however many columns there are.
+
+    `group_by="action_required"` partitions on `Task.action_required_user_id`
+    directly — a nullable column, unlike status and priority. Postgres treats
+    NULL as one ordinary partition value for a window function (every row
+    with nobody action-required lands in the same group), so no special
+    casing is needed here; the caller turns that partition's key into the
+    string `"none"` for a JSON-safe response.
     """
     inner = visible_tasks_stmt(
         user_id=user_id,
@@ -666,7 +673,12 @@ def board_stmt(
         tag_id=tag_id,
         include_off_board=include_off_board,
     )
-    group_col = Task.priority if group_by == "priority" else Task.status
+    if group_by == "priority":
+        group_col = Task.priority
+    elif group_by == "action_required":
+        group_col = Task.action_required_user_id
+    else:
+        group_col = Task.status
     within = [_priority_rank().desc(), Task.position, Task.id]
     sub = inner.add_columns(
         func.row_number().over(partition_by=group_col, order_by=within).label("rn"),

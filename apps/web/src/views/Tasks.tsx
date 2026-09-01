@@ -8,6 +8,7 @@ import {
   ListIcon,
   PlusIcon,
   SignalIcon,
+  UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
@@ -62,6 +63,8 @@ const NO_PROJECT = "__loose__";
 /** List rows per page, and how much "Show more" adds. */
 const PAGE = 100;
 
+type GroupBy = "status" | "priority" | "action_required";
+
 /**
  * How long the board waits before refetching after a live event.
  *
@@ -103,7 +106,13 @@ export default function Tasks() {
       : lastView("tasks") === "list"
         ? "list"
         : "board";
-  const groupBy = params.get("group") === "priority" ? "priority" : "status";
+  const groupParam = params.get("group");
+  const groupBy: GroupBy =
+    groupParam === "priority"
+      ? "priority"
+      : groupParam === "action_required"
+        ? "action_required"
+        : "status";
   // Sorting and filtering live in the URL, so a view somebody arrived at is a
   // view they can send to a colleague.
   const sort = params.get("sort");
@@ -247,11 +256,30 @@ export default function Tasks() {
             {view === "board" && (
               <Button
                 variant="ghost"
-                aria-label="Group the board by status or priority"
-                onClick={() => setParam("group", groupBy === "status" ? "priority" : null)}
+                aria-label="Group the board by status, priority, or action required"
+                onClick={() =>
+                  setParam(
+                    "group",
+                    groupBy === "status"
+                      ? "priority"
+                      : groupBy === "priority"
+                        ? "action_required"
+                        : null,
+                  )
+                }
               >
-                {groupBy === "status" ? <SignalIcon /> : <Columns3Icon />}
-                {groupBy === "status" ? "By priority" : "By status"}
+                {groupBy === "status" ? (
+                  <SignalIcon />
+                ) : groupBy === "priority" ? (
+                  <UserCheckIcon />
+                ) : (
+                  <Columns3Icon />
+                )}
+                {groupBy === "status"
+                  ? "By priority"
+                  : groupBy === "priority"
+                    ? "By action required"
+                    : "By status"}
               </Button>
             )}
             <Button
@@ -439,28 +467,67 @@ function Board({
 }: {
   orgId: string;
   board: BoardData;
-  groupBy: "status" | "priority";
+  groupBy: GroupBy;
 }) {
-  // The server bounds each column and reports its real size. Columns are
-  // still driven by the fixed enum rather than by what came back, so an empty
-  // column stays on screen — a board whose columns appear and disappear as
-  // work moves is one you can't scan.
-  const byKey = new Map(board.columns.map((c) => [c.key, c]));
-  const keys: string[] = groupBy === "status" ? TASK_STATUSES : TASK_PRIORITIES;
-  const columns = keys.map((key) => ({
-    key,
-    heading:
-      groupBy === "status" ? (
-        <StatusBadge status={key as TaskStatus} />
-      ) : (
-        <span className="flex items-center gap-1.5 text-sm font-medium">
-          <PriorityGlyph priority={key as TaskPriority} />
-          {PRIORITY_LABEL[key as TaskPriority]}
-        </span>
-      ),
-    items: byKey.get(key)?.tasks ?? [],
-    total: byKey.get(key)?.total ?? 0,
-  }));
+  // Status and priority are fixed, small enums — columns are driven by them
+  // rather than by what came back, so an empty column stays on screen (a
+  // board whose columns appear and disappear as work moves is one you can't
+  // scan). Action-required has no such enum: it's whoever, in this
+  // organisation, currently has something waiting on them, plus a "Nobody"
+  // catch-all — a person with zero flagged tasks simply never gets a
+  // column, and that's the entire membership, not a small fixed set worth
+  // hardcoding. So those columns come straight from what the server found.
+  let columns: { key: string; heading: React.ReactNode; items: Task[]; total: number }[];
+  if (groupBy === "action_required") {
+    // Nobody last: the point of this arrangement is "who's being waited on,
+    // for what", and the catch-all for tasks asking nothing of anyone is
+    // the least useful column to see first. Named columns sort by the
+    // person's display name — the identical convention people and projects
+    // sort by elsewhere in this product — read off the column's own first
+    // task, since every column has at least one by construction.
+    columns = [...board.columns]
+      .sort((a, b) => {
+        if (a.key === "none") return 1;
+        if (b.key === "none") return -1;
+        return personName(a.tasks[0]?.action_required).localeCompare(
+          personName(b.tasks[0]?.action_required),
+        );
+      })
+      .map((c) => ({
+        key: c.key,
+        heading:
+          c.key === "none" ? (
+            <span className="text-sm font-medium text-muted-foreground">Nobody</span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-sm font-medium">
+              {/* The same accent dot TaskMeta's own action-required badge
+                  uses — this is that badge's own information, promoted to
+                  a column heading, so it should read as the same thing. */}
+              <span className="size-1.5 rounded-full bg-primary" />
+              {personName(c.tasks[0]?.action_required)}
+            </span>
+          ),
+        items: c.tasks,
+        total: c.total,
+      }));
+  } else {
+    const byKey = new Map(board.columns.map((c) => [c.key, c]));
+    const keys: string[] = groupBy === "status" ? TASK_STATUSES : TASK_PRIORITIES;
+    columns = keys.map((key) => ({
+      key,
+      heading:
+        groupBy === "status" ? (
+          <StatusBadge status={key as TaskStatus} />
+        ) : (
+          <span className="flex items-center gap-1.5 text-sm font-medium">
+            <PriorityGlyph priority={key as TaskPriority} />
+            {PRIORITY_LABEL[key as TaskPriority]}
+          </span>
+        ),
+      items: byKey.get(key)?.tasks ?? [],
+      total: byKey.get(key)?.total ?? 0,
+    }));
+  }
 
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
@@ -491,8 +558,11 @@ function Board({
                 <HiddenMark task={task} />
                 <ClosedBadge isOpen={task.is_open} />
               </div>
-              {groupBy === "priority" && <StatusBadge status={task.status} />}
-              <TaskMeta task={task} />
+              {/* Redundant only when status itself is the column; grouped by
+                  priority or by action-required, it's the one place left
+                  that says where the task actually stands. */}
+              {groupBy !== "status" && <StatusBadge status={task.status} />}
+              <TaskMeta task={task} hideActionRequired={groupBy === "action_required"} />
             </Link>
           ))}
           {column.items.length === 0 && (
@@ -631,7 +701,16 @@ function HiddenMark({ task }: { task: Task }) {
   );
 }
 
-function TaskMeta({ task }: { task: Task }) {
+function TaskMeta({
+  task,
+  hideActionRequired,
+}: {
+  task: Task;
+  /** The action-required board: the column already says who, so repeating
+   *  it on every card is the exact redundancy status and priority avoid on
+   *  their own boards. */
+  hideActionRequired?: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       {task.tags.map((tag) => (
@@ -642,7 +721,7 @@ function TaskMeta({ task }: { task: Task }) {
       {task.due_on && <span className="font-mono">{task.due_on}</span>}
       {/* The one thing on a card that's asking something of a person, so it
           gets the accent rather than blending into the metadata line. */}
-      {task.action_required && (
+      {task.action_required && !hideActionRequired && (
         <Badge variant="outline" className="gap-1.5 text-primary">
           <span className="size-1.5 rounded-full bg-primary" />
           {personName(task.action_required)}

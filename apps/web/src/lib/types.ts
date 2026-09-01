@@ -396,7 +396,7 @@ export type BoardColumn = {
 };
 
 export type BoardData = {
-  group_by: "status" | "priority";
+  group_by: "status" | "priority" | "action_required";
   per_group: number;
   columns: BoardColumn[];
 };

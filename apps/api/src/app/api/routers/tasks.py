@@ -429,7 +429,7 @@ async def task_board(
     runs.
     """
     per_group = max(1, min(per_group, 200))
-    group = "priority" if group == "priority" else "status"
+    group = group if group in ("priority", "action_required") else "status"
     rows = await tasks_service.board(
         db,
         ctx,
@@ -449,7 +449,14 @@ async def task_board(
 
     columns: dict[str, BoardColumn] = {}
     for task, level, total in rows:
-        key = task.priority if group == "priority" else task.status
+        if group == "priority":
+            key = task.priority
+        elif group == "action_required":
+            # "none" rather than the JSON null a real key can't collide with
+            # — a UUID string never renders as the four letters "none".
+            key = str(task.action_required_user_id) if task.action_required_user_id else "none"
+        else:
+            key = task.status
         column = columns.setdefault(key, BoardColumn(key=key, total=total, tasks=[]))
         column.tasks.append(
             _task_out(

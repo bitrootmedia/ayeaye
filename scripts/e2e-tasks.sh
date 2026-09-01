@@ -189,6 +189,23 @@ ok "a non-member gets 404"      "$(code -b /tmp/td.jar $B/api/organisations/$OID
 # And for a member, the board holds exactly what the list holds.
 ok "same tasks as the list"     "$(curl -s -b /tmp/tc.jar "$B/api/organisations/$OID/tasks/board?per_group=200" | j "sum(len(c['tasks']) for c in d['columns'])")" "$(curl -s -b /tmp/tc.jar $B/api/organisations/$OID/tasks | j "len(d)")"
 
+echo "== the board can group by action required, a nullable column unlike status or priority"
+ART=$(post /tmp/ta.jar $B/api/organisations/$OID/tasks "{\"title\":\"Ask Carol $S\"}" | j "d['id']")
+patch /tmp/ta.jar $B/api/organisations/$OID/tasks/$ART "{\"action_required_user_id\":\"$CUID\"}" >/dev/null
+# $TID won't do for the "none" check below — the close/reopen tests above
+# leave it closed, and a board excludes closed tasks by default same as the
+# list does. A fresh task is unambiguously open and unambiguously nobody's.
+NOART=$(post /tmp/ta.jar $B/api/organisations/$OID/tasks "{\"title\":\"Nobody's problem $S\"}" | j "d['id']")
+ARBOARD=$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks/board?group=action_required&per_group=200")
+ok "group_by echoes back"       "$(echo "$ARBOARD" | j "d['group_by']")" "action_required"
+ok "Carol's own column key is her id" \
+  "$(echo "$ARBOARD" | j "sum(1 for t in [c for c in d['columns'] if c['key']=='$CUID'][0]['tasks'] if t['id']=='$ART')")" "1"
+# Every task made earlier in this script has nobody action-required, so the
+# "none" column — the JSON-safe stand-in for the NULL partition — is not a
+# corner case here, it is most of the board.
+ok "a plain task lands in the 'none' column, not dropped" \
+  "$(echo "$ARBOARD" | j "sum(1 for t in [c for c in d['columns'] if c['key']=='none'][0]['tasks'] if t['id']=='$NOART')")" "1"
+
 echo "== the list pages, and says what it is a page of"
 ok "no limit means everything"  "$(curl -s -b /tmp/ta.jar $B/api/organisations/$OID/tasks | j "len(d) >= 12")" "True"
 ok "a limit is honoured"        "$(curl -s -b /tmp/ta.jar "$B/api/organisations/$OID/tasks?limit=4" | j "len(d)")" "4"

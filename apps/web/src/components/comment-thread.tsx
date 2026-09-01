@@ -514,7 +514,7 @@ function CommentRow({
 
   return (
     <li className="space-y-1">
-      <div className="flex items-baseline gap-2">
+      <div className="flex items-baseline gap-2 rounded-md bg-muted/40 px-2 py-1">
         <span className="text-sm font-medium">{personName(comment.author)}</span>
         <span className="font-mono text-xs text-muted-foreground">
           {ago(comment.created_at)}

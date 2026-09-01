@@ -247,6 +247,26 @@ columns arrive empty. `access.board_stmt` bounds each column with
 silent cap is worse than a big response, because the caller believes they have
 everything.
 
+**The board can also group by who's action-required, and that column is
+nullable where status and priority never are.** `?group=action_required`
+partitions on `Task.action_required_user_id` directly — Postgres treats
+`NULL` as one ordinary partition value for a window function, so every task
+asking nothing of anyone lands in a real column together, not dropped. The
+router turns that partition's key into the JSON-safe string `"none"` (a
+UUID string can never collide with the four letters "none"), and the
+frontend renders it as a plain "Nobody" heading, sorted last — named
+columns sort by display name, the identical convention people and projects
+sort by elsewhere in this product, read off each column's own first task
+since a column only exists with at least one. Status and priority stay
+driven by their fixed enum (`TASK_STATUSES`/`TASK_PRIORITIES`) so an empty
+column stays on screen; action-required has no such enum — the columns
+that exist are exactly the people (plus "Nobody") the server actually
+found, because there is no fixed roster of "everyone who might ever be
+action-required" worth hardcoding. Each card's own action-required badge
+(`TaskMeta`'s `hideActionRequired`) is suppressed in this one arrangement
+for the same reason `StatusBadge` is suppressed when grouped by status —
+the column already says it.
+
 **Routers are thin.** HTTP in `api/routers/`, logic in `services/`. `main.py`
 assembles and does nothing else, so it doesn't grow as the API does.
 
