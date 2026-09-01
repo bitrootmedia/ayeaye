@@ -253,7 +253,15 @@ export function NewTaskDialog({
               You&rsquo;ll own it, which means you&rsquo;re the one who can close it.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          {/* `DialogContent` is itself `display: grid`, and a grid item's
+              default `min-width: auto` means it won't shrink below its own
+              content's min-content width — so an unbroken long string
+              anywhere inside (a duplicate task's title, below) silently
+              overflows the dialog's own `max-w-sm` box rather than wrapping
+              or truncating. `min-w-0` here is what lets the `truncate`
+              further down actually take effect instead of being overflowed
+              past before it gets the chance. */}
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="task-title">Title</Label>
               <Input
@@ -284,9 +292,9 @@ export function NewTaskDialog({
                         href={`/orgs/${orgId}/tasks/${hit.id}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 truncate text-sm text-foreground hover:underline"
+                        className="flex min-w-0 items-center gap-1.5 text-sm text-foreground hover:underline"
                       >
-                        <span className="truncate">
+                        <span className="min-w-0 truncate">
                           {hit.title}
                           {hit.inactive && (
                             <span className="text-muted-foreground"> (closed)</span>

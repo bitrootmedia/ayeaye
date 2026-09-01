@@ -2582,6 +2582,26 @@ confirmation, the same "say it again to mean it" shape as the delete
 dialogs elsewhere, minus the retyping, because a title is not a name someone
 picked on purpose the way a project's is.
 
+**A long, unbroken duplicate-task title could push the whole dialog wider
+than its own `max-w-sm` — two separate `min-width: auto` floors stacked on
+top of each other, not one bug.** `NewTaskDialog`'s "Similar tasks already
+exist" box renders each match as `<a className="flex ...">` wrapping a
+`<span className="truncate">`; a flex *item* defaults to `min-width: auto`,
+which floors it at its own content's natural width regardless of
+`truncate` — the ellipsis CSS never gets the chance to apply, because the
+box refuses to shrink small enough to need it. That alone was fixed with
+`min-w-0` on both the `<a>` and the inner `<span>`. But `DialogContent`
+itself is `display: grid` (Base UI's own markup), and its direct child —
+the plain `<div className="space-y-4">` wrapping the entire dialog body —
+is *itself* a grid item with the identical default floor. Fixing only the
+inner flex left the outer grid item overflowing the dialog's box by
+hundreds of pixels regardless, invisible without checking a computed style
+because `max-width` still clamped the dialog's own rendered box — the
+overflow was the *content* silently spilling past it, not the dialog
+itself growing. `min-w-0` was needed at both levels; a single flex or grid
+item without it anywhere on the path from a long string up to a
+width-constrained ancestor is enough to defeat every `truncate` below it.
+
 On the client, `components/search-palette.tsx`. Three things there are load-
 bearing and easy to delete by accident:
 
