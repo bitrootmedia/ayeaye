@@ -16,6 +16,47 @@ import { Spinner } from "@/components/ui/spinner";
 import { ago } from "@/lib/format";
 import type { Notification } from "@/lib/types";
 
+/** `YYYY-MM-DD` in the *local* timezone — `toISOString()` converts to UTC
+ *  first, which slides a day near midnight for anyone not on UTC. Same
+ *  reasoning as `Calendar.tsx`'s own `isoDate`. */
+function localDay(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const RECENT_LABELS = ["Today", "Yesterday", "Two days ago"];
+
+/** Which of the four fixed buckets a notification's timestamp falls into,
+ *  compared against the viewer's own local calendar day — not a 72-hour
+ *  window, so 11pm yesterday and 1am today land in different buckets even
+ *  though they're two hours apart. */
+function bucketFor(iso: string, today: Date): string {
+  const day = localDay(new Date(iso));
+  for (const [offset, label] of RECENT_LABELS.entries()) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - offset);
+    if (localDay(d) === day) return label;
+  }
+  return "Older";
+}
+
+/** The list, already sorted newest-first by the server, split into
+ *  contiguous same-bucket runs — grouping never reorders anything, it only
+ *  draws a heading where the bucket changes. */
+function groupByDay(items: Notification[]): { label: string; items: Notification[] }[] {
+  const today = new Date();
+  const groups: { label: string; items: Notification[] }[] = [];
+  for (const item of items) {
+    const label = bucketFor(item.created_at, today);
+    const current = groups.at(-1);
+    if (current?.label === label) current.items.push(item);
+    else groups.push({ label, items: [item] });
+  }
+  return groups;
+}
+
 /**
  * The inbox.
  *
@@ -94,81 +135,110 @@ export default function Notifications() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="divide-y rounded-xl border bg-card">
-          {items.map((item) => (
-            // A `<button>` can't nest the Mark-as-read/Delete buttons inside
-            // it — invalid HTML, and the same trap the notepad's own card
-            // hit. `role="button"` on a plain `<div>` with `tabIndex`/
-            // `onKeyDown` keeps the whole row clickable and keyboard-
-            // reachable; each action button stops propagation so it doesn't
-            // also fire `open()`.
-            <div
-              key={item.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => open(item)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  void open(item);
-                }
-              }}
-              className="flex w-full cursor-pointer items-start gap-3 p-3 text-left transition-colors hover:bg-accent/50"
-            >
-              {/* Unread is a dot, not a background wash: a list of highlighted
-                  rows is harder to scan than a list with markers on it. */}
-              <span
-                className={`mt-1.5 size-2 shrink-0 rounded-full ${
-                  item.read_at ? "bg-transparent" : "bg-primary"
-                }`}
-              />
-              <span className="min-w-0 flex-1">
-                <span className={`block text-sm ${item.read_at ? "" : "font-medium"}`}>
-                  {item.title}
-                </span>
-                {item.body && (
-                  // `whitespace-pre-wrap`, so the line breaks the daily
-                  // digest sends survive — the same as a comment or an
-                  // announcement. Every other body here has been one line so
-                  // far, which is exactly how this went unnoticed.
-                  <span className="block text-sm whitespace-pre-wrap text-muted-foreground">
-                    {item.body}
-                  </span>
-                )}
-              </span>
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                {ago(item.created_at)}
-              </span>
-              <span className="flex shrink-0 items-center gap-1">
-                {!item.read_at && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={`Mark "${item.title}" as read`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void markRead(item);
-                    }}
-                  >
-                    <CheckIcon />
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Delete "${item.title}"`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void remove(item);
-                  }}
-                >
-                  <Trash2Icon />
-                </Button>
-              </span>
+        <div className="space-y-4">
+          {groupByDay(items).map((group) => (
+            <div key={group.label}>
+              <h2 className="mb-2 px-1 text-xs font-medium text-muted-foreground">
+                {group.label}
+              </h2>
+              <div className="divide-y rounded-xl border bg-card">
+                {group.items.map((item) => (
+                  <NotificationRow
+                    key={item.id}
+                    item={item}
+                    onOpen={open}
+                    onMarkRead={markRead}
+                    onRemove={remove}
+                  />
+                ))}
+              </div>
             </div>
           ))}
         </div>
       )}
     </>
+  );
+}
+
+function NotificationRow({
+  item,
+  onOpen,
+  onMarkRead,
+  onRemove,
+}: {
+  item: Notification;
+  onOpen: (item: Notification) => void | Promise<void>;
+  onMarkRead: (item: Notification) => void | Promise<void>;
+  onRemove: (item: Notification) => void | Promise<void>;
+}) {
+  return (
+    // A `<button>` can't nest the Mark-as-read/Delete buttons inside it —
+    // invalid HTML, and the same trap the notepad's own card hit.
+    // `role="button"` on a plain `<div>` with `tabIndex`/`onKeyDown` keeps
+    // the whole row clickable and keyboard-reachable; each action button
+    // stops propagation so it doesn't also fire `onOpen()`.
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(item)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          void onOpen(item);
+        }
+      }}
+      className="flex w-full cursor-pointer items-start gap-3 p-3 text-left transition-colors hover:bg-accent/50"
+    >
+      {/* Unread is a dot, not a background wash: a list of highlighted
+          rows is harder to scan than a list with markers on it. */}
+      <span
+        className={`mt-1.5 size-2 shrink-0 rounded-full ${
+          item.read_at ? "bg-transparent" : "bg-primary"
+        }`}
+      />
+      <span className="min-w-0 flex-1">
+        <span className={`block text-sm ${item.read_at ? "" : "font-medium"}`}>
+          {item.title}
+        </span>
+        {item.body && (
+          // `whitespace-pre-wrap`, so the line breaks the daily digest
+          // sends survive — the same as a comment or an announcement.
+          // Every other body here has been one line so far, which is
+          // exactly how this went unnoticed.
+          <span className="block text-sm whitespace-pre-wrap text-muted-foreground">
+            {item.body}
+          </span>
+        )}
+      </span>
+      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+        {ago(item.created_at)}
+      </span>
+      <span className="flex shrink-0 items-center gap-1">
+        {!item.read_at && (
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Mark "${item.title}" as read`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void onMarkRead(item);
+            }}
+          >
+            <CheckIcon />
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={`Delete "${item.title}"`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void onRemove(item);
+          }}
+        >
+          <Trash2Icon />
+        </Button>
+      </span>
+    </div>
   );
 }
