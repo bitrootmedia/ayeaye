@@ -143,8 +143,15 @@ export async function decodePeaks(bytes: ArrayBuffer, buckets = 48): Promise<num
   }
 }
 
-/** `0:07`. Voice notes are short; minutes and seconds is enough. */
+/** `0:07`. Voice notes are short; minutes and seconds is enough.
+ *
+ *  Guards against `Infinity`/`NaN`, not just negative input: Chromium
+ *  reports `Infinity` for a `MediaRecorder`-produced webm's `duration`
+ *  until a seek forces it to work out the real value (its container never
+ *  carries one in the header), and `Infinity - anything` is still
+ *  `Infinity` — without this guard that rendered as the literal string
+ *  "Infinity:NaN" rather than "0:00". */
 export function clock(seconds: number): string {
-  const whole = Math.max(0, Math.floor(seconds));
+  const whole = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }

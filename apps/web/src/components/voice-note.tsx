@@ -119,6 +119,11 @@ export function VoiceNoteRecorder({
  */
 export function VoiceNotePlayer({ url, filename }: { url: string; filename: string }) {
   const audio = useRef<HTMLAudioElement>(null);
+  // Set while forcing Chromium to compute a real duration (see
+  // `onLoadedMetadata` below) — the probing seek itself fires `timeupdate`,
+  // and without this guard the progress bar flashes full before snapping
+  // back to 0.
+  const probingDuration = useRef(false);
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -150,8 +155,33 @@ export function VoiceNotePlayer({ url, filename }: { url: string; filename: stri
         ref={audio}
         src={url}
         preload="metadata"
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
+        // Chromium reports `Infinity` here for a MediaRecorder-produced
+        // webm — its container never carries a real duration in the
+        // header — which rendered as the literal "Infinity:NaN" until a
+        // seek forces the browser to work it out. Seeking to a huge
+        // timestamp is the standard workaround: it makes Chromium scan to
+        // the actual end of the stream, firing `durationchange` with the
+        // real value, then we seek back to the start before anyone sees
+        // the jump.
+        onLoadedMetadata={(e) => {
+          const el = e.currentTarget;
+          if (Number.isFinite(el.duration)) {
+            setDuration(el.duration);
+            return;
+          }
+          probingDuration.current = true;
+          const onDurationChange = () => {
+            el.removeEventListener("durationchange", onDurationChange);
+            setDuration(Number.isFinite(el.duration) ? el.duration : 0);
+            el.currentTime = 0;
+            probingDuration.current = false;
+          };
+          el.addEventListener("durationchange", onDurationChange);
+          el.currentTime = 1e101;
+        }}
+        onTimeUpdate={(e) => {
+          if (!probingDuration.current) setPosition(e.currentTarget.currentTime);
+        }}
         onEnded={() => {
           setPlaying(false);
           setPosition(0);

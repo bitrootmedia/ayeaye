@@ -1868,6 +1868,25 @@ having a path of their own.
 - **Always release the tracks.** Without `stream.getTracks().forEach(stop)` the
   browser's recording indicator stays on after cancelling or navigating away,
   which is both alarming and a real privacy problem.
+- **Chromium reports `Infinity` for a played-back note's `duration`, and it
+  rendered as the literal string "Infinity:NaN".** A MediaRecorder-produced
+  webm never carries a real duration in its container header, so `<audio>`'s
+  `loadedmetadata` fires with `duration === Infinity` until something forces
+  a seek to the actual end of the stream. `Infinity || 0` doesn't catch it —
+  `Infinity` is truthy — so it flowed straight into `clock()`, where
+  `Infinity - position` is still `Infinity`, `Math.floor(Infinity / 60)` is
+  `Infinity`, and `Infinity % 60` is `NaN`. Playback itself was never
+  affected: `onTimeUpdate` reports real positions off the raw stream
+  regardless of what `duration` says. Fixed two ways — `clock()`
+  (`lib/audio.ts`) now guards `Number.isFinite()` before formatting anything,
+  so no future caller can reproduce this by another path; and
+  `VoiceNotePlayer`'s `onLoadedMetadata` (`components/voice-note.tsx`) runs
+  the standard workaround when it sees `Infinity` — seek to a huge timestamp
+  (`1e101`), which makes Chromium scan to the stream's real end and fire
+  `durationchange` with the true value, then seek back to `0` before anyone
+  sees the jump. `onTimeUpdate` ignores position updates while that probe is
+  in flight (`probingDuration` ref), or the seek itself would flash the
+  progress bar to 100% and back.
 
 Testable because Chromium has a fake capture device:
 `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`, set per
