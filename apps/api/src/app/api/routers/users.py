@@ -19,6 +19,7 @@ from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
 from app.security.authn import MfaPendingSession, mark_mfa_satisfied
 from app.services import mfa as mfa_service
 from app.services import notification_channels as channels_service
+from app.services import oauth as oauth_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
 from app.services import working_hours as working_hours_service
@@ -172,6 +173,33 @@ async def revoke_token(token_id: uuid.UUID, user: CurrentUser, db: DbSession):
     """Immediate: the next call with it fails, because the lookup is by hash
     and the row is gone."""
     await tokens_service.revoke(db, user, token_id)
+
+
+class OAuthGrantOut(BaseModel):
+    id: str
+    client_name: str
+    scope: str
+    created_at: datetime
+
+
+@router.get("/me/oauth-grants", response_model=list[OAuthGrantOut])
+async def list_oauth_grants(user: CurrentUser, db: DbSession):
+    """Apps you've authorized over OAuth — the "Connected apps" card. A
+    personal access token isn't here; those are `/me/tokens`, above."""
+    return [
+        OAuthGrantOut(
+            id=str(grant.id), client_name=client.client_name, scope=grant.scope,
+            created_at=grant.created_at,
+        )
+        for grant, client in await oauth_service.my_grants(db, user)
+    ]
+
+
+@router.delete("/me/oauth-grants/{grant_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_oauth_grant(grant_id: uuid.UUID, user: CurrentUser, db: DbSession):
+    """Immediate — cascades to every access/refresh token issued under this
+    grant, the same "the next call fails" contract `/me/tokens` already has."""
+    await oauth_service.revoke_grant(db, user, grant_id)
 
 
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)

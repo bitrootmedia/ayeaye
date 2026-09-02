@@ -66,6 +66,25 @@ c = r.get('content') or []
 print((c[0].get('text','') if c else json.dumps(d))[:4000])
 "; }
 
+# A missing or bad token is refused at the *transport* layer now — a real
+# HTTP 401 with WWW-Authenticate, before any tool call runs — not a 200
+# JSON-RPC result with an error string buried in it. See CLAUDE.md's OAuth
+# section for why: an OAuth-aware client needs that 401 to know to go start
+# the flow at all, and a 200-with-embedded-error never gave it that signal.
+mcp_status(){ # extra curl args, e.g. -H "Authorization: Bearer X"
+  curl -s -o /dev/null -w '%{http_code}' -X POST $B/mcp \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2025-06-18' "$@" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+}
+mcp_www_authenticate(){ # same request, prints the WWW-Authenticate header
+  curl -s -D - -o /dev/null -X POST $B/mcp \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2025-06-18' "$@" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+    | grep -i '^www-authenticate:' | tr -d '\r'
+}
+
 ALICE=ma$S@example.com; BOB=mb$S@example.com
 signup /tmp/ma.jar $ALICE; signup /tmp/mb.jar $BOB
 OID=$(post /tmp/ma.jar $B/api/organisations "{\"name\":\"Fleet $S\"}" | j "d['id']")
@@ -82,8 +101,10 @@ READ=$(post /tmp/ma.jar $B/api/me/tokens '{"name":"Read only","scope":"read"}' |
 echo "== the endpoint answers"
 ok "tools are advertised"       "$(rpc "$WRITE" tools/list '{}' | j "len(d['result']['tools']) >= 8")" "True"
 ok "…each with a description"   "$(rpc "$WRITE" tools/list '{}' | j "all(t.get('description') for t in d['result']['tools'])")" "True"
-ok "no token is refused"        "$(tool "" organisations '{}' | text | grep -ci 'access token')" "1"
-ok "a made-up token is refused" "$(tool "ayc_nonsense" organisations '{}' | text | grep -ci 'access token')" "1"
+ok "no token is refused, with a real 401" "$(mcp_status)" "401"
+ok "...naming the resource metadata"      "$(mcp_www_authenticate | grep -c resource_metadata)" "1"
+ok "a made-up token is refused, with a real 401" \
+  "$(mcp_status -H 'Authorization: Bearer ayc_nonsense')" "401"
 
 echo "== it acts as the person, and sees exactly what they see"
 ok "alice's organisation"       "$(tool "$WRITE" organisations '{}' | text | grep -c "$OID")" "1"
@@ -130,7 +151,7 @@ ok "search finds by word"       "$(tool "$WRITE" search "{\"organisation_id\":\"
 echo "== revoking is immediate"
 TOKID=$(curl -s -b /tmp/ma.jar $B/api/me/tokens | j "[t['id'] for t in d if t['name']=='Read only'][0]")
 ok "revoke"                     "$(code -b /tmp/ma.jar -X DELETE $B/api/me/tokens/$TOKID)" "204"
-ok "the token stops working"    "$(tool "$READ" organisations '{}' | text | grep -ci 'access token')" "1"
+ok "the token stops working, with a real 401" "$(mcp_status -H "Authorization: Bearer $READ")" "401"
 ok "somebody else's token is not revocable" "$(code -b /tmp/mb.jar -X DELETE $B/api/me/tokens/$TOKID)" "404"
 ok "last used is recorded"      "$(curl -s -b /tmp/ma.jar $B/api/me/tokens | j "any(t['last_used_at'] for t in d)")" "True"
 

@@ -7,6 +7,7 @@ import {
   PlaneIcon,
   SendIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   Trash2Icon,
   WebhookIcon,
 } from "lucide-react";
@@ -38,6 +39,7 @@ import {
   type Absence,
   type AccessToken,
   type NotificationChannel,
+  type OAuthGrant,
   type Organisation,
   type WorkingHourCell,
   type WorkingHours,
@@ -164,6 +166,7 @@ export default function Account() {
         <OutOfOfficeCard />
         <WorkingHoursCard />
         <AccessTokensCard />
+        <ConnectedAppsCard />
         <NotificationsSection organisations={organisations} />
       </div>
     </>
@@ -675,6 +678,55 @@ function AccessTokensCard() {
           Start with read-only. A write token lets an assistant create tasks and comment as you —
           useful, and worth deciding on purpose.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConnectedAppsCard() {
+  const [rows, setRows] = useState<OAuthGrant[]>([]);
+
+  const load = useCallback(async () => {
+    setRows(await api<OAuthGrant[]>("/me/oauth-grants").catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="lg:col-span-2" role="region" aria-label="Connected apps">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <SparklesIcon className="size-4" />
+          Connected apps
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Apps you&rsquo;ve authorized over OAuth — Claude.ai, ChatGPT, or anything else that
+          connected itself rather than using a token you pasted in.
+        </p>
+        {rows.map((row) => (
+          <div key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-2 pl-3">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{row.client_name}</span>
+            <Badge variant="outline">{row.scope === "write" ? "Can change things" : "Read only"}</Badge>
+            <span className="text-xs text-muted-foreground">Connected {ago(row.created_at)}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`Revoke ${row.client_name}`}
+              onClick={async () => {
+                await api(`/me/oauth-grants/${row.id}`, { method: "DELETE" });
+                await load();
+              }}
+            >
+              <Trash2Icon />
+            </Button>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );

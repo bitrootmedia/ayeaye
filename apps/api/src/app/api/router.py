@@ -14,6 +14,7 @@ from app.api.routers import (
     exports,
     invites,
     notifications,
+    oauth,
     organisations,
     personal_notes,
     planner,
@@ -45,6 +46,12 @@ api_router.include_router(reminders.router)
 # Sparks: quick capture, cross-organisation like the inbox and reminders —
 # unlike the notepad below, not scoped to any one organisation at all.
 api_router.include_router(sparks.router)
+
+# OAuth: registration, the authorize hand-off, the token endpoint. The two
+# discovery documents (RFC 8414/9728) are NOT here — they're spec-fixed
+# under /.well-known/ and mounted at the bare root in main.py instead, next
+# to /health.
+api_router.include_router(oauth.router)
 
 # The organisation's landing screen — announcements and who's away — plus the
 # personal out-of-office that feeds it.

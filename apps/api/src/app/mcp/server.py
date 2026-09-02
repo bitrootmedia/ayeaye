@@ -14,12 +14,21 @@ and the moment there are two, one of them is wrong and nobody knows which.
 
 ## Authentication
 
-`Authorization: Bearer ayc_…`, a personal access token from the account
-screen. Not the session cookie: an MCP client is not a browser, and not OAuth:
-a self-hosted installation should not have to run an authorisation server to
-let somebody connect their own assistant. The trade is written down in
-`services/tokens.py` — the token is the authority, so it is shown once,
-hashed at rest, scoped, and revocable from the same screen that made it.
+Two credential shapes, both bearer tokens, both resolved before a tool ever
+runs: a personal access token from the account screen
+(`Authorization: Bearer ayc_…`, see `services/tokens.py` — shown once,
+hashed at rest, scoped, revocable from the screen that made it), or an
+OAuth access token from the flow at `/oauth/authorize` (see
+`services/oauth.py`), which is what lets Claude.ai and ChatGPT's own
+"connect an MCP server" features add this server with no manual token
+pasting. Not the session cookie either way: an MCP client is not a browser.
+
+**Verification happens at the transport layer, not in `_caller()`.**
+`OAuthTokenVerifier` (`services/oauth.py`) is wired into `main.py`'s ASGI
+middleware around this module's `/mcp` mount — a missing or bad token gets a
+real `401` with `WWW-Authenticate` before any tool code runs, which is the
+signal an OAuth-aware client needs to go start the flow at all. `_caller()`
+below just resolves the already-verified principal to a `User` row.
 
 ## Shape of the answers
 
@@ -35,6 +44,8 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 
 # **`mcp.server.mcpserver.context`, not `mcp.server.context`.** There are two
@@ -43,12 +54,13 @@ from mcp.server.mcpserver import MCPServer
 # registration with a Pydantic schema error about IsInstanceSchema, which says
 # nothing at all about the actual mistake.
 from mcp.server.mcpserver.context import Context
-from pydantic import Field
+from pydantic import AnyHttpUrl, Field
 
 from app.core.config import settings
 from app.db import SessionLocal
-from app.models import PersonalAccessToken, User
+from app.models import User
 from app.models.task import PRIORITIES, STATUSES
+from app.models.token import SCOPE_READ, SCOPE_WRITE
 from app.services import attachments as attachments_service
 from app.services import organisations as organisations_service
 from app.services import projects as projects_service
@@ -56,8 +68,15 @@ from app.services import reminders as reminders_service
 from app.services import search as search_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
-from app.services import tokens as tokens_service
+from app.services.oauth import OAuthTokenVerifier
 from app.storage import s3
+
+# Verifies both credential shapes (a personal access token, or an OAuth
+# access token — see services/oauth.py) at the transport layer. `main.py`
+# imports this same instance to wire it into the ASGI middleware stack
+# around this module's `/mcp` mount, which is what turns a missing/bad
+# token into a real 401 before any tool call runs.
+token_verifier = OAuthTokenVerifier()
 
 mcp = MCPServer(
     name="ayeayecaptain",
@@ -72,6 +91,14 @@ mcp = MCPServer(
         "and there is no 'done' status. Priorities run critical, urgent, "
         "high, normal, low, very_low."
     ),
+    token_verifier=token_verifier,
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl(settings.site_url),
+        resource_server_url=AnyHttpUrl(f"{settings.site_url}/mcp"),
+        # Read-vs-write is _require_write's job, per tool — not a blanket
+        # scope requirement to reach the server at all.
+        required_scopes=[],
+    ),
 )
 
 
@@ -79,21 +106,35 @@ class Denied(Exception):
     """Turned into a tool error rather than a 500."""
 
 
-async def _caller(ctx: Context) -> tuple[User, PersonalAccessToken]:
-    """Who is asking. Raises if the token is missing, unknown or revoked."""
-    header = None
-    try:
-        header = ctx.headers.get("authorization") if ctx.headers else None
-    except Exception:  # pragma: no cover - transport without headers
-        header = None
-    async with SessionLocal() as db:
-        found = await tokens_service.authenticate(db, header)
-    if found is None:
+class _Principal:
+    """A `.scope` shim so `_require_write` needs no changes regardless of
+    whether the verified credential was a personal access token or an OAuth
+    access token — see `models/token.py`'s `SCOPE_READ`/`SCOPE_WRITE`."""
+
+    def __init__(self, scope: str) -> None:
+        self.scope = scope
+
+
+async def _caller(ctx: Context) -> tuple[User, _Principal]:
+    """Who is asking. Both credential shapes are already verified at the
+    transport layer (`token_verifier`, wired into `main.py`'s auth
+    middleware) — a missing or bad token never reaches here, it was already
+    refused with a 401 before this tool call started. This just resolves
+    the already-verified principal to a `User` row.
+    """
+    access_token = get_access_token()
+    if access_token is None or access_token.subject is None:
+        # Defensive: the transport layer should have refused this already.
         raise Denied(
             "No valid access token. Create one under Account → Access tokens "
-            "and send it as `Authorization: Bearer ayc_…`."
+            "and send it as `Authorization: Bearer ayc_…`, or connect via OAuth."
         )
-    return found
+    async with SessionLocal() as db:
+        user = await db.get(User, uuid.UUID(access_token.subject))
+    if user is None:
+        raise Denied("No valid access token.")
+    scope = SCOPE_WRITE if SCOPE_WRITE in access_token.scopes else SCOPE_READ
+    return user, _Principal(scope)
 
 
 async def _org(db, user: User, organisation_id: str):
@@ -465,11 +506,17 @@ async def attach_file(
     )
 
 
-def _require_write(token: PersonalAccessToken) -> None:
-    try:
-        tokens_service.require_write(token)
-    except PermissionError as exc:
-        raise Denied(str(exc)) from exc
+def _require_write(principal: _Principal) -> None:
+    """The one place a read-only credential is turned away — same rule,
+    same wording, `tokens_service.require_write` already states for a
+    personal access token; inlined here since `_Principal` is what every
+    tool actually holds now, regardless of which credential shape verified
+    it."""
+    if principal.scope != SCOPE_WRITE:
+        raise Denied(
+            "This credential is read-only. Create a token with write access, or "
+            "authorize with write scope, if you want the assistant to change anything."
+        )
 
 
 async def _member_by_email(db, org, email: str | None) -> uuid.UUID | None:

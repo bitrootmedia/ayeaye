@@ -44,6 +44,33 @@
 		reverse_proxy api:8000
 	}
 
+	# OAuth discovery — real documents now, served by the API like /health.
+	# See `api/routers/wellknown.py` and CLAUDE.md's OAuth section.
+	#
+	# Without this rule, `/.well-known/oauth-*` falls through to the SPA
+	# catch-all below and answers 200 with the app's own HTML. An OAuth-aware
+	# client reads that 200 as "this server publishes protected-resource
+	# metadata", tries to parse the HTML as that metadata, and fails —
+	# `anthropics/claude-ai-mcp#457` traced the identical symptom
+	# ("Couldn't register with …'s sign-in service") to exactly this on a
+	# different server. Note the *path-inserted* form per RFC 9728
+	# (`/.well-known/oauth-protected-resource/mcp`, not just the bare
+	# document) — the exact request an OAuth-aware connector makes, and the
+	# one it's easy to test for and miss testing against.
+	@oauth_metadata path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
+	handle @oauth_metadata {
+		reverse_proxy api:8000
+	}
+
+	# `openid-configuration` stays 404 forever — this is an OAuth 2.1
+	# authorization server issuing scoped API access tokens, not an OIDC
+	# identity provider. No id_token, no "sign in with ayeaye"; a 200 here
+	# would claim a capability this server doesn't have.
+	@openid_discovery path /.well-known/openid-configuration*
+	handle @openid_discovery {
+		respond 404
+	}
+
 	# Object storage. NOT handle_path — the prefix must survive. The bucket is
 	# called `media`, so with path-style addressing the object URL is literally
 	# /media/<key>, and that path is covered by the presigned signature.

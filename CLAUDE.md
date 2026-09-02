@@ -188,6 +188,9 @@ ayeayecaptain/
     │       │                #   presence (out of office, announcements),
     │       │                #   working_hours (a weekly grid, informational),
     │       │                #   spark (quick capture, cross-organisation),
+    │       │                #   token (personal access tokens),
+    │       │                #   oauth (clients, grants, codes, tokens —
+    │       │                #     Dynamic Client Registration for MCP),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
     │       │                #     attachments — anchored to a task OR a thread)
@@ -203,6 +206,8 @@ ayeayecaptain/
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
     │       │                #   reminders.py presence.py working_hours.py sparks.py
+    │       │                #   tokens.py — personal access tokens
+    │       │                #   oauth.py — DCR, PKCE, rotating refresh tokens
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -1138,12 +1143,14 @@ there are two, one of them is wrong and nobody knows which. `scripts/e2e-mcp.sh`
 proves the refusals: a stranger's token, an org admin against a hidden task,
 and a read-only token against every write.
 
-**Personal access tokens, not OAuth and not the session cookie.** An MCP client
-is not a browser, and a self-hosted installation should not have to run an
-authorisation server to let one person connect one assistant. The token is the
-authority, so it is shown once, SHA-256 at rest, scoped `read`/`write`, and
-revocable from the screen that made it. `require_write` is the single place a
-read-only token is turned away.
+**Two credential shapes, not the session cookie either way.** A personal
+access token from the account screen (`Authorization: Bearer ayc_…`) — shown
+once, SHA-256 at rest, scoped `read`/`write`, revocable from the screen that
+made it — or an OAuth access token from the flow at `/oauth/authorize`, see
+the "OAuth" section below. An MCP client is not a browser, so neither path
+uses the cookie. `require_write` is the single place a read-only credential
+is turned away, and it doesn't care which shape produced it — see
+`_Principal` in `app/mcp/server.py`.
 
 **`attach_file` is the one place a file's bytes pass through the API**, and
 that is a deliberate, narrow exception to Attachments' "browser → storage
@@ -1177,23 +1184,24 @@ Four things cost real time here, all of them non-obvious:
   expects the next call to reach the worker that issued it — but uvicorn runs
   several and nothing is shared. Same reasoning as putting realtime through
   Redis; here the cheaper answer is to need no session at all.
-- **The claude.ai web/desktop "Add custom connector" UI cannot connect to
-  this server, full stop — and the error it gives ("Couldn't register with
-  ayeaye's sign-in service… add an OAuth Client ID") looks like a config
-  problem on our side and isn't one.** That UI unconditionally attempts
-  OAuth Dynamic Client Registration against whatever URL it's given, even
-  when the server advertises no OAuth metadata at all — a reported,
-  currently-open limitation on Anthropic's side
-  ([anthropics/claude-ai-mcp#457](https://github.com/anthropics/claude-ai-mcp/issues/457),
-  [#112](https://github.com/anthropics/claude-ai-mcp/issues/112)), not
-  something a server can opt out of. The "add an OAuth Client ID" fallback it
-  offers doesn't help either — there is no client ID, because there is no
-  authorisation server, on purpose (the point above). The Claude Code CLI's
-  `claude mcp add --header "Authorization: Bearer …"` is the one client path
-  that actually skips OAuth discovery and uses the static token, which is why
-  that's the only command README's "Your own assistant" section shows —
-  don't add a second one for the web connector, because there isn't a working
-  one to add.
+- **claude.ai's and ChatGPT's own "Add custom connector" flows now work —
+  this used to be flatly untrue, and the fix wasn't OAuth, at first.** The
+  original symptom ("Couldn't register with ayeaye's sign-in service…")
+  looked like this server needed to run an authorisation server, but the
+  actual bug was a Caddy misconfiguration: every `/.well-known/oauth-*`
+  path fell through the SPA catch-all and answered `200` with the app's own
+  HTML instead of `404`. An OAuth-aware client reads that `200` as "this
+  server publishes protected-resource metadata," tries to parse the HTML as
+  JSON, fails, and falls back to Dynamic Client Registration against an
+  authorisation server that doesn't exist —
+  [anthropics/claude-ai-mcp#457](https://github.com/anthropics/claude-ai-mcp/issues/457)
+  traced the identical symptom on a different server to exactly this, fixed
+  with a plain 404, no OAuth involved. See `infra/caddy/Caddyfile`'s
+  `@openid_discovery`/`@oauth_metadata` matchers. **Separately, and worth
+  keeping distinct**: this server *now also* runs real OAuth 2.1 with
+  Dynamic Client Registration (see the section below), because ChatGPT's
+  connector has no bearer-token fallback at all and mandates it — the Caddy
+  fix alone was necessary but not sufficient for that client.
 
 **A warning about testing it from a shell.** `e2e-mcp.sh` builds every payload
 with `python3 -c json.dumps`, never with escaped quotes inside a shell string.
@@ -1202,6 +1210,108 @@ arguments — the shell passed a fragment, the server correctly answered
 "Parse error", and the harness's own helper swallowed it. It looked exactly
 like MCP was losing writes, and it cost an hour of hunting a bug that was
 never in the product.
+
+## OAuth 2.1, for Claude.ai and ChatGPT's own connectors
+
+Read `services/oauth.py`. Dynamic Client Registration (RFC 7591), PKCE-only
+authorization codes, and rotating refresh tokens — what lets Claude.ai and
+ChatGPT add this server as a custom connector with nobody pasting a
+personal access token, which their own "connect an MCP server" flows both
+expect and (for ChatGPT) mandate outright.
+
+**Hand-rolled, the identical call already made for MFA.** SuperTokens'
+`OAuth2Provider` recipe is a paid add-on on the self-hosted core — a
+license key, a minimum $100/month, activated against SuperTokens' own
+license servers — and even paid for, its "create a client" operation is an
+*admin*-authenticated API call, not the public self-registration these
+connectors actually need at connect time. Same shape of decision this
+codebase already made for `services/mfa.py` (`pyotp`, after SuperTokens'
+MFA recipe returned a 402): pay for infrastructure this project's whole
+self-hosting philosophy is built around not needing, or hand-roll the
+piece that's actually missing.
+
+**No new dependency, because `mcp` already ships one.** The MCP Python SDK
+— already a mandatory dependency of `app/mcp/server.py` — carries a
+complete, async-native OAuth toolkit: RFC-correct Pydantic wire models
+(`mcp.shared.auth`: `OAuthClientMetadata`, `OAuthMetadata`,
+`ProtectedResourceMetadata`, `OAuthToken`) and the resource-server
+verification primitive (`mcp.server.auth.provider.TokenVerifier`). Every
+one of these was confirmed against the actually-installed package before
+being relied on, not assumed from documentation. Client registration,
+PKCE, and code/token issuance are still plain `async def`s against
+SQLAlchemy — the identical idiom `services/tokens.py` already uses for
+personal access tokens.
+
+**A missing or bad token needs a real 401 — this codebase almost got it
+wrong regardless of OAuth.** `_caller()` used to raise `Denied` *inside* a
+tool call, which the MCP protocol turns into an ordinary `200 OK`
+JSON-RPC result with an error string in the body — never an HTTP 401. An
+OAuth-aware client never sees that as "go start OAuth"; it needs
+`WWW-Authenticate` on its very first touch of `/mcp`. Fixing this needed
+transport-layer middleware composed by hand around the bare `_mcp_asgi` in
+`main.py` — `mcp.streamable_http_app()`'s own return value (a Starlette app
+with its own auth routes) is discarded and never mounted, for the `/mcp`
+vs `/mcp/` reason `MCPPath` already documents, so its own wiring never ran
+either way. `RequireAuthMiddleware` → `AuthContextMiddleware` →
+`AuthenticationMiddleware(backend=BearerAuthBackend(token_verifier))`,
+wrapped around `_mcp_asgi` before `MCPPath`. `_caller()` now just resolves
+the already-verified principal (`get_access_token()`) to a `User` row; a
+`_Principal` shim carrying only `.scope` is what lets `_require_write()`
+stay unchanged regardless of which credential shape verified the call.
+
+**Four rules**, mirroring `services/tokens.py`'s own three almost exactly:
+
+1. **A client is public unless it proves otherwise.** DCR has no admin
+   step, so `client_secret_hash` is NULL for most clients — PKCE is the
+   whole proof of possession, OAuth 2.1's own preferred shape.
+2. **Every code and refresh token is claimed, not read then trusted.**
+   `redeem_code`/`redeem_refresh_token` both use the identical
+   `UPDATE … WHERE … RETURNING` shape `reminders.claim` and
+   `exports.claim_expired` already use — select-then-update would leave a
+   window where two racing requests both succeed, which for a refresh
+   token is exactly the reuse this exists to catch.
+3. **A rotated refresh token presented again is treated as theft.**
+   `replaced_at` is set, not the row deleted, specifically so reuse is
+   recognisable — and the whole grant is revoked defensively when it
+   happens, not just the one request refused.
+4. **A grant's scope is a ceiling, not a promise.** `OAuthClient.scope` is
+   what a client may ever be granted; the person consenting narrows it
+   further at `/oauth/authorize`, and whatever they chose is copied onto
+   each token *at issuance* — a later re-consent never reaches back into a
+   token already handed out.
+
+**The consent screen is a real React page, not server-rendered HTML** —
+this codebase's firm "browser-facing = React, API = JSON" boundary (the
+same reasoning that moved interactive docs under `/api/docs` rather than
+breaking it). `views/OAuthAuthorize.tsx` is modelled on `AcceptInvite.tsx`
+exactly: outside the signed-in shell, an unauthenticated preview (a
+client's name and scope ceiling are public metadata), "sign in, then come
+straight back" via `redirectToPath` carrying every original query param,
+Allow/Deny once signed in. `POST /api/oauth/authorize/decision`
+re-validates everything server-side — nothing the SPA merely echoed back
+is ever trusted outright.
+
+**Only the two spec-fixed `.well-known` documents live at the bare
+root** (`api/routers/wellknown.py`, mounted in `main.py` like `/health`):
+RFC 8414's authorization-server metadata and RFC 9728's protected-resource
+metadata (both the bare form and the path-inserted
+`/.well-known/oauth-protected-resource/mcp`, the exact request an
+OAuth-aware connector makes). Everything else — `/register`, the
+`/authorize/preview`+`/decision` pair, `/token`, `/revoke` — lives under
+`/api/oauth/*` like the rest of the JSON API, even though the *browser*
+lands on the bare `/oauth/authorize` page first; the metadata document is
+free to point at whichever URL shape each endpoint actually needs.
+`openid-configuration` stays 404 forever (see `infra/caddy/Caddyfile`) —
+this is an OAuth 2.1 authorization server issuing scoped API access
+tokens, not an OIDC identity provider, and a 200 there would claim a
+capability that doesn't exist.
+
+**The Account screen's "Connected apps" card is the revocation surface**,
+structurally copied from the Access Tokens card beside it — same
+`role="region"`, same row shape, same ghost Revoke button. It's a
+different list from Access Tokens on purpose: a personal access token is
+something *you* minted; a connected app is a client that registered
+itself and went through consent.
 
 ## Self-hosting
 
@@ -3092,6 +3202,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
+./scripts/e2e-oauth.sh                  # DCR, PKCE, rotating refresh tokens, a real 401
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose

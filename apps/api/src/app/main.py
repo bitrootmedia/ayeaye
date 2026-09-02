@@ -8,16 +8,21 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
+from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
+from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import AnyHttpUrl
+from starlette.middleware.authentication import AuthenticationMiddleware
 from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
 from app.api.router import api_router
-from app.api.routers import health
+from app.api.routers import health, wellknown
 from app.core.config import settings
 from app.core.lifespan import lifespan
 from app.core.logging import configure_logging
-from app.mcp.server import mcp
+from app.mcp.server import mcp, token_verifier
 from app.security.authn import init_auth
 
 
@@ -86,8 +91,11 @@ def create_app() -> FastAPI:
     )
 
     # /health stays at the root for container and load-balancer probes;
-    # everything else is served under /api.
+    # everything else is served under /api. The two OAuth discovery
+    # documents stay at the root too — RFC 8414/9728 fix their paths under
+    # /.well-known/, which isn't something this app can move under /api.
     app.include_router(health.router)
+    app.include_router(wellknown.router)
     app.include_router(api_router, prefix="/api")
 
     # The MCP endpoint, for somebody's own assistant. Its own ASGI app rather
@@ -128,7 +136,24 @@ def create_app() -> FastAPI:
             allowed_origins=[settings.site_url, "*"],
         )
     )
-    app.mount("/mcp", _mcp_asgi)
+    # **A missing or bad token must get a real 401, not a 200 with an error
+    # buried in a JSON-RPC result.** `_mcp_asgi` alone can't do that — a
+    # `Denied` raised inside `app/mcp/server.py`'s `_caller()` is caught by
+    # the MCP protocol itself and turned into an ordinary tool-error result,
+    # HTTP 200 throughout. An OAuth-aware client (claude.ai's connector,
+    # ChatGPT's) never sees that; it needs `WWW-Authenticate` on its very
+    # first touch of `/mcp` to know to go start OAuth at all. Composed by
+    # hand around the bare `_mcp_asgi` — not via the SDK's own
+    # `streamable_http_app()` return value, which is discarded above for
+    # the `/mcp` vs `/mcp/` reason `MCPPath` already explains, so its own
+    # auth wiring never runs either way.
+    resource_metadata_url = build_resource_metadata_url(AnyHttpUrl(f"{settings.site_url}/mcp"))
+    mcp_endpoint = RequireAuthMiddleware(
+        _mcp_asgi, required_scopes=[], resource_metadata_url=resource_metadata_url
+    )
+    mcp_endpoint = AuthContextMiddleware(mcp_endpoint)
+    mcp_endpoint = AuthenticationMiddleware(mcp_endpoint, backend=BearerAuthBackend(token_verifier))
+    app.mount("/mcp", mcp_endpoint)
     app.add_middleware(MCPPath)
 
     return app

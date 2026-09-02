@@ -587,6 +587,17 @@ export type AccessToken = {
   created_at: string;
 };
 
+/** An app authorized over OAuth — see the "Connected apps" card. Distinct
+ *  from an `AccessToken`: this is a client that self-registered and went
+ *  through the `/oauth/authorize` consent screen, not a token you minted
+ *  yourself. */
+export type OAuthGrant = {
+  id: string;
+  client_name: string;
+  scope: "read" | "write";
+  created_at: string;
+};
+
 export type Notification = {
   id: string;
   kind: string;

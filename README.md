@@ -240,7 +240,19 @@ same screen, with the signing secret shown once at creation.
 ## Your own assistant
 
 Anyone with an account can connect an MCP client. Nothing to configure on the
-server: the endpoint is on the same hostname as everything else.
+server: the endpoint is on the same hostname as everything else, and it
+supports two ways in.
+
+### Claude.ai, ChatGPT, or anything else with an "Add custom connector" button
+
+Paste in `https://tasks.example.com/mcp` and follow the prompts. This server
+runs real OAuth 2.1 with Dynamic Client Registration, so the connector
+registers itself — nothing to create by hand first. You'll land on a sign-in
+screen (if you weren't already signed in) and then a plain "Allow this app to
+access your account?" page, where you choose read-only or read/write before
+confirming. Manage or revoke it afterwards from Account → Connected apps.
+
+### The Claude Code CLI, or anything that takes a static header
 
 **1. Make a token.** Account → Access tokens. Give it a name you'll recognise
 later, and start with **read only** — you can make a write one when you
@@ -250,40 +262,29 @@ The secret is shown **once**. Only a hash is stored, so there is no screen
 that could show it to you again, and a database backup is not a list of live
 credentials.
 
-**2. Point your client at it — with the Claude Code CLI, not the claude.ai
-website or desktop app's "Add custom connector."** That UI only knows how to
-add a server through OAuth, and this one deliberately has no OAuth server to
-add — see below. The token screen has a copy button for this exact line:
+**2. Point your client at it.** The token screen has a copy button for this
+exact line:
 
 ```bash
 claude mcp add --transport http ayeayecaptain https://tasks.example.com/mcp \
   --header "Authorization: Bearer ayc_…"
 ```
 
-Then ask for things in words:
+Both paths answer the same questions once connected:
 
 > *What's on my plate this week?*
 > *What did we get done in the last seven days?*
 > *Create a task for Ada to chase the yard about the travel lift, urgent.*
 
 **What it can do.** `organisations`, `list_tasks`, `search`, `task`,
-`activity`, `my_reminders` with a read token; `create_task`, `update_task` and
-`comment` need a write one.
+`activity`, `my_reminders` with read access; `create_task`, `update_task` and
+`comment` need write.
 
-**What it can't.** A token is a person, not an integration: every call resolves
-through the same permission rules as the web app, as you. It cannot see a
-project nobody shared with you, cannot read anybody's private notes, cannot see
-a task somebody hid, and cannot invite people. Revoking a token from the same
-screen takes effect on the next call.
-
-**"Couldn't register with ayeaye's sign-in service"?** That's the claude.ai
-website or desktop app's connector UI, not the CLI — it only knows how to add
-a server via OAuth, and offers "add an OAuth Client ID" as the fix. There is
-no client ID to add: this server has no authorisation server at all, by
-design, so a person can connect their own assistant to their own self-hosted
-install without also standing up an OAuth provider. Use `claude mcp add`
-above instead — it authenticates with the static Bearer token directly and
-never attempts OAuth discovery.
+**What it can't.** A token — or an OAuth grant — is a person, not an
+integration: every call resolves through the same permission rules as the web
+app, as you. It cannot see a project nobody shared with you, cannot read
+anybody's private notes, cannot see a task somebody hid, and cannot invite
+people. Revoking access, either kind, takes effect on the next call.
 
 ## Back it up
 

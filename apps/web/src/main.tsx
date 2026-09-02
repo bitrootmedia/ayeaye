@@ -16,6 +16,7 @@ import { BRAND } from "@/lib/brand";
 import { applyStoredTheme } from "@/lib/theme";
 import { lastOrg } from "@/lib/current-org";
 import AcceptInvite from "@/views/AcceptInvite";
+import OAuthAuthorize from "@/views/OAuthAuthorize";
 import Account from "@/views/Account";
 import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
@@ -193,6 +194,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               {/* Outside the shell and outside SessionAuth on purpose: whoever
                 follows an invitation usually has no account yet. */}
               <Route path="/invites/:token" element={<AcceptInvite />} />
+
+              {/* The OAuth consent screen — same reasoning as the invite
+                link above it: it does its own signed-in check and its own
+                "sign in, then come straight back" redirect rather than
+                relying on SessionAuth, since the query string it needs to
+                preserve wouldn't survive that gate's own redirect. */}
+              <Route path="/oauth/authorize" element={<OAuthAuthorize />} />
 
               {/* Signed in, this is the shell (rail, header, the /me gate) and
                 screens render into its <Outlet>; signed out, `/` alone is the

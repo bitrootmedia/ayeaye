@@ -13,6 +13,7 @@ from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
 from app.models.notification import Notification
 from app.models.notification_channel import NotificationChannel
+from app.models.oauth import OAuthAccessToken, OAuthAuthorizationCode, OAuthClient, OAuthGrant
 from app.models.organisation import Organisation, OrganisationMember
 from app.models.personal_note import PersonalNote
 from app.models.pin import TaskPin
@@ -49,6 +50,10 @@ __all__ = [
     "MfaTotpDevice",
     "Notification",
     "NotificationChannel",
+    "OAuthAccessToken",
+    "OAuthAuthorizationCode",
+    "OAuthClient",
+    "OAuthGrant",
     "Organisation",
     "PersonalAccessToken",
     "OutOfOffice",
