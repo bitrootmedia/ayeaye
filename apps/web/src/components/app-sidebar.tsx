@@ -23,6 +23,7 @@ import {
   NetworkIcon,
   NotebookIcon,
   SettingsIcon,
+  SparklesIcon,
   SunIcon,
   UserIcon,
   UsersIcon,
@@ -205,6 +206,16 @@ export function AppSidebar({
                     {remindersDue}
                   </SidebarMenuBadge>
                 )}
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={isActive("/sparks")}
+                  tooltip="Sparks"
+                  render={<Link to="/sparks" />}
+                >
+                  <SparklesIcon />
+                  <span>Sparks</span>
+                </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton

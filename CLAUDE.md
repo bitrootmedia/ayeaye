@@ -187,6 +187,7 @@ ayeayecaptain/
     │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   working_hours (a weekly grid, informational),
+    │       │                #   spark (quick capture, cross-organisation),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
     │       │                #     attachments — anchored to a task OR a thread)
@@ -201,7 +202,7 @@ ayeayecaptain/
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
-    │       │                #   reminders.py presence.py working_hours.py
+    │       │                #   reminders.py presence.py working_hours.py sparks.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -2563,6 +2564,63 @@ standard one any autosaved editor uses instead: warn before leaving while
 "leave with unsaved changes?" prompt any editor shows. It doesn't fix the
 race — it gives the person a chance to not trigger it.
 
+## Sparks
+
+Read `services/sparks.py`. Quick capture — an idea, a link, anything not
+worth a task yet — reachable from any screen with ⌘J (Ctrl+J), typed into a
+dialog, saved, and you're straight back to whatever you were doing. Review
+and edit what piles up on `/sparks`.
+
+**Deliberately not the notepad, and not a task note.** The notepad's own
+docstring already explains why a task note stays a single field with no
+title, no list, no delete — a spark is that same shape *as* a list, one
+step further than the notepad in the other direction: no title either, one
+field, because a second field to fill in is friction a capture tool exists
+specifically to avoid.
+
+**Cross-organisation, unlike the notepad.** The whole point is catching a
+thought regardless of which organisation happens to be open when it
+strikes — `services/sparks.py` carries no `organisation_id` at all, and
+`GET/POST /sparks` sit at the bare root next to the inbox and reminders,
+not under `/organisations/{id}`. The ⌘J hotkey and its header button are
+bound at the shell level with no `railOrg` guard, unlike search and "New
+task" beside them — pressing it on the bare "Your organisations" screen
+with zero organisations yet still works.
+
+**Only you, ever — no sharing, no admin override.** The identical
+absence-of-a-branch discipline `services/notes.py` and
+`services/personal_notes.py` already hold for their own private data:
+every statement filters on `user_id == the caller`, full stop, and
+`get_or_404` (edit, delete) 404s on somebody else's spark rather than 403 —
+its existence is not something you're being told about.
+
+**The filter box on `/sparks` is client-side**, the identical call the
+Projects list already makes for its own name filter — this was never a
+paged fetch to begin with, so narrowing what's on screen doesn't earn a
+round trip. This was also the resolved answer to "should search work with
+these": a personal capture list search stays local to its own screen
+rather than joining the org-scoped ⌘K palette, which has no cross-
+organisation case to handle for anything else it searches.
+
+**Bare URLs are linked, not sanitised.** A spark's body is plain text, not
+the sanitised HTML a task description is — there's no rich editor and
+nothing here is ever rendered with `dangerouslySetInnerHTML`. `Linkified`
+(`views/Sparks.tsx`) splits on a URL-shaped regex and turns only the
+matched segments into real `<a>` elements; every other segment is still a
+plain React text node, escaped the same as the whole string would have
+been. Safe by construction, not by an allow-list — there is no markup to
+sanitise because none is ever parsed as markup.
+
+**Editing a card is a click, not a second screen.** No dialog, no
+autosave-with-a-debounce like the notepad's own editor — a spark is short
+enough that click-to-edit, then blur or ⌘Enter to commit, Escape to
+cancel, is the whole interaction. `SparkCard`'s local `body` state resets
+from `spark.body` whenever a fresh row lands (a save from elsewhere, or the
+initial load), the same "the prop changed under us, not what we're
+mid-typing" reasoning the notepad's own editor documents for its `note.id`
+dependency, just keyed on the value here since there's no id-per-dialog
+instance to key on instead.
+
 ## Time tracking
 
 Read the `services/time_tracking.py` docstring. Four rules, and the first is a
@@ -3042,6 +3100,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
 ./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
+./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

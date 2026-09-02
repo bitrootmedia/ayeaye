@@ -31,6 +31,7 @@ import Planner from "@/views/Planner";
 import Reminders from "@/views/Reminders";
 import ProjectDetail from "@/views/ProjectDetail";
 import Projects from "@/views/Projects";
+import Sparks from "@/views/Sparks";
 import TaskDetail from "@/views/TaskDetail";
 import Tasks from "@/views/Tasks";
 import Teams from "@/views/Teams";
@@ -229,6 +230,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="notifications" element={<Notifications />} />
                 {/* Personal and cross-organisation, like the inbox above it. */}
                 <Route path="reminders" element={<Reminders />} />
+                <Route path="sparks" element={<Sparks />} />
                 <Route path="account" element={<Account />} />
                 <Route path="help" element={<Help />} />
                 {/* A route that throws, so the error boundary can be tested

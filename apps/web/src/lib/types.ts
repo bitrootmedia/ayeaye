@@ -510,6 +510,15 @@ export type WorkingHours = {
   cells: WorkingHourCell[];
 };
 
+/** A quick capture — an idea, a link, a note-to-self. Cross-organisation
+ *  and yours alone; see the "Sparks" section in CLAUDE.md. */
+export type Spark = {
+  id: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Announcement = {
   id: string;
   body: string;

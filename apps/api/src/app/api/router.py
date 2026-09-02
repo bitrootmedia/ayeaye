@@ -18,6 +18,7 @@ from app.api.routers import (
     personal_notes,
     planner,
     reminders,
+    sparks,
     structure,
     tasks,
     telegram_webhook,
@@ -40,6 +41,10 @@ api_router.include_router(time.me_router)
 # but setting one needs a task, so that half is organisation-scoped. Both
 # halves live in the one module.
 api_router.include_router(reminders.router)
+
+# Sparks: quick capture, cross-organisation like the inbox and reminders —
+# unlike the notepad below, not scoped to any one organisation at all.
+api_router.include_router(sparks.router)
 
 # The organisation's landing screen — announcements and who's away — plus the
 # personal out-of-office that feeds it.

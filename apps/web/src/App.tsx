@@ -14,6 +14,7 @@ import {
   SearchTrigger,
   useSearchHotkey,
 } from "@/components/search-palette";
+import { SparkCaptureDialog, SparkTrigger, useSparkHotkey } from "@/components/spark-capture";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -148,6 +149,7 @@ function Shell() {
   const [creating, setCreating] = useState(false);
   const [searching, setSearching] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
+  const [capturingSpark, setCapturingSpark] = useState(false);
 
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -255,6 +257,10 @@ function Shell() {
   }, [railOrg]);
   useSearchHotkey(openSearch);
 
+  // Unlike search, this is cross-organisation on purpose — it needs no
+  // `railOrg` guard, and works from the bare "Your organisations" screen too.
+  useSparkHotkey(() => setCapturingSpark(true));
+
   const signOutTo = () => signOut().then(() => (window.location.href = AUTH_BASE_PATH));
 
   if (gate === "loading") {
@@ -349,6 +355,7 @@ function Shell() {
             )}
             {railOrg && <SearchTrigger onClick={openSearch} />}
           </div>
+          <SparkTrigger onClick={() => setCapturingSpark(true)} />
           <Link
             to="/notifications"
             aria-label={unread ? `Notifications (${unread} unread)` : "Notifications"}
@@ -373,6 +380,8 @@ function Shell() {
           onOpenChange={setSearching}
         />
       )}
+
+      <SparkCaptureDialog open={capturingSpark} onOpenChange={setCapturingSpark} />
 
       {railOrg && (
         // No `onCreated` — a screen showing tasks (the board, a list) already

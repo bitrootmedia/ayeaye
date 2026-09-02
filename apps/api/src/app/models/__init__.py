@@ -20,6 +20,7 @@ from app.models.planner import PlannerEntry
 from app.models.presence import Announcement, OutOfOffice
 from app.models.reminder import Reminder
 from app.models.sheet import TaskSheet, TaskSheetCell, TaskSheetColumn, TaskSheetRow
+from app.models.spark import Spark
 from app.models.structure import (
     Project,
     ProjectGroup,
@@ -58,6 +59,7 @@ __all__ = [
     "ProjectGroup",
     "ProjectMember",
     "Reminder",
+    "Spark",
     "Tag",
     "Task",
     "TaskChecklist",
