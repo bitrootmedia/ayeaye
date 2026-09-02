@@ -34,6 +34,7 @@ from app.models.task_series import TaskSeries
 from app.models.time_entry import TimeEntry
 from app.models.token import PersonalAccessToken
 from app.models.user import User
+from app.models.working_hours import WorkingHour
 
 __all__ = [
     "Announcement",
@@ -76,4 +77,5 @@ __all__ = [
     "Team",
     "TeamMember",
     "User",
+    "WorkingHour",
 ]

@@ -500,6 +500,16 @@ export type Absence = {
   away_now: boolean;
 };
 
+/** One hour of one weekday somebody plans to be around. `weekday` is
+ *  0=Monday..6=Sunday, matching Python's own `date.weekday()` server-side. */
+export type WorkingHourCell = { weekday: number; hour: number };
+
+export type WorkingHours = {
+  /** IANA, or `null` for someone who has never opened the app. */
+  timezone: string | null;
+  cells: WorkingHourCell[];
+};
+
 export type Announcement = {
   id: string;
   body: string;

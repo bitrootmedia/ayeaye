@@ -186,6 +186,7 @@ ayeayecaptain/
     │       │                #   export (a ZIP build, requester-only, autodeletes),
     │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
+    │       │                #   working_hours (a weekly grid, informational),
     │       │                #   notification,
     │       │                #   time_entry, conversation (+ messages, reads,
     │       │                #     attachments — anchored to a task OR a thread)
@@ -200,7 +201,7 @@ ayeayecaptain/
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
-    │       │                #   reminders.py presence.py
+    │       │                #   reminders.py presence.py working_hours.py
     │       │                #   notifications.py — everything notifying goes here
     │       ├── realtime/    # ConnectionManager + Redis pub/sub
     │       ├── storage/     # s3.py — two endpoints, and why
@@ -926,6 +927,66 @@ to the caller's own stake.
 on a shared machine must not be enough to lock its owner out of their account.
 SuperTokens owns the password policy and its rejection is passed straight
 through; restating it here would be two rules that can disagree.
+
+## Working hours
+
+Read `services/working_hours.py`. A Mon–Sun × 0–23 weekly grid, yours to set
+on the Account screen and any colleague's to see from the People roster —
+the same "not private, deliberately" shape `services/presence.py` already
+applies to out-of-office, just a recurring weekly pattern instead of a date
+range. **Purely informational, for now.** Nothing reads this to decide
+anything yet; the plan it exists for is a later feature that skips sending
+someone a notification outside their own hours, but until that lands this
+is only ever what a colleague sees, the same starting point private notes
+and pins had before anything was built on top of them.
+
+**A cell's existence IS the check**, the identical idiom `task_sheet_cells`
+and `task_tags` already use: marking an hour inserts a row into
+`working_hours`, clearing it deletes one. `weekday` is 0=Monday through
+6=Sunday, matching Python's own `date.weekday()`, so there's no second
+day-numbering convention to keep in sync with the first.
+
+**Only you can set your own — there is no admin override.** The same
+absence-of-a-branch discipline `services/notes.py` documents for private
+notes, just applied to a fact this product doesn't actually keep private:
+`set_cell`/`clear_cell` take the caller's own `User`, never a target id.
+
+**Visible to anyone who shares an organisation with you**, via
+`GET /organisations/{id}/members/{user_id}/working-hours` — scoped to
+membership, the identical pattern `presence.away_between` already uses, not
+to any finer-grained task or project access. That route's `{user_id}` is,
+unlike every other `{member_id}` on the organisations router, the *user's*
+own id rather than the membership row's: working hours belong to the
+person, not to any one membership record, and the two only coincide by
+accident. Worth knowing before adding a sibling route on that prefix.
+
+**The timezone conversion is entirely client-side, and rounds to the
+nearest hour.** The server hands back raw cells plus the owner's own
+`users.timezone` (already IANA, already auto-detected — see `App.tsx`'s own
+`Intl.DateTimeFormat().resolvedOptions().timeZone` call on first sight,
+nothing new here); `lib/working-hours.ts`'s `convertWeek` does the shift in
+the browser once both timezones are known and actually differ, using
+`Intl.DateTimeFormat`'s own offset for *today* for both zones rather than
+the offset on whatever day each cell nominally falls on — so a grid never
+shows two different shifts for cells either side of a DST transition it
+happens to straddle. A half-hour-offset zone (India, Nepal, …) is
+necessarily approximate here, the same kind of documented simplification
+the calendar's own hand-rolled date math already accepts elsewhere in this
+product — there's no finer resolution than an hour to shift *to*, so a
+40-minute-accurate answer would be false precision.
+
+**The grid is one component, `components/working-hours-grid.tsx`, used
+both editable and read-only** — `onToggle`'s presence is what tells them
+apart, rather than two near-identical grids to keep in sync by hand.
+Editable cells are real `<button>`s (native focus and click, no hand-rolled
+keyboard handling needed); read-only cells are plain `<div>`s, so a grid
+that can't be changed doesn't also claim to be clickable. Dragging across
+several cells paints every one to the value the *first* cell in the drag
+was set to, so marking a whole afternoon is one gesture instead of a dozen
+clicks — reset on a *window* `mouseup`, not just the grid's own, so
+releasing outside it still ends the drag, the same "don't trust only the
+element under the pointer" reasoning `main.tsx` already applies to
+cancelling a stray file drop.
 
 ## Organisation settings, and where the data export lives
 
@@ -2980,6 +3041,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
 ./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
+./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 

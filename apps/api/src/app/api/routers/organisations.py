@@ -23,8 +23,10 @@ from app.schemas.organisations import (
     OrganisationUpdate,
     RequireMfaUpdate,
 )
+from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
 from app.services import invites as invites_service
 from app.services import organisations as orgs_service
+from app.services import working_hours as working_hours_service
 from app.tasks.invites import send_invite_email
 
 router = APIRouter(prefix="/organisations", tags=["organisations"])
@@ -127,6 +129,25 @@ async def list_members(ctx: CurrentOrg, db: DbSession):
         _member_out(member, user, invited_by, show_invite_url=can_manage)
         for member, user, invited_by in await orgs_service.list_members(db, ctx.organisation.id)
     ]
+
+
+@router.get("/{org_id}/members/{user_id}/working-hours", response_model=WorkingHoursOut)
+async def member_working_hours(user_id: uuid.UUID, ctx: CurrentOrg, db: DbSession):
+    """A colleague's weekly pattern, visible to anyone who shares this
+    organisation with them — not private, deliberately, the same rule
+    `services/presence.py` already applies to out-of-office. See
+    `services/working_hours.py`.
+
+    `user_id` here, unlike every other `{member_id}` on this router, is the
+    *user's* own id, not the membership row's — working hours belong to the
+    person, not to any one membership record, and the two only coincide by
+    accident.
+    """
+    target, cells = await working_hours_service.for_member(db, ctx, user_id)
+    return WorkingHoursOut(
+        timezone=target.timezone,
+        cells=[WorkingHourCell(weekday=c.weekday, hour=c.hour) for c in cells],
+    )
 
 
 @router.post(

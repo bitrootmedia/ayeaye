@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field
 from supertokens_python.recipe.emailpassword.asyncio import (
     update_email_or_password,
@@ -15,11 +15,13 @@ from supertokens_python.types import RecipeUserId
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
+from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
 from app.security.authn import MfaPendingSession, mark_mfa_satisfied
 from app.services import mfa as mfa_service
 from app.services import notification_channels as channels_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
+from app.services import working_hours as working_hours_service
 
 router = APIRouter(tags=["users"])
 
@@ -81,6 +83,43 @@ async def me(user: CurrentUser):
 async def update_me(body: MeUpdate, user: CurrentUser, db: DbSession):
     updated = await users_service.update_profile(db, user, **body.model_dump(exclude_unset=True))
     return _me(updated)
+
+
+def _working_hours_out(user, cells) -> WorkingHoursOut:
+    return WorkingHoursOut(
+        timezone=user.timezone,
+        cells=[WorkingHourCell(weekday=c.weekday, hour=c.hour) for c in cells],
+    )
+
+
+@router.get("/me/working-hours", response_model=WorkingHoursOut)
+async def my_working_hours(user: CurrentUser, db: DbSession):
+    """Your own weekly pattern, plus the timezone it's recorded in — a
+    colleague converts it themselves (see the organisation-scoped route
+    below), so there's nothing to convert to here."""
+    return _working_hours_out(user, await working_hours_service.mine(db, user))
+
+
+@router.put("/me/working-hours/{weekday}/{hour}", status_code=status.HTTP_204_NO_CONTENT)
+async def set_working_hour(
+    user: CurrentUser,
+    db: DbSession,
+    weekday: int = Path(ge=0, le=6),
+    hour: int = Path(ge=0, le=23),
+):
+    """Mark one cell of the grid. Idempotent — marking a marked hour is a
+    no-op, not an error, the identical shape `sheets.check_cell` uses."""
+    await working_hours_service.set_cell(db, user, weekday=weekday, hour=hour)
+
+
+@router.delete("/me/working-hours/{weekday}/{hour}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_working_hour(
+    user: CurrentUser,
+    db: DbSession,
+    weekday: int = Path(ge=0, le=6),
+    hour: int = Path(ge=0, le=23),
+):
+    await working_hours_service.clear_cell(db, user, weekday=weekday, hour=hour)
 
 
 class TokenIn(BaseModel):

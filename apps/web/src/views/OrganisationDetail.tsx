@@ -1,6 +1,7 @@
 import {
   BanIcon,
   BuildingIcon,
+  ClockIcon,
   LinkIcon,
   MailIcon,
   RefreshCwIcon,
@@ -17,6 +18,7 @@ import type { Shell } from "@/App";
 import { CopyLink } from "@/components/copy-link";
 import { PageHeader } from "@/components/page-header";
 import { PendingBadge, RoleBadge } from "@/components/role-badge";
+import { WorkingHoursGrid } from "@/components/working-hours-grid";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -66,7 +68,9 @@ import {
   type InviteCreated,
   type Member,
   type Role,
+  type WorkingHours,
 } from "@/lib/types";
+import { convertWeek } from "@/lib/working-hours";
 
 /**
  * Who is in this organisation, and getting more people into it.
@@ -92,6 +96,7 @@ export default function OrganisationDetail() {
   // that, so revoking one stays instant below rather than routing through
   // this.
   const [confirmRemove, setConfirmRemove] = useState<Member | null>(null);
+  const [whMember, setWhMember] = useState<Member | null>(null);
 
   const loadMembers = useCallback(async () => {
     if (!orgId) return;
@@ -272,6 +277,18 @@ export default function OrganisationDetail() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
+                          {member.user_id && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`Working hours for ${
+                                member.display_name || member.email
+                              }`}
+                              onClick={() => setWhMember(member)}
+                            >
+                              <ClockIcon />
+                            </Button>
+                          )}
                           {member.invite_url && (
                             <>
                               <Button
@@ -448,7 +465,84 @@ export default function OrganisationDetail() {
           )}
         </DialogContent>
       </Dialog>
+
+      <WorkingHoursDialog
+        member={whMember}
+        orgId={org.id}
+        myTimezone={me?.timezone ?? null}
+        onOpenChange={(open) => !open && setWhMember(null)}
+      />
     </>
+  );
+}
+
+function WorkingHoursDialog({
+  member,
+  orgId,
+  myTimezone,
+  onOpenChange,
+}: {
+  member: Member | null;
+  orgId: string;
+  myTimezone: string | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [data, setData] = useState<WorkingHours | null>(null);
+
+  useEffect(() => {
+    if (!member?.user_id) return;
+    setData(null);
+    void api<WorkingHours>(`/organisations/${orgId}/members/${member.user_id}/working-hours`)
+      .then(setData)
+      .catch(() => setData({ timezone: null, cells: [] }));
+  }, [member, orgId]);
+
+  // Only worth a second, converted grid when both timezones are known and
+  // actually differ — nothing honest to convert to otherwise.
+  const converted =
+    data?.timezone && myTimezone && data.timezone !== myTimezone
+      ? convertWeek(data.cells, data.timezone, myTimezone)
+      : null;
+
+  return (
+    <Dialog open={member !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        {member && (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {member.display_name || member.email}&rsquo;s working hours
+              </DialogTitle>
+              <DialogDescription>
+                {data?.timezone
+                  ? `Recorded in ${data.timezone}.`
+                  : "No timezone on record — shown as entered."}
+              </DialogDescription>
+            </DialogHeader>
+            {data === null ? (
+              <div className="flex justify-center py-8">
+                <Spinner />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <WorkingHoursGrid cells={data.cells} />
+                {data.cells.length === 0 && (
+                  <p className="text-sm text-muted-foreground">Nothing recorded yet.</p>
+                )}
+                {converted && (
+                  <div className="space-y-1 border-t pt-3">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      In your timezone ({myTimezone})
+                    </p>
+                    <WorkingHoursGrid cells={converted} />
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

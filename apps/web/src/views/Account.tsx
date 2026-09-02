@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  ClockIcon,
   CopyIcon,
   KeyRoundIcon,
   MailIcon,
@@ -16,6 +17,7 @@ import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { TotpEnroll } from "@/components/mfa-enroll";
 import { PageHeader } from "@/components/page-header";
+import { WorkingHoursGrid } from "@/components/working-hours-grid";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,7 +39,10 @@ import {
   type AccessToken,
   type NotificationChannel,
   type Organisation,
+  type WorkingHourCell,
+  type WorkingHours,
 } from "@/lib/types";
+import { cellKey } from "@/lib/working-hours";
 
 /**
  * Your account: who you are, how to reach you, and when you aren't here.
@@ -157,6 +162,7 @@ export default function Account() {
         <PasswordCard />
         <TwoFactorCard />
         <OutOfOfficeCard />
+        <WorkingHoursCard />
         <AccessTokensCard />
         <NotificationsSection organisations={organisations} />
       </div>
@@ -479,6 +485,51 @@ function OutOfOfficeCard() {
         <p className="text-xs text-muted-foreground">
           Everyone in your organisations sees this on their dashboard. That&rsquo;s the point of
           recording it rather than remembering it.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WorkingHoursCard() {
+  const [cells, setCells] = useState<WorkingHourCell[]>([]);
+
+  const load = useCallback(async () => {
+    const data = await api<WorkingHours>("/me/working-hours").catch(() => null);
+    setCells(data?.cells ?? []);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = (weekday: number, hour: number, value: boolean) => {
+    // Optimistic — a click here isn't worth a round trip before the square
+    // changes colour, and existence-based storage means a failed request
+    // just leaves this square out of step with the server until the next
+    // reload, never a duplicate or a conflict to resolve.
+    const key = cellKey(weekday, hour);
+    setCells((rows) => {
+      const without = rows.filter((c) => cellKey(c.weekday, c.hour) !== key);
+      return value ? [...without, { weekday, hour }] : without;
+    });
+    void api(`/me/working-hours/${weekday}/${hour}`, { method: value ? "PUT" : "DELETE" });
+  };
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClockIcon className="size-4" />
+          Working hours
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <WorkingHoursGrid cells={cells} onToggle={toggle} />
+        <p className="text-xs text-muted-foreground">
+          Click a square, or drag across several, to mark when you plan to be around. Purely
+          informational for now — anyone in your organisations can see it, converted to their own
+          timezone, from the People page.
         </p>
       </CardContent>
     </Card>
