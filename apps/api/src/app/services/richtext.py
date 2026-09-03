@@ -35,6 +35,7 @@ other, so it appears in the Files panel without a second mechanism.
 import re
 import uuid
 
+import markdown as _markdown
 import nh3
 
 # What survives a write. Deliberately small: every tag here is one somebody
@@ -103,6 +104,43 @@ def sanitise(html: str | None) -> str | None:
     # An editor that has been emptied still emits its wrapper. Storing that
     # makes "has a description" true forever after somebody clears one.
     return None if cleaned in ("", "<p></p>", "<p><br></p>") else cleaned
+
+
+_H1 = re.compile(r"<(/?)h1(\s[^>]*)?>")
+_H4_H6 = re.compile(r"<(/?)h[4-6](\s[^>]*)?>")
+
+
+def from_markdown(text: str | None) -> str:
+    """Markdown -> HTML, for a caller that would rather write **bold** than
+    build tags — an MCP tool, mainly, since that's what a language model
+    naturally produces, and the REST API for anyone who'd rather type '## '
+    than click a toolbar.
+
+    **This does not sanitise.** Every caller still has to run the result
+    through `sanitise()` before storing it, exactly as it would for
+    hand-typed HTML — markdown is just another way to arrive at HTML, not a
+    second trust boundary. `fenced_code` is the one extension enabled,
+    because a triple-backtick block is how anyone writing markdown expects
+    to get a code block, and it happens to emit `class="language-python"`
+    already, the exact shape `_LANGUAGE_CLASS` expects.
+
+    This editor's own toolbar only ever produces `h2`/`h3` (see
+    `RichTextEditor`'s `heading: { levels: [2, 3] }`), and `sanitise()`
+    would otherwise silently unwrap anything outside that pair rather than
+    demoting it. So a markdown `#` is promoted to `##` here, and anything
+    past `###` folds down to `###` — a single largest/smallest heading,
+    rather than a level disappearing into plain text.
+
+    An image reference (`![alt](url)`) renders as nothing, on purpose: this
+    product's rule is that an image is an attachment, not a URL, and
+    `sanitise()`'s `_ORPHAN_IMG` strips any `<img>` without a
+    `data-attachment-id` — markdown text has no way to supply one, so the
+    picture has to be attached separately, exactly as it would pasting a
+    URL into the HTML editor.
+    """
+    html = _markdown.markdown(text or "", extensions=["fenced_code"])
+    html = _H1.sub(r"<\1h2\2>", html)
+    return _H4_H6.sub(r"<\1h3\2>", html)
 
 
 def is_html(text: str | None) -> bool:

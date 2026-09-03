@@ -7,6 +7,7 @@ those shapes to redeclare.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -92,6 +93,12 @@ class RevisionOut(BaseModel):
 class RevisionSave(BaseModel):
     title: str = Field(default="", max_length=300)
     body: str = ""
+    # "html" (the default) is what the browser editor always sends. A caller
+    # that would rather write "**bold**" than build tags — a curl script, an
+    # MCP client — sets this to "markdown" and the router runs `body` through
+    # richtext.from_markdown() first. Never stored: it only decides how this
+    # one request's `body` is read.
+    body_format: Literal["html", "markdown"] = "html"
 
 
 class ArticleFileOut(BaseModel):

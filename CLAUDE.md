@@ -1116,6 +1116,47 @@ batched per page. Two consequences worth having: a `src` from the client is
 server — and a pasted screenshot is a task attachment like any other, so it
 turns up in the Files panel with no second mechanism.
 
+**Markdown is a second way in, not a second storage shape.** `richtext.py`'s
+`from_markdown()` converts markdown to HTML and hands it back — it does not
+sanitise, because markdown is just another way to *arrive* at HTML, not a
+second trust boundary; every caller still runs the result through
+`sanitise()` exactly as it would for hand-typed HTML. This exists because
+the browser editor was never the only writer: a curl script or an MCP client
+would rather send `**bold**` than build `<strong>` tags, and before this,
+that text rendered completely literally — asterisks and all — via the
+plain-text fallback below. Two things about the conversion are specific to
+this product's own allow-list, not markdown in general:
+
+- **A markdown `#` is promoted to `##`, and anything past `###` folds down
+  to `###`.** The editor's own toolbar only ever produces `h2`/`h3`
+  (`heading: { levels: [2, 3] }`), and `sanitise()` would otherwise silently
+  unwrap `h1` or `h4`–`h6` into plain text — a heading disappearing is a
+  worse outcome than one clamped to the size this product actually has.
+- **An image reference (`![alt](url)`) renders as nothing.** The "image is
+  an attachment, not a URL" rule above doesn't bend for markdown either —
+  there's no way to put a `data-attachment-id` on a markdown image, so
+  `sanitise()`'s orphan-`<img>` strip removes it, same as a hand-typed
+  `<img src="...">` in the HTML editor. The picture has to be attached
+  separately (`attach_file`/`attach_article_file` over MCP, or the Files
+  panel).
+
+Reached via an explicit `description_format`/`body_format: "html" |
+"markdown"` field on the REST write endpoints (`POST/PATCH /tasks`,
+`PATCH /kb/revisions/{id}`), defaulting to `"html"` — the browser's Tiptap
+editor keeps sending real HTML exactly as before, so this is zero-risk for
+every existing caller including the frontend itself. MCP's `create_task`
+and `edit_article` tools take the more opinionated path and treat their
+`description`/`body` as markdown unconditionally, no flag to set: that's
+what a language model actually writes, and a plain sentence with no markdown
+syntax converts to itself wrapped in one `<p>`, never a worse outcome than
+the old literal-text rendering. `fenced_code` is the one markdown extension
+enabled — a triple-backtick block is how anyone writing markdown expects a
+code block, and it happens to emit `class="language-python"` already, the
+exact shape `_LANGUAGE_CLASS` expects, with no remapping needed the way
+headings need. `tests/test_richtext.py` pins the conversion against
+`sanitise()` together, because a case that looks right before sanitising
+and wrong after it is the only kind of bug that actually matters here.
+
 Things that will bite:
 
 - **Tiptap's `Image` node silently drops unknown attributes.** `TaskImage`

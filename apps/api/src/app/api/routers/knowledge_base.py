@@ -383,8 +383,11 @@ async def save_revision(
     superseded by a newer session."""
     revision = await _revision_or_404(db, revision_id)
     actx = await articles_service.context_for(db, ctx, revision.article_id, user.id)
+    new_body = body.body
+    if new_body and body.body_format == "markdown":
+        new_body = richtext.from_markdown(new_body)
     saved = await articles_service.autosave_revision(
-        db, actx, revision, title=body.title, body=body.body
+        db, actx, revision, title=body.title, body=new_body
     )
     return await _revision_out(db, saved, edited_by=user, is_current=True)
 

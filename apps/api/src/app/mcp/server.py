@@ -67,6 +67,7 @@ from app.services import books as books_service
 from app.services import organisations as organisations_service
 from app.services import projects as projects_service
 from app.services import reminders as reminders_service
+from app.services import richtext
 from app.services import search as search_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
@@ -430,7 +431,10 @@ async def create_task(
     ctx: Context,
     organisation_id: str,
     title: str,
-    description: Annotated[str | None, Field(description="Plain text is fine.")] = None,
+    description: Annotated[
+        str | None,
+        Field(description="Markdown (headings, bold, lists, links) or plain text."),
+    ] = None,
     project_id: Annotated[str | None, Field(description="Omit for a loose task.")] = None,
     owner_email: Annotated[
         str | None,
@@ -459,7 +463,11 @@ async def create_task(
             org,
             user,
             title=title,
-            description=description,
+            # Markdown in, always — an assistant writes **bold**, not tags.
+            # A plain sentence with no markdown syntax converts to itself
+            # wrapped in a single <p>, so this is never a worse outcome than
+            # the old plain-text path.
+            description=richtext.from_markdown(description) if description else None,
             project_id=uuid.UUID(project_id) if project_id else None,
             priority=priority,
             owner_user_id=owner,
@@ -689,7 +697,10 @@ async def edit_article(
     ] = None,
     body: Annotated[
         str | None,
-        Field(description="Plain text is fine. Omit to leave the body unchanged."),
+        Field(
+            description="Markdown (headings, bold, lists, links) or plain text. "
+            "Omit to leave the body unchanged."
+        ),
     ] = None,
 ) -> str:
     """Edit an article's title and/or body, as an editing session — the
@@ -714,7 +725,11 @@ async def edit_article(
             actx,
             revision,
             title=title if title is not None else revision.title,
-            body=body if body is not None else revision.body,
+            # Converted only when it's the fresh value from this call —
+            # `revision.body` (the fallback when `body` is omitted) is
+            # already-stored HTML from a previous session and must not be
+            # run through the markdown parser a second time.
+            body=richtext.from_markdown(body) if body is not None else revision.body,
         )
     return f"Saved [{actx.article.id}] {saved.title or 'Untitled'}"
 

@@ -39,6 +39,11 @@ dependencies = [
     # promoted deliberately, the same "not stdlib, add it on purpose"
     # treatment pyotp/qrcode got for MFA.
     "httpx>=0.27",
+    # Markdown -> HTML for API/MCP callers, so an assistant can write
+    # **bold** rather than build tags. Pure Python, no transitive deps of
+    # its own; the output still goes through richtext.sanitise() same as
+    # anything else, so this carries no new trust boundary.
+    "markdown>=3.7",
 ]
 
 [dependency-groups]

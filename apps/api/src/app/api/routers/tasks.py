@@ -475,12 +475,15 @@ async def task_board(
 
 @router.post("/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    description = body.description
+    if description and body.description_format == "markdown":
+        description = richtext.from_markdown(description)
     task = await tasks_service.create(
         db,
         ctx,
         user,
         title=body.title,
-        description=body.description,
+        description=description,
         project_id=uuid.UUID(body.project_id) if body.project_id else None,
         status=body.status,
         priority=body.priority,
@@ -544,10 +547,16 @@ async def update_task(
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     fields: dict = {}
     for name in body.model_fields_set:
+        # Not a task field itself — it only decides how `description`,
+        # below, gets read. tasks_service.update() has never heard of it.
+        if name == "description_format":
+            continue
         value = getattr(body, name)
         if name in ("project_id", "owner_user_id", "action_required_user_id") and value:
             value = uuid.UUID(value)
         fields[name] = value
+    if "description" in fields and fields["description"] and body.description_format == "markdown":
+        fields["description"] = richtext.from_markdown(fields["description"])
 
     task = await tasks_service.update(db, tctx, ctx, user, fields=fields)
     try:

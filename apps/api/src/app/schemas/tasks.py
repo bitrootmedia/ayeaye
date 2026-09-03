@@ -1,6 +1,7 @@
 """Wire shapes for tasks, their history and the notification inbox."""
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,12 @@ INTERVAL_PATTERN = f"^({'|'.join(INTERVAL_UNITS)})$"
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str | None = None
+    # "html" (the default) is what the browser editor always sends. A caller
+    # that would rather write "**bold**" than build tags — a curl script, an
+    # MCP client — sets this to "markdown" and the router runs it through
+    # richtext.from_markdown() first. Never stored: it only decides how this
+    # one request's `description` is read.
+    description_format: Literal["html", "markdown"] = "html"
     # Omit for a loose task — one that belongs to the organisation rather than
     # any project. Deliberately not visible to the whole organisation; see
     # services/access.py.
@@ -39,6 +46,10 @@ class TaskUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = None
+    # Same "html" default, same meaning as TaskCreate's own field — not
+    # itself one of the fields `model_fields_set` sweeps into the update,
+    # see the router.
+    description_format: Literal["html", "markdown"] = "html"
     status: str | None = Field(default=None, pattern=STATUS_PATTERN)
     priority: str | None = Field(default=None, pattern=PRIORITY_PATTERN)
     project_id: str | None = None
