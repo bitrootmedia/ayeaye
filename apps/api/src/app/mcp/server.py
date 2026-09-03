@@ -67,7 +67,7 @@ from app.services import books as books_service
 from app.services import organisations as organisations_service
 from app.services import projects as projects_service
 from app.services import reminders as reminders_service
-from app.services import richtext
+from app.services import richtext, time_tracking
 from app.services import search as search_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
@@ -482,15 +482,47 @@ async def update_task(
     ctx: Context,
     organisation_id: str,
     task_id: str,
+    title: Annotated[str | None, Field(description="Omit to leave the title unchanged.")] = None,
+    description: Annotated[
+        str | None,
+        Field(
+            description="Markdown or plain text. Omit to leave it unchanged; "
+            "pass an empty string to clear it."
+        ),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        Field(
+            description="Move it here. Pass an empty string to make it a loose task; "
+            "omit to leave it where it is."
+        ),
+    ] = None,
+    owner_email: Annotated[
+        str | None,
+        Field(
+            description="Hand it to somebody else. Must already be a member of the organisation."
+        ),
+    ] = None,
     status: str | None = None,
     priority: str | None = None,
-    due_on: str | None = None,
-    action_required_email: str | None = None,
+    due_on: Annotated[
+        str | None, Field(description="YYYY-MM-DD. Pass an empty string to clear it.")
+    ] = None,
+    action_required_email: Annotated[
+        str | None,
+        Field(description="Who is being asked to act. Pass an empty string to clear it."),
+    ] = None,
 ) -> str:
     """Change a task. Only the fields you pass are touched."""
     user, tok = await _caller(ctx)
     _require_write(tok)
     fields: dict = {}
+    if title is not None:
+        fields["title"] = title
+    if description is not None:
+        # Markdown in, always, matching create_task — an empty string clears
+        # the description rather than converting to an empty <p>.
+        fields["description"] = richtext.from_markdown(description) if description else None
     if status is not None:
         fields["status"] = status
     if priority is not None:
@@ -507,10 +539,49 @@ async def update_task(
             fields["action_required_user_id"] = await _member_by_email(
                 db, org, action_required_email
             )
+        if project_id is not None:
+            fields["project_id"] = uuid.UUID(project_id) if project_id else None
+        # Never sent as an explicit None: a task always has an owner, and
+        # unlike the other fields here there is no "clear" reading of one.
+        if owner_email:
+            fields["owner_user_id"] = await _member_by_email(db, org, owner_email)
         if not fields:
             return "Nothing to change."
         updated = await tasks_service.update(db, tctx, org, user, fields=fields)
     return f"Updated [{updated.id}] {updated.title}"
+
+
+@mcp.tool()
+async def close_task(ctx: Context, organisation_id: str, task_id: str) -> str:
+    """Close a task. Only the owner — or an organisation admin — may; status
+    and open/closed are separate fields, so a task can be closed from any
+    status. Everyone else sees the identical refusal the web app's own
+    missing button implies."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        task = await tasks_service.set_open(db, tctx, org, user, closed=True)
+    return f"Closed [{task.id}] {task.title}"
+
+
+@mcp.tool()
+async def reopen_task(ctx: Context, organisation_id: str, task_id: str) -> str:
+    """Reopen a closed task. Same owner-or-admin rule as closing."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        task = await tasks_service.set_open(db, tctx, org, user, closed=False)
+    return f"Reopened [{task.id}] {task.title}"
 
 
 @mcp.tool()
@@ -821,6 +892,134 @@ async def attach_article_file(
         f"Attached [{ready.id}] {ready.filename} ({ready.size_bytes} bytes) "
         f"to [{actx.article.id}]"
     )
+
+
+@mcp.tool()
+async def create_reminder(
+    ctx: Context,
+    organisation_id: str,
+    remind_on: Annotated[str, Field(description="YYYY-MM-DD.")],
+    task_id: Annotated[
+        str | None, Field(description="Anchor it to a task. Omit for a standalone reminder.")
+    ] = None,
+    title: Annotated[
+        str | None,
+        Field(description="Required for a standalone reminder (no task_id); ignored otherwise."),
+    ] = None,
+    note: Annotated[str | None, Field(description="Optional detail.")] = None,
+) -> str:
+    """Set a reminder for yourself — anchored to a task, or standalone.
+    Yours alone; nobody else, ever, sees it."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    if not task_id and not title:
+        raise Denied("A standalone reminder needs a title; a task-anchored one needs task_id.")
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        if task_id:
+            try:
+                tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+            except Exception as exc:
+                raise Denied("No such task, or you can't see it.") from exc
+            row = await reminders_service.create(
+                db, tctx.task, user, remind_on=date.fromisoformat(remind_on), note=note
+            )
+            return f"Reminder set on [{tctx.task.id}] {tctx.task.title} for {row.remind_on}"
+        row = await reminders_service.create_standalone(
+            db, org, user, remind_on=date.fromisoformat(remind_on), title=title, note=note
+        )
+    return f"Reminder set: {row.title} for {row.remind_on}"
+
+
+@mcp.tool()
+async def update_reminder(
+    ctx: Context,
+    reminder_id: str,
+    remind_on: Annotated[
+        str | None, Field(description="YYYY-MM-DD. Omit to leave unchanged.")
+    ] = None,
+    title: Annotated[
+        str | None, Field(description="Only meaningful for a standalone reminder.")
+    ] = None,
+    note: str | None = None,
+    done: Annotated[bool | None, Field(description="Mark it done, or undone.")] = None,
+) -> str:
+    """Move, re-word, or mark a reminder done. Yours alone."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    fields: dict = {}
+    if remind_on is not None:
+        fields["remind_on"] = date.fromisoformat(remind_on)
+    if title is not None:
+        fields["title"] = title
+    if note is not None:
+        fields["note"] = note
+    if done is not None:
+        fields["done"] = done
+    if not fields:
+        return "Nothing to change."
+    async with SessionLocal() as db:
+        try:
+            row = await reminders_service.get_or_404(db, uuid.UUID(reminder_id), user)
+        except Exception as exc:
+            raise Denied("No such reminder.") from exc
+        updated = await reminders_service.update_one(db, row, user, fields=fields)
+    what = updated.title or updated.note or updated.id
+    return f"Updated reminder: {what} for {updated.remind_on}"
+
+
+@mcp.tool()
+async def start_timer(ctx: Context, organisation_id: str, task_id: str) -> str:
+    """Start timing this task, as you. Starting stops whatever timer you
+    already had running elsewhere — switching tasks is the normal case, not
+    an error. `read` on the task is enough: time is a record of what you
+    did."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            entry, stopped = await time_tracking.start(db, org, user, uuid.UUID(task_id))
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+    line = f"Timer started on [{entry.task_id}]"
+    if stopped:
+        line += f" (stopped the one running on [{stopped.task_id}])"
+    return line
+
+
+@mcp.tool()
+async def stop_timer(ctx: Context) -> str:
+    """Stop whatever timer is currently running, in any organisation.
+    Idempotent — nothing running is not an error."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        entry = await time_tracking.stop(db, user)
+    return f"Stopped timer on [{entry.task_id}]" if entry else "Nothing was running."
+
+
+@mcp.tool()
+async def log_time(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    minutes: Annotated[int, Field(gt=0, le=24 * 60, description="How long, in minutes.")],
+    note: Annotated[str | None, Field(description="Optional detail.")] = None,
+) -> str:
+    """Record time already spent on a task — for work already done, not a
+    live timer. `read` on the task is enough."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            entry = await time_tracking.log_manual(
+                db, org, user, uuid.UUID(task_id), minutes=minutes, note=note
+            )
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+    return f"Logged {minutes}m on [{entry.task_id}]"
 
 
 def _require_write(principal: _Principal) -> None:

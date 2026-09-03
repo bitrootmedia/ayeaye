@@ -786,6 +786,10 @@ function Details({
   const toast = useToastManager();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
+  // Write/Preview, the same pair GitHub's own markdown fields use — a
+  // mermaid diagram only renders in RichText's read-only path, so without
+  // this the person actually drawing one would never see it themselves.
+  const [mode, setMode] = useState<"write" | "preview">("write");
 
   if (!editable) {
     return (
@@ -809,14 +813,44 @@ function Details({
         <Input id="task-title" value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="space-y-2">
-        <Label>Description</Label>
-        <RichTextEditor
-          orgId={orgId}
-          basePath={`/organisations/${orgId}/tasks/${task.id}`}
-          value={description}
-          onChange={setDescription}
-          onImageAdded={onImageAdded}
-        />
+        <div className="flex items-center justify-between">
+          <Label>Description</Label>
+          <div className="flex items-center gap-1 text-xs">
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "write" ? "secondary" : "ghost"}
+              onClick={() => setMode("write")}
+            >
+              Write
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "preview" ? "secondary" : "ghost"}
+              onClick={() => setMode("preview")}
+            >
+              Preview
+            </Button>
+          </div>
+        </div>
+        {mode === "write" ? (
+          <RichTextEditor
+            orgId={orgId}
+            basePath={`/organisations/${orgId}/tasks/${task.id}`}
+            value={description}
+            onChange={setDescription}
+            onImageAdded={onImageAdded}
+          />
+        ) : description ? (
+          <div className="rounded-lg border px-3 py-2">
+            <RichText html={description} />
+          </div>
+        ) : (
+          <p className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+            Nothing to preview yet.
+          </p>
+        )}
       </div>
       <Button
         disabled={!dirty || !title.trim()}

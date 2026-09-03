@@ -306,6 +306,10 @@ function Editor({
   const [title, setTitle] = useState(revision.title);
   const [body, setBody] = useState(revision.body);
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  // Write/Preview, the same pair GitHub's own markdown fields use — a
+  // mermaid diagram only renders in RichText's read-only path, so without
+  // this the person actually drawing one would never see it themselves.
+  const [mode, setMode] = useState<"write" | "preview">("write");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Title and body share one debounce window — see Notepad.tsx for why two
   // independent timers silently drop whichever field wasn't touched last.
@@ -414,17 +418,45 @@ function Editor({
         }}
         onBlur={flush}
       />
-      <RichTextEditor
-        orgId={orgId}
-        basePath={`/organisations/${orgId}/kb/revisions/${revision.id}`}
-        value={body}
-        noun="article"
-        onChange={(html) => {
-          setBody(html);
-          queueSave({ body: html });
-        }}
-        onImageAdded={onImageAdded}
-      />
+      <div className="flex items-center gap-1 text-xs">
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "write" ? "secondary" : "ghost"}
+          onClick={() => setMode("write")}
+        >
+          Write
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "preview" ? "secondary" : "ghost"}
+          onClick={() => setMode("preview")}
+        >
+          Preview
+        </Button>
+      </div>
+      {mode === "write" ? (
+        <RichTextEditor
+          orgId={orgId}
+          basePath={`/organisations/${orgId}/kb/revisions/${revision.id}`}
+          value={body}
+          noun="article"
+          onChange={(html) => {
+            setBody(html);
+            queueSave({ body: html });
+          }}
+          onImageAdded={onImageAdded}
+        />
+      ) : body ? (
+        <div className="rounded-lg border px-3 py-2">
+          <RichText html={body} />
+        </div>
+      ) : (
+        <p className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+          Nothing to preview yet.
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         {state === "saving" ? "Saving…" : "Saved automatically"}
       </p>

@@ -13,7 +13,7 @@ import {
   SquareCodeIcon,
   StrikethroughIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Image from "@tiptap/extension-image";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
@@ -86,6 +86,11 @@ const LANGUAGES = [
   "javascript",
   "json",
   "markdown",
+  // Not a highlighting language lowlight knows — picking it just leaves the
+  // block in plain monospace while typing. What it's actually for is the
+  // render step: `RichText` turns any `language-mermaid` block into a
+  // diagram once the description is saved and viewed.
+  "mermaid",
   "php",
   "python",
   "ruby",
@@ -380,13 +385,141 @@ export function RichText({ html, className }: { html: string; className?: string
   // Descriptions written before the editor existed are plain text. Rendering
   // those as HTML would collapse every line break, so they keep their shape.
   const looksLikeHtml = html.includes("<");
+  const parts = useMemo(() => (looksLikeHtml ? splitOnMermaidBlocks(html) : []), [html, looksLikeHtml]);
+
   if (!looksLikeHtml) {
     return <p className={cn("text-sm whitespace-pre-wrap", className)}>{html}</p>;
   }
+
+  // The common case — no diagram in this description — stays exactly the
+  // single dangerouslySetInnerHTML it always was, rather than an unnecessary
+  // wrapper around one child.
+  if (parts.length === 1 && parts[0].kind === "html") {
+    return (
+      <div
+        className={cn("prose-task", className)}
+        dangerouslySetInnerHTML={{ __html: parts[0].content }}
+      />
+    );
+  }
+
   return (
-    <div
-      className={cn("prose-task", className)}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className={cn("prose-task", className)}>
+      {parts.map((part, i) =>
+        part.kind === "mermaid" ? (
+          <MermaidDiagram key={i} source={part.content} />
+        ) : (
+          <div key={i} dangerouslySetInnerHTML={{ __html: part.content }} />
+        ),
+      )}
+    </div>
   );
+}
+
+/**
+ * Splits sanitised HTML on `<pre><code class="language-mermaid">…</code></pre>`
+ * blocks — the fenced-code shape `services/richtext.py`'s `sanitise()` and
+ * `from_markdown()` both already produce for a ```mermaid``` block, no
+ * backend change needed. Everything else stays exactly the HTML the server
+ * sent, split into fragments only where a diagram needs to interrupt it.
+ */
+const MERMAID_BLOCK = /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g;
+
+type Part = { kind: "html" | "mermaid"; content: string };
+
+function splitOnMermaidBlocks(html: string): Part[] {
+  const parts: Part[] = [];
+  let lastIndex = 0;
+  MERMAID_BLOCK.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = MERMAID_BLOCK.exec(html))) {
+    if (match.index > lastIndex) {
+      parts.push({ kind: "html", content: html.slice(lastIndex, match.index) });
+    }
+    parts.push({ kind: "mermaid", content: decodeHtmlEntities(match[1]) });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < html.length || parts.length === 0) {
+    parts.push({ kind: "html", content: html.slice(lastIndex) });
+  }
+  return parts;
+}
+
+/** `sanitise()` HTML-escapes text inside `<code>`, same as any browser would
+ *  when it puts text in an element — reverse that to get mermaid's own DSL
+ *  back before handing it to the renderer. A plain, inert `<textarea>` is
+ *  the standard trick: setting `innerHTML` decodes entities, and a textarea
+ *  never executes anything it's given regardless of content. */
+function decodeHtmlEntities(text: string): string {
+  const el = document.createElement("textarea");
+  el.innerHTML = text;
+  return el.value;
+}
+
+/**
+ * One diagram, rendered from mermaid's own text DSL.
+ *
+ * Dynamically imported — mermaid is a few hundred KB, and most descriptions
+ * never use it, so the common case shouldn't pay for a library it never
+ * loads. Rendered with `securityLevel: "strict"`: mermaid's DSL supports
+ * `click` directives that can otherwise run arbitrary JS or navigate on
+ * click, and a diagram's source is exactly as untrusted as anything else
+ * that arrived through `sanitise()` — "the client is never trusted" applies
+ * here too, not just to the surrounding HTML.
+ */
+function MermaidDiagram({ source }: { source: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const rawId = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const isDark = useIsDarkMode();
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    (async () => {
+      try {
+        const { default: mermaid } = await import("mermaid");
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: isDark ? "dark" : "neutral",
+        });
+        const { svg } = await mermaid.render(`mermaid-${rawId}`, source.trim());
+        if (!cancelled && ref.current) ref.current.innerHTML = svg;
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Couldn't render this diagram.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [source, rawId, isDark]);
+
+  if (error) {
+    return (
+      <div className="my-2 rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+        This diagram couldn&rsquo;t be rendered: {error}
+      </div>
+    );
+  }
+  return <div ref={ref} className="my-2 flex justify-center overflow-x-auto [&_svg]:max-w-full" />;
+}
+
+/** `useTheme` (lib/theme.ts) owns the toggle button's own state, but a
+ *  second component can't read it — it's a separate `useState`, not
+ *  context, so a diagram rendered before a toggle click never hears about
+ *  it. Observing the `.dark` class `useTheme` itself sets on `<html>` is
+ *  what lets an already-rendered diagram redraw in the theme it's actually
+ *  being viewed in, instead of freezing in whatever was current at mount. */
+function useIsDarkMode(): boolean {
+  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    const el = document.documentElement;
+    const observer = new MutationObserver(() => setIsDark(el.classList.contains("dark")));
+    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return isDark;
 }
