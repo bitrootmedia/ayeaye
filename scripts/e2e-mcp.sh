@@ -144,6 +144,37 @@ CARGS=$(args organisation_id=$OID task_id=$TID "body=Ordered today $S")
 ok "commenting works"           "$(tool "$WRITE" comment "$CARGS" | text | grep -c "Posted")" "1"
 ok "…and it is a real comment"  "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$TID/comments | j "sum(1 for m in d['messages'] if m['body']=='Ordered today $S')")" "1"
 
+echo "== tagging a task"
+# Every step here is its own statement assigned to a plain variable before
+# `ok` ever sees it — nesting a literal "{...}" with a comma inside a
+# second layer of "$(...)" is the exact bash trap CLAUDE.md's own MCP
+# section warns about, and this file already has a few pre-existing,
+# silently-vacuous assertions from exactly that (comparing two
+# independently-mangled values that happen to match). Not repeating it here.
+TAGARGS=$(args organisation_id=$OID task_id=$TID tag=Billing)
+TAGGED=$(tool "$WRITE" tag_task "$TAGARGS" | text)
+ok "tagging creates and applies it" "$(echo "$TAGGED" | grep -c 'Billing')" "1"
+ok "applying it again is idempotent, not an error" "$(echo "$TAGGED" | grep -ci error)" "0"
+
+DUPARGS=$(args organisation_id=$OID task_id=$TID tag=billing)
+tool "$WRITE" tag_task "$DUPARGS" >/dev/null
+ok "same name different case reuses the tag, no twin created" \
+  "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tags | j "sum(1 for t in d if t['name'].lower()=='billing')")" "1"
+
+REFUSED=$(tool "$READ" tag_task "$TAGARGS")
+ok "a read-only token is refused" "$(echo "$REFUSED" | j "d['result']['isError']")" "True"
+
+TASKARGS=$(args organisation_id=$OID task_id=$TID)
+SHOWN=$(tool "$WRITE" task "$TASKARGS" | text)
+ok "the task now shows the tag" "$(echo "$SHOWN" | grep -c 'tags: Billing')" "1"
+
+UNTAGGED=$(tool "$WRITE" untag_task "$TAGARGS" | text)
+ok "untagging removes it" "$(echo "$UNTAGGED" | grep -c Untagged)" "1"
+
+BOGUSARGS=$(args organisation_id=$OID task_id=$TID tag=NoSuchTag)
+BOGUS=$(tool "$WRITE" untag_task "$BOGUSARGS")
+ok "untagging a name that was never applied is refused" "$(echo "$BOGUS" | j "d['result']['isError']")" "True"
+
 echo "== the report tools"
 ok "activity reports the week"  "$(tool "$WRITE" activity "{\"organisation_id\":\"$OID\",\"days\":7}" | text | grep -ci "touched in the last 7 day")" "1"
 ok "search finds by word"       "$(tool "$WRITE" search "{\"organisation_id\":\"$OID\",\"query\":\"anode\"}" | text | grep -c "Replace the anode")" "1"

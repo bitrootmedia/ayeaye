@@ -444,6 +444,53 @@ async def comment(ctx: Context, organisation_id: str, task_id: str, body: str) -
 
 
 @mcp.tool()
+async def tag_task(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    tag: Annotated[str, Field(description="e.g. billing. Created if it's the first use.")],
+) -> str:
+    """Apply a tag to a task, as you. Get-or-create by name, the same as the
+    web app's picker — typing a tag that already exists reuses it rather
+    than making a twin. Needs write on the task, like any other edit."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        applied = await tags_service.get_or_create(db, org, user, name=tag)
+        await tags_service.apply(db, tctx.task, applied)
+        await tasks_service.announce(db, tctx.task, "tagged")
+        current = (await tags_service.for_tasks(db, [tctx.task.id])).get(tctx.task.id, [])
+    return f"Tagged [{tctx.task.id}] {tctx.task.title}: " + ", ".join(t.name for t in current)
+
+
+@mcp.tool()
+async def untag_task(ctx: Context, organisation_id: str, task_id: str, tag: str) -> str:
+    """Take a tag off a task, by name. The tag itself survives — it's shared
+    vocabulary — only this one tasking of it goes. Needs write on the task."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        existing = await tags_service.find_by_name(db, org, tag)
+        if existing is None:
+            raise Denied(f"No tag named {tag!r} in this organisation.")
+        await tags_service.unapply(db, tctx.task, existing.id)
+        await tasks_service.announce(db, tctx.task, "untagged")
+    return f"Untagged [{tctx.task.id}] {tctx.task.title}: removed {existing.name!r}"
+
+
+@mcp.tool()
 async def attach_file(
     ctx: Context,
     organisation_id: str,
