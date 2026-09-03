@@ -58,10 +58,12 @@ from pydantic import AnyHttpUrl, Field
 
 from app.core.config import settings
 from app.db import SessionLocal
-from app.models import User
+from app.models import Book, User
 from app.models.task import PRIORITIES, STATUSES
 from app.models.token import SCOPE_READ, SCOPE_WRITE
+from app.services import articles as articles_service
 from app.services import attachments as attachments_service
+from app.services import books as books_service
 from app.services import organisations as organisations_service
 from app.services import projects as projects_service
 from app.services import reminders as reminders_service
@@ -81,15 +83,19 @@ token_verifier = OAuthTokenVerifier()
 mcp = MCPServer(
     name="ayeayecaptain",
     instructions=(
-        "Project and task management. Every call acts as the person whose "
-        "access token is in use and can only reach what they can reach.\n\n"
+        "Project and task management, plus a per-organisation knowledge base "
+        "of books and articles. Every call acts as the person whose access "
+        "token is in use and can only reach what they can reach.\n\n"
         "Start with `organisations` — almost everything else needs an "
         "organisation id. Task ids are UUIDs and are stable; quote them back "
         "when the person refers to 'that task'.\n\n"
         "Statuses are todo, in_progress, review, on_hold and blocker. "
         "Open/closed is a separate field: a task can be closed at any status, "
         "and there is no 'done' status. Priorities run critical, urgent, "
-        "high, normal, low, very_low."
+        "high, normal, low, very_low.\n\n"
+        "A knowledge-base article is born a private draft that only its "
+        "owner can see — `publish_article` is what makes it visible to "
+        "anyone the book is shared with."
     ),
     token_verifier=token_verifier,
     auth=AuthSettings(
@@ -241,8 +247,9 @@ async def search(
         Field(description="Typo-tolerant; matches titles, descriptions and tags."),
     ],
 ) -> str:
-    """Find tasks and projects by text. Use this when the person names
-    something rather than giving an id."""
+    """Find tasks, projects and knowledge-base articles by text. Use this
+    when the person names something rather than giving an id. A private
+    article only turns up here for its own owner, same as everywhere else."""
     user, _ = await _caller(ctx)
     async with SessionLocal() as db:
         org = await _org(db, user, organisation_id)
@@ -339,6 +346,80 @@ async def my_reminders(ctx: Context) -> str:
         f"{r.note or t.title} [{t.id}]"
         for r, t in rows
     )
+
+
+def _book_line(book, level: str) -> str:
+    bits = [f"[{book.id}]", book.name, f"access={level}"]
+    if book.archived_at:
+        bits.append("archived")
+    return " | ".join(bits)
+
+
+@mcp.tool()
+async def list_books(
+    ctx: Context,
+    organisation_id: str,
+    include_archived: bool = False,
+) -> str:
+    """Books in the knowledge base you can see. A book is private to its
+    owner until shared, the same rule a project follows."""
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        rows = await books_service.list_visible(
+            db, org, user.id, include_archived=include_archived
+        )
+    if not rows:
+        return "No books you can see yet."
+    return "\n".join(_book_line(book, level) for book, level in rows)
+
+
+@mcp.tool()
+async def list_articles(ctx: Context, organisation_id: str, book_id: str) -> str:
+    """Articles in one book — the table of contents. Your own private drafts
+    are included; anyone else's simply don't appear."""
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            bctx = await books_service.context_for(db, org, uuid.UUID(book_id), user.id)
+        except Exception as exc:
+            raise Denied("No such book, or you can't see it.") from exc
+        rows = await articles_service.list_for_book(db, org, bctx.book.id, user.id)
+    if not rows:
+        return f"Nothing in {bctx.book.name} yet."
+    lines = [f"{bctx.book.name}:"]
+    for article, level, rev in rows:
+        title = (rev.title if rev else "") or "Untitled"
+        state = "private draft" if article.is_private else "published"
+        lines.append(f"[{article.id}] {title} ({state}) access={level}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def read_article(ctx: Context, organisation_id: str, article_id: str) -> str:
+    """Everything about one article: its current text, and whether it's
+    published."""
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(db, org, uuid.UUID(article_id), user.id)
+        except Exception as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        rev = await articles_service.latest_revision(db, actx.article.id)
+        book = await db.get(Book, actx.article.book_id)
+    title = (rev.title if rev else "") or "Untitled"
+    state = "private draft — only you can see this" if actx.article.is_private else "published"
+    lines = [
+        f"{title}  [{actx.article.id}]",
+        f"book={book.name if book else '?'} {state} your access={actx.level}",
+    ]
+    if rev and rev.body_text:
+        # The stripped column, so the model reads prose rather than markup —
+        # the identical reasoning `task`'s own tool has for `description_text`.
+        lines.append("\n" + rev.body_text.strip())
+    return "\n".join(lines)
 
 
 # --- writing ------------------------------------------------------------------------
@@ -550,6 +631,180 @@ async def attach_file(
     return (
         f"Attached [{ready.id}] {ready.filename} ({ready.size_bytes} bytes) "
         f"to [{tctx.task.id}] {tctx.task.title}"
+    )
+
+
+@mcp.tool()
+async def create_book(
+    ctx: Context,
+    organisation_id: str,
+    name: str,
+    description: Annotated[str | None, Field(description="Optional.")] = None,
+) -> str:
+    """Create a book. You own it, and to begin with nobody else can see it —
+    not even the rest of the organisation. Sharing it is a web-only action,
+    from its Access panel."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        bctx = await books_service.create(
+            db, org, name=name, description=description, user=user
+        )
+    return f"Created [{bctx.book.id}] {bctx.book.name}"
+
+
+@mcp.tool()
+async def create_article(
+    ctx: Context,
+    organisation_id: str,
+    book_id: str,
+    title: str = "",
+) -> str:
+    """Start a new article in a book. Born as your own private draft —
+    nobody else, not even an organisation admin, sees it until you publish
+    it with `publish_article`. Needs write access on the book."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            bctx = await books_service.context_for(db, org, uuid.UUID(book_id), user.id)
+        except Exception as exc:
+            raise Denied("No such book, or you can't see it.") from exc
+        article, revision = await articles_service.create(db, bctx, user, title=title)
+    return (
+        f"Created [{article.id}] {revision.title or 'Untitled'} "
+        f"in {bctx.book.name} — private draft"
+    )
+
+
+@mcp.tool()
+async def edit_article(
+    ctx: Context,
+    organisation_id: str,
+    article_id: str,
+    title: Annotated[
+        str | None, Field(description="Omit to leave the title unchanged.")
+    ] = None,
+    body: Annotated[
+        str | None,
+        Field(description="Plain text is fine. Omit to leave the body unchanged."),
+    ] = None,
+) -> str:
+    """Edit an article's title and/or body, as an editing session — the
+    identical mechanics the web editor uses. Reopening within half an hour of
+    your own last edit continues that same session; longer than that, or
+    somebody else's edit in between, starts a fresh revision and freezes the
+    old one into history. Needs write access on the article.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    if title is None and body is None:
+        return "Nothing to change."
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(db, org, uuid.UUID(article_id), user.id)
+        except Exception as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        revision = await articles_service.start_editing_session(db, actx, user)
+        saved = await articles_service.autosave_revision(
+            db,
+            actx,
+            revision,
+            title=title if title is not None else revision.title,
+            body=body if body is not None else revision.body,
+        )
+    return f"Saved [{actx.article.id}] {saved.title or 'Untitled'}"
+
+
+@mcp.tool()
+async def publish_article(ctx: Context, organisation_id: str, article_id: str) -> str:
+    """Publish an article — the only thing that makes it visible to anyone
+    the book is shared with. Owner-only, the same `can_hide`-shaped rule a
+    task's own hide/unhide follows."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(db, org, uuid.UUID(article_id), user.id)
+        except Exception as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        await articles_service.set_private(db, actx, user, is_private=False)
+    return f"Published [{actx.article.id}]"
+
+
+@mcp.tool()
+async def unpublish_article(ctx: Context, organisation_id: str, article_id: str) -> str:
+    """Make a published article a private draft again — back to only you.
+    Owner-only."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(db, org, uuid.UUID(article_id), user.id)
+        except Exception as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        await articles_service.set_private(db, actx, user, is_private=True)
+    return f"Made [{actx.article.id}] private again"
+
+
+@mcp.tool()
+async def attach_article_file(
+    ctx: Context,
+    organisation_id: str,
+    article_id: str,
+    filename: Annotated[str, Field(description="e.g. diagram.png")],
+    content_type: Annotated[
+        str, Field(description="MIME type, e.g. image/png. Codec parameters are stripped.")
+    ],
+    content_base64: Annotated[str, Field(description="The file's bytes, base64-encoded.")],
+) -> str:
+    """Attach a file to an article, as you — the same deliberate exception
+    `attach_file` documents for tasks: the bytes travel in this call because
+    an assistant has no browser and no direct route to storage. Keep it to
+    things you'd actually paste into a chat; base64 costs about a third more
+    than the file's own size, both over the wire and in this conversation's
+    context.
+
+    Lands on the article's current editing session, opened or continued the
+    same way `edit_article` does — an old revision in history keeps whatever
+    was attached to it at the time. Needs write access on the article.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    try:
+        raw = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise Denied("That doesn't look like valid base64.") from exc
+    if not raw:
+        raise Denied("That file is empty.")
+    if len(raw) > settings.attachment_max_bytes:
+        limit = settings.attachment_max_bytes // (1024 * 1024)
+        raise Denied(f"That file is larger than {limit}MB.")
+
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(db, org, uuid.UUID(article_id), user.id)
+        except Exception as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        revision = await articles_service.start_editing_session(db, actx, user)
+
+        attachment, _upload_url = await attachments_service.create(
+            db, user, filename=filename, content_type=content_type, article_revision=revision
+        )
+        # Steps 2 and 3 of the usual handshake, done server-side — see
+        # `attach_file`'s own docstring for why this is the one place a
+        # file's bytes pass through the API at all.
+        await s3.put_object_bytes(attachment.storage_key, raw, attachment.content_type)
+        ready = await attachments_service.confirm(db, attachment, user)
+    return (
+        f"Attached [{ready.id}] {ready.filename} ({ready.size_bytes} bytes) "
+        f"to [{actx.article.id}]"
     )
 
 

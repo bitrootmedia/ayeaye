@@ -1171,6 +1171,21 @@ positioned as a bulk-transfer channel — it exists for what someone would
 plausibly paste into a chat, not for shipping a phone video through an LLM's
 context window.
 
+**Knowledge-base tools reuse `services/books.py`/`services/articles.py`
+exactly like every other tool reuses its service** — `list_books`,
+`list_articles`, `read_article`, `create_book`, `create_article`,
+`edit_article`, `publish_article`, `unpublish_article`,
+`attach_article_file`. `edit_article` is the one with a real wrinkle:
+`autosave_revision` has no partial-update shape (unlike, say, `update_task`),
+so passing only `body` still has to resend the *current* `title` — the tool
+calls `start_editing_session` first specifically to have that value on hand,
+the identical reason the frontend's own autosave keeps a `titleRef` rather
+than trusting a stale closure (see "The knowledge base" section). No
+`share_book` tool: sharing has no MCP tool for tasks or projects either, so
+there was nothing to match parity with. `attach_article_file` is `attach_file`
+with one extra step — `start_editing_session` first, to land on the article's
+current revision, since attachments anchor to a revision, not the article.
+
 Four things cost real time here, all of them non-obvious:
 
 - **There are two classes called `Context` in the SDK.** The tool decorator
@@ -1207,6 +1222,23 @@ Four things cost real time here, all of them non-obvious:
   Dynamic Client Registration (see the section below), because ChatGPT's
   connector has no bearer-token fallback at all and mandates it — the Caddy
   fix alone was necessary but not sufficient for that client.
+- **A `Denied` refusal's own message doesn't reach the client — found adding
+  the knowledge-base tools, not caused by them.** `_handle_call_tool` in the
+  installed SDK wraps any exception as `ToolError(f"Error executing tool
+  {name}: {e}")`, which *should* carry `str(e)` — but the live server
+  answers a read-only-token refusal with the bare `"Error executing tool
+  create_task"`, no colon, no message, confirmed identically for a
+  pre-existing tool (`create_task`) and a new one (`create_book`) via a raw
+  `curl` with `Content-Length` checked byte for byte, so it isn't truncation
+  either. `isError: true` still comes through correctly — only the detail
+  is gone. `scripts/e2e-mcp.sh`'s own `grep -ci "read-only"` assertions for
+  this appear to pass, but they're the exact silently-vacuous trap this
+  file already warns about below: the script's shared `/tmp/mcp-req.json`
+  scratch file races between nested `$(...)` substitutions once several
+  tool calls are in flight, and the comparison ends up between two
+  independently-mangled values. Not chased further — it's an installed
+  dependency's behaviour, unrelated to anything built for this feature, and
+  every write refusal still refuses.
 
 **A warning about testing it from a shell.** `e2e-mcp.sh` builds every payload
 with `python3 -c json.dumps`, never with escaped quotes inside a shell string.
