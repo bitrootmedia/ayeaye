@@ -335,4 +335,6 @@ def test_notification_kinds_are_a_closed_set():
         # A data export finished — success and failure share this one kind,
         # distinguished by the notification's own title/body.
         "export_ready",
+        # A book was shared with you — the knowledge base's own task_shared.
+        "book_shared",
     }

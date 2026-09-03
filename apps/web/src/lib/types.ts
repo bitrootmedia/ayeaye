@@ -769,8 +769,10 @@ export function parseDuration(input: string): number | null {
 }
 
 
-/** One file on a task, however it arrived. */
-export type TaskFile = {
+/** One file, from any of the panels that show a Files card — a task's or a
+ *  knowledge-base article revision's. `FilesPanel` (components/files-panel.tsx)
+ *  is generic over both. */
+export type FileItem = {
   id: string;
   filename: string;
   content_type: string;
@@ -778,8 +780,58 @@ export type TaskFile = {
   url: string;
   /** null until the worker has made one, or for anything that isn't an image. */
   thumbnail_url: string | null;
-  /** True when it came in through a comment rather than the Files panel. */
-  from_comment: boolean;
+  /** True when it came in through a comment rather than the Files panel.
+   *  Absent (never true) for an article revision's files — an article has
+   *  no comment thread. */
+  from_comment?: boolean;
   uploaded_by: Person | null;
   created_at: string;
+};
+
+// --- knowledge base -----------------------------------------------------------
+
+export type Book = {
+  id: string;
+  name: string;
+  description: string | null;
+  owner: Person | null;
+  archived: boolean;
+  created_at: string;
+  access: AccessLevel;
+  article_count: number;
+};
+
+/** Byte-for-byte the same shape as `ProjectAccess` — a book's access model
+ *  is a project's, unchanged, so `AccessPanel` (typed against
+ *  `ProjectAccess`) accepts one with no cast, the same structural-superset
+ *  reasoning CLAUDE.md documents for `TaskAccess`. */
+export type BookAccess = ProjectAccess;
+
+export type Article = {
+  id: string;
+  book_id: string;
+  title: string;
+  owner: Person | null;
+  is_private: boolean;
+  /** The owner, and nobody else — not even a book admin. */
+  can_make_private: boolean;
+  created_at: string;
+  updated_at: string;
+  /** The caller's resolved level: read | write | owner. */
+  access: AccessLevel;
+};
+
+export type ArticleRevision = {
+  id: string;
+  article_id: string;
+  title: string;
+  /** Sanitised HTML, inline images already resolved to fresh URLs — render
+   *  with `RichText`, exactly like a task description. */
+  body: string;
+  edited_by: Person | null;
+  created_at: string;
+  updated_at: string;
+  /** Whether this is the mutable "current" revision — the one an autosave
+   *  can still land on. Every older row is history, read-only. */
+  is_current: boolean;
 };

@@ -99,7 +99,7 @@ const LANGUAGES = [
 type Uploaded = { id: string; url: string };
 type Uploader = (file: File) => Promise<Uploaded | null>;
 
-function useImageUploader(orgId: string, taskId: string): [Uploader, boolean] {
+function useImageUploader(orgId: string, basePath: string): [Uploader, boolean] {
   const toast = useToastManager();
   const [busy, setBusy] = useState(false);
 
@@ -110,7 +110,7 @@ function useImageUploader(orgId: string, taskId: string): [Uploader, boolean] {
         attachment: { id: string };
         upload_url: string;
         content_type: string;
-      }>(`/organisations/${orgId}/tasks/${taskId}/files`, {
+      }>(`${basePath}/files`, {
         method: "POST",
         body: JSON.stringify({ filename: file.name, content_type: file.type }),
       });
@@ -140,19 +140,27 @@ function useImageUploader(orgId: string, taskId: string): [Uploader, boolean] {
 
 export function RichTextEditor({
   orgId,
-  taskId,
+  basePath,
   value,
   onChange,
   onImageAdded,
+  noun = "task",
 }: {
   orgId: string;
-  taskId: string;
+  /** The resource's own base path — `/organisations/{orgId}/tasks/{taskId}`
+   *  or `/organisations/{orgId}/kb/revisions/{revisionId}` — the same
+   *  one-prop generalisation `AccessPanel`'s `basePath` already established.
+   *  A pasted or dropped image is staged at `${basePath}/files`. */
+  basePath: string;
   value: string;
   onChange: (html: string) => void;
   /** So the Files panel picks up a pasted screenshot without a reload. */
   onImageAdded?: () => void;
+  /** What to call the thing this editor is attached to, in the hint text
+   *  below the toolbar — "task" or "article". */
+  noun?: string;
 }) {
-  const [upload, uploading] = useImageUploader(orgId, taskId);
+  const [upload, uploading] = useImageUploader(orgId, basePath);
 
   const editor = useEditor({
     extensions: [
@@ -231,7 +239,7 @@ export function RichTextEditor({
       <p className="text-xs text-muted-foreground">
         {dragging
           ? "Drop to add the picture"
-          : "Paste or drop a picture to add it. Pictures become files on this task."}
+          : `Paste or drop a picture to add it. Pictures become files on this ${noun}.`}
       </p>
     </div>
   );

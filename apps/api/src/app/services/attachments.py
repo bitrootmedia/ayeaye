@@ -38,7 +38,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import Attachment, Conversation, Message, Task, User
+from app.models import ArticleRevision, Attachment, Conversation, Message, Task, User
 from app.models.conversation import ALLOWED_TYPES, STATUS_PENDING, STATUS_READY
 from app.storage import s3
 
@@ -101,13 +101,17 @@ async def create(
     content_type: str,
     conversation: Conversation | None = None,
     task: Task | None = None,
+    article_revision: ArticleRevision | None = None,
 ) -> tuple[Attachment, str]:
     """Step 1. Returns the row and the URL to PUT to.
 
     Anchored to exactly one of a conversation (a comment attachment, staged
-    before the comment exists) or a task (added straight from the Files panel).
+    before the comment exists), a task (added straight from the Files panel),
+    or an article revision (an inline image or a standalone file added while
+    that revision is the mutable "current" one — see `services/articles.py`).
     """
-    if (conversation is None) == (task is None):
+    anchors = [conversation, task, article_revision]
+    if sum(a is not None for a in anchors) != 1:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="an attachment belongs to exactly one thing",
@@ -125,10 +129,16 @@ async def create(
         # is confirmed and done.
         await sweep_stale(db, conversation, user)
 
-    anchor, anchor_id = ("comments", conversation.id) if conversation else ("tasks", task.id)
+    if conversation is not None:
+        anchor, anchor_id = "comments", conversation.id
+    elif task is not None:
+        anchor, anchor_id = "tasks", task.id
+    else:
+        anchor, anchor_id = "article_revisions", article_revision.id
     attachment = Attachment(
         conversation_id=conversation.id if conversation else None,
         task_id=task.id if task else None,
+        article_revision_id=article_revision.id if article_revision else None,
         user_id=user.id,
         filename=clean_filename(filename),
         content_type=content_type,
@@ -402,6 +412,83 @@ async def for_messages(
     for row in rows:
         grouped.setdefault(row.message_id, []).append(row)  # type: ignore[arg-type]
     return grouped
+
+
+async def for_article_revision(db: AsyncSession, revision_id: uuid.UUID) -> list[Attachment]:
+    """Standalone files attached while this exact revision was the mutable
+    "current" one — the Files panel, scoped to the revision being viewed. A
+    fresh editing session starts with none; an old revision in history shows
+    exactly what was on it at the time. Unlike a task's Files panel, there is
+    no OR-over-two-anchors here — a comment can't attach to an article."""
+    return list(
+        (
+            await db.execute(
+                select(Attachment)
+                .where(
+                    Attachment.article_revision_id == revision_id,
+                    Attachment.status == STATUS_READY,
+                )
+                .order_by(Attachment.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def for_article_revisions(
+    db: AsyncSession, revision_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[Attachment]]:
+    """The batched form of `for_article_revision`, the same one-query-per-page
+    discipline `for_tasks` already follows."""
+    if not revision_ids:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                select(Attachment)
+                .where(
+                    Attachment.article_revision_id.in_(revision_ids),
+                    Attachment.status == STATUS_READY,
+                )
+                .order_by(Attachment.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    grouped: dict[uuid.UUID, list[Attachment]] = {}
+    for row in rows:
+        grouped.setdefault(row.article_revision_id, []).append(row)  # type: ignore[arg-type]
+    return grouped
+
+
+async def image_urls_for_article(
+    db: AsyncSession, article_id: uuid.UUID, wanted: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Fresh presigned URLs for inline images referenced by an article body.
+
+    Scoped to attachments across **any revision of this article**, not just
+    the one being rendered — a revision's body is copied forward from the
+    previous one, so an inline image reference can point at an attachment a
+    different, older revision actually owns (`services/articles.py`'s own
+    docstring explains why). `richtext.render()` already tolerates an id that
+    resolves to nothing, so this needs no change there.
+    """
+    if not wanted:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                select(Attachment)
+                .join(ArticleRevision, ArticleRevision.id == Attachment.article_revision_id)
+                .where(Attachment.id.in_(wanted), ArticleRevision.article_id == article_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {row.id: view_url(row) for row in rows}
 
 
 def thumbnail_url(attachment: Attachment) -> str | None:

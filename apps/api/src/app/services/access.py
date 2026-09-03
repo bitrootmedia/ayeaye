@@ -72,6 +72,7 @@ from datetime import date, timedelta
 from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.orm import aliased
 
+from app.models.knowledge_base import Article, Book, BookMember
 from app.models.organisation import ROLE_ADMIN, ROLE_RANK
 from app.models.structure import (
     LEVEL_OWNER,
@@ -181,12 +182,44 @@ def effective_level(
     The Python and the SQL are two implementations of the same rule. This one
     is what the test matrix exercises exhaustively; keeping them in step is why
     they're in the same module.
+
+    Generic over *which* resource — a project's or a book's grants are the
+    identical shape (owner, a direct grant, a team grant, organisation role),
+    so this same function is `effective_book_level` too. Nothing book-specific
+    to add.
     """
     ranks = [level_rank(direct), *(level_rank(t) for t in via_teams)]
     if is_owner or administers_organisation(org_role):
         ranks.append(LEVEL_RANK[LEVEL_OWNER])
     best = max(ranks, default=NO_ACCESS)
     return level_name(best)
+
+
+def effective_article_level(
+    *,
+    org_role: str,
+    is_owner: bool = False,
+    is_private: bool = False,
+    book_level: str | None = None,
+) -> str | None:
+    """Rule 2 for an article — the identical shape `effective_task_level`
+    already uses for `is_hidden`, just with fewer routes in: an article has
+    no action-required or creator route, only the book's level plus
+    ownership.
+
+    **`is_private` is checked first and returns immediately.** Not a route
+    with a low rank and not a deny rule — it decides whether the book route
+    is consulted at all, so only the owner survives it. See this module's
+    own docstring on `effective_task_level` for the full reasoning; it
+    applies here unchanged, down to the consequence that an organisation
+    admin cannot see a private article either.
+    """
+    if is_private:
+        return LEVEL_OWNER if is_owner else None
+    ranks = [level_rank(book_level)]
+    if is_owner or administers_organisation(org_role):
+        ranks.append(LEVEL_RANK[LEVEL_OWNER])
+    return level_name(max(ranks, default=NO_ACCESS))
 
 
 def can_read(level: str | None) -> bool:
@@ -715,4 +748,128 @@ def visible_task_stmt(
         Task.id == task_id,
         Task.organisation_id == org_id,
         level > NO_ACCESS,
+    )
+
+
+# --- knowledge base -----------------------------------------------------------
+
+
+def _book_grant_rank_subquery(user_id: uuid.UUID):
+    """The best level this user has on a book through a stored grant — a
+    byte-for-byte copy of `_grant_rank_subquery`'s own reasoning, including
+    the LEFT JOIN: an inner join would drop every direct grant, because a
+    direct grant has a NULL `team_id` and matches no team-member row."""
+    tm = aliased(TeamMember)
+    return (
+        select(
+            func.max(
+                case(
+                    (BookMember.level == LEVEL_WRITE, LEVEL_RANK[LEVEL_WRITE]),
+                    else_=LEVEL_RANK[LEVEL_READ],
+                )
+            )
+        )
+        .select_from(BookMember)
+        .outerjoin(tm, and_(tm.team_id == BookMember.team_id, tm.user_id == user_id))
+        .where(
+            BookMember.book_id == Book.id,
+            or_(BookMember.user_id == user_id, tm.user_id.isnot(None)),
+        )
+        .correlate(Book)
+    )
+
+
+def book_level_expression(user_id: uuid.UUID, org_role: str):
+    """Rule 2 for a book, as SQL — the mirror of `project_level_expression`,
+    reading `Book`/`BookMember` instead of `Project`/`ProjectMember`."""
+    routes = [
+        case((Book.owner_user_id == user_id, LEVEL_RANK[LEVEL_OWNER]), else_=NO_ACCESS),
+        func.coalesce(_book_grant_rank_subquery(user_id), NO_ACCESS),
+    ]
+    if administers_organisation(org_role):
+        routes.append(literal(LEVEL_RANK[LEVEL_OWNER]))
+    return func.greatest(*routes)
+
+
+def visible_books_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, include_archived: bool = False
+) -> Select:
+    """Every book in this organisation the user can see, with their level."""
+    level = book_level_expression(user_id, org_role)
+    stmt = (
+        select(Book, level.label("level_rank"))
+        .where(Book.organisation_id == org_id, level > NO_ACCESS)
+        .order_by(Book.name)
+    )
+    if not include_archived:
+        stmt = stmt.where(Book.archived_at.is_(None))
+    return stmt
+
+
+def visible_book_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, book_id: uuid.UUID
+) -> Select:
+    """One book, if the user can see it at all. Archived included — a link to
+    a specific thing shouldn't look like deletion."""
+    level = book_level_expression(user_id, org_role)
+    return select(Book, level.label("level_rank")).where(
+        Book.id == book_id,
+        Book.organisation_id == org_id,
+        level > NO_ACCESS,
+    )
+
+
+def article_level_expression(user_id: uuid.UUID, org_role: str):
+    """`effective_article_level` as SQL — the same rule stated twice, the
+    identical reasoning `task_level_expression` documents for tasks: one
+    version pure Python and exhaustively tested with no database, one
+    version the planner can actually run.
+
+    `Article.is_private` short-circuits the whole expression: the outer
+    `CASE` puts it ahead of everything else, and when it's true only
+    ownership survives — an organisation admin does not see a private
+    article, the same deliberate hole a hidden task has. When it's false,
+    `book_level_expression` already folds the organisation-admin override
+    into its own routes, so seeing the book is enough to see any article in
+    it that isn't private; the owner route is still ORed in on top for the
+    case where ownership outranks whatever the book itself grants.
+    """
+    owner_route = case(
+        (Article.owner_user_id == user_id, LEVEL_RANK[LEVEL_OWNER]), else_=NO_ACCESS
+    )
+    return case(
+        (Article.is_private, owner_route),
+        else_=func.greatest(book_level_expression(user_id, org_role), owner_route),
+    )
+
+
+def visible_articles_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, book_id: uuid.UUID | None = None
+) -> Select:
+    """Every article the user can see — across the organisation, or scoped to
+    one book for the table of contents. One statement; a private article
+    that isn't theirs simply never matches, which is the vanish-from-
+    contents behaviour, not a second filter."""
+    level = article_level_expression(user_id, org_role)
+    stmt = (
+        select(Article, level.label("level_rank"))
+        .select_from(Article)
+        .join(Book, Book.id == Article.book_id)
+        .where(Book.organisation_id == org_id, level > NO_ACCESS)
+    )
+    if book_id is not None:
+        stmt = stmt.where(Article.book_id == book_id)
+    return stmt
+
+
+def visible_article_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, article_id: uuid.UUID
+) -> Select:
+    """One article, if the user can see it at all."""
+    level = article_level_expression(user_id, org_role)
+    return (
+        select(Article, level.label("level_rank"))
+        .select_from(Article)
+        .join(Book, Book.id == Article.book_id)
+        .where(Article.id == article_id, Book.organisation_id == org_id, level > NO_ACCESS)
     )

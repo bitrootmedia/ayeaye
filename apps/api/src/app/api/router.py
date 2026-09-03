@@ -13,6 +13,7 @@ from app.api.routers import (
     dashboard,
     exports,
     invites,
+    knowledge_base,
     notifications,
     oauth,
     organisations,
@@ -63,6 +64,10 @@ api_router.include_router(organisations.router)
 # Teams, project groups and projects — all organisation-scoped, all resolving
 # visibility through services/access.py.
 api_router.include_router(structure.router)
+
+# Books, articles and their revisions — a book's access model is a
+# project's, unchanged; see services/books.py and services/articles.py.
+api_router.include_router(knowledge_base.router)
 
 # Tasks, their history and their per-task grants. Same organisation prefix.
 api_router.include_router(tasks.router)

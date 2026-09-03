@@ -63,8 +63,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models import Project, Tag, Task, TaskNote, TaskTag
+from app.models import Article, ArticleRevision, Book, Project, Tag, Task, TaskNote, TaskTag
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -82,7 +83,7 @@ DEFAULT_LIMIT = 6
 
 @dataclass(frozen=True)
 class Hit:
-    kind: str  # "task" | "project" | "note"
+    kind: str  # "task" | "project" | "note" | "article"
     id: str
     title: str
     subtitle: str | None
@@ -287,6 +288,56 @@ def notes_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
     )
 
 
+def articles_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Select:
+    """Matching articles the caller can see — the **latest revision's** text
+    only, the same "search the live content, not history" rule a task
+    description already follows. A private article that isn't the caller's
+    own simply never matches: `access.article_level_expression` is the exact
+    same expression `articles_service.list_for_book` filters on, so the
+    vanish-from-contents behaviour and search agree by construction rather
+    than by a second, separately-maintained check.
+    """
+    level = access.article_level_expression(user_id, ctx.role)
+    latest_id = (
+        select(ArticleRevision.id)
+        .where(ArticleRevision.article_id == Article.id)
+        .order_by(ArticleRevision.id.desc())
+        .limit(1)
+        .correlate(Article)
+        .scalar_subquery()
+    )
+    revision = aliased(ArticleRevision)
+    score = func.greatest(
+        _score(revision.title, q),
+        # Body text is secondary, same weighting a task's description gets
+        # against its own title.
+        _score(revision.body_text, q) * literal(0.6),
+    )
+    return (
+        select(
+            literal("article").label("kind"),
+            Article.id.label("id"),
+            revision.title.label("title"),
+            # Stripped by `article_revisions.body_text`'s own generated
+            # column — a snippet is prose, never markup.
+            revision.body_text.label("subtitle"),
+            Book.name.label("context"),
+            score.label("score"),
+            (Book.archived_at.isnot(None)).label("inactive"),
+        )
+        .select_from(Article)
+        .join(revision, revision.id == latest_id)
+        .join(Book, Book.id == Article.book_id)
+        .where(
+            Book.organisation_id == ctx.organisation.id,
+            level > access.NO_ACCESS,
+            or_(_matches(revision.title, q), _matches(revision.body_text, q)),
+        )
+        .order_by(Book.archived_at.isnot(None), score.desc(), Article.id.desc())
+        .limit(limit)
+    )
+
+
 async def search(
     db: AsyncSession,
     ctx: OrgContext,
@@ -320,6 +371,7 @@ async def search(
         tasks_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         projects_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         notes_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
+        articles_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
     ):
         for row in (await db.execute(stmt)).all():
             hits.append(
@@ -366,4 +418,5 @@ __all__ = [
     "tasks_stmt",
     "projects_stmt",
     "notes_stmt",
+    "articles_stmt",
 ]

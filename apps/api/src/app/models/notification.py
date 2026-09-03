@@ -48,6 +48,11 @@ KIND_DAILY_SUMMARY = "daily_summary"
 # the notification's own title/body, the same reasoning KIND_DAILY_SUMMARY
 # already uses for its own two halves.
 KIND_EXPORT_READY = "export_ready"
+# A book was shared with you — the identical KIND_TASK_SHARED shape, just
+# naming a book. No notification for an article being published or
+# privatised: that's the owner's own action on their own thing, the same
+# "no notification on generation" reasoning recurring tasks already document.
+KIND_BOOK_SHARED = "book_shared"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_ACTION_REQUIRED_CLEARED,
@@ -60,6 +65,7 @@ NOTIFICATION_KINDS = (
     KIND_DEADLINE_TOMORROW,
     KIND_DAILY_SUMMARY,
     KIND_EXPORT_READY,
+    KIND_BOOK_SHARED,
 )
 
 

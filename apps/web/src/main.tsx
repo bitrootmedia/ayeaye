@@ -22,6 +22,9 @@ import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
 import Help from "@/views/Help";
 import Landing, { Footer, Header } from "@/views/Landing";
+import ArticleDetail from "@/views/ArticleDetail";
+import BookDetail from "@/views/BookDetail";
+import KnowledgeBase from "@/views/KnowledgeBase";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import OrganisationSettings from "@/views/OrganisationSettings";
 import Organisations from "@/views/Organisations";
@@ -230,6 +233,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route
                   path="orgs/:orgId/tasks/:taskId"
                   element={<TaskDetail />}
+                />
+                <Route path="orgs/:orgId/kb" element={<KnowledgeBase />} />
+                <Route
+                  path="orgs/:orgId/kb/books/:bookId"
+                  element={<BookDetail />}
+                />
+                <Route
+                  path="orgs/:orgId/kb/articles/:articleId"
+                  element={<ArticleDetail />}
                 />
                 <Route path="orgs/:orgId/planner" element={<Planner />} />
                 <Route path="orgs/:orgId/calendar" element={<CalendarView />} />

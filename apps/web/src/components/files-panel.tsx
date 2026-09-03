@@ -15,7 +15,7 @@ import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
 import { formatBytes, isAudio, isImage, putToStorage } from "@/lib/storage";
 import { useFileDrop } from "@/hooks/use-file-drop";
-import { personName, type TaskFile } from "@/lib/types";
+import { personName, type FileItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Ticket = {
@@ -25,42 +25,56 @@ type Ticket = {
 };
 
 /**
- * Every file on a task, in one place.
+ * Every file on a resource, in one place.
  *
- * **One panel, not two.** A file dropped into a comment is exactly as much "a
- * file on this task" as one added here, and the question people ask is "where
- * is the survey PDF", never "was it attached or posted". So both appear
- * together and the comment-sourced ones are marked — you can still find the
- * discussion, you just don't have to scroll a thread to find the file.
+ * Generic over anything exposing the ordinary
+ * `GET/POST {basePath}/files`, `DELETE {basePath}/files/{id}` shape plus the
+ * shared `/organisations/{orgId}/attachments/{id}/confirm` — a task, or a
+ * knowledge-base article revision. `basePath` is the one prop that changes
+ * between them, the identical generalisation `AccessPanel` already went
+ * through.
+ *
+ * On a task, **one panel, not two.** A file dropped into a comment is exactly
+ * as much "a file on this task" as one added here, and the question people
+ * ask is "where is the survey PDF", never "was it attached or posted". So
+ * both appear together and the comment-sourced ones are marked. An article
+ * revision has no comment thread, so every file there came from this panel.
  *
  * Uploads go **browser → storage** through the same three-step handshake the
  * comment composer uses; see lib/storage.ts. Nothing here proxies bytes.
  */
-export function TaskFilesPanel({
+export function FilesPanel({
   orgId,
-  taskId,
+  basePath,
   canEdit,
-  /** Bumped by the thread when a comment is posted or removed. */
+  /** Bumped by the caller when something else changed the file list — a
+   *  comment posted or removed, on a task. */
   refreshKey,
+  /** Extra line in the empty state — a task mentions comment-sourced files;
+   *  an article revision has no comment thread, so it says nothing extra. */
+  emptyHint,
 }: {
   orgId: string;
-  taskId: string;
+  /** `/organisations/{orgId}/tasks/{taskId}` or
+   *  `/organisations/{orgId}/kb/revisions/{revisionId}`. */
+  basePath: string;
   canEdit: boolean;
   refreshKey?: number;
+  emptyHint?: string;
 }) {
   const toast = useToastManager();
-  const [files, setFiles] = useState<TaskFile[] | null>(null);
+  const [files, setFiles] = useState<FileItem[] | null>(null);
   const [uploading, setUploading] = useState<{ name: string; percent: number } | null>(null);
-  const [viewing, setViewing] = useState<TaskFile | null>(null);
+  const [viewing, setViewing] = useState<FileItem | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
-      setFiles(await api<TaskFile[]>(`/organisations/${orgId}/tasks/${taskId}/files`));
+      setFiles(await api<FileItem[]>(`${basePath}/files`));
     } catch {
       setFiles([]);
     }
-  }, [orgId, taskId]);
+  }, [basePath]);
 
   useEffect(() => {
     void load();
@@ -69,7 +83,7 @@ export function TaskFilesPanel({
   const upload = async (file: File) => {
     setUploading({ name: file.name, percent: 0 });
     try {
-      const ticket = await api<Ticket>(`/organisations/${orgId}/tasks/${taskId}/files`, {
+      const ticket = await api<Ticket>(`${basePath}/files`, {
         method: "POST",
         body: JSON.stringify({ filename: file.name, content_type: file.type }),
       });
@@ -101,9 +115,9 @@ export function TaskFilesPanel({
     for (const file of files) await upload(file);
   };
 
-  const remove = async (file: TaskFile) => {
+  const remove = async (file: FileItem) => {
     try {
-      await api(`/organisations/${orgId}/tasks/${taskId}/files/${file.id}`, {
+      await api(`${basePath}/files/${file.id}`, {
         method: "DELETE",
       });
       await load();
@@ -134,7 +148,7 @@ export function TaskFilesPanel({
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/80">
           <span className="flex items-center gap-2 text-sm font-medium">
             <PaperclipIcon className="size-4" />
-            Drop to attach to this task
+            Drop to attach
           </span>
         </div>
       )}
@@ -152,7 +166,7 @@ export function TaskFilesPanel({
       <CardContent className="space-y-3">
         {files && files.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Nothing attached yet. Files posted in comments show up here too.
+            Nothing attached yet.{emptyHint ? ` ${emptyHint}` : ""}
           </p>
         )}
 
@@ -200,7 +214,7 @@ export function TaskFilesPanel({
               ref={input}
               type="file"
               className="sr-only"
-              aria-label="File to add to this task"
+              aria-label="File to add"
               multiple
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
@@ -233,7 +247,7 @@ export function TaskFilesPanel({
   );
 }
 
-function FileTile({ file, onOpen }: { file: TaskFile; onOpen: () => void }) {
+function FileTile({ file, onOpen }: { file: FileItem; onOpen: () => void }) {
   const image = isImage(file.content_type);
   const caption = (
     <span className="block space-y-0.5 p-2 text-left">

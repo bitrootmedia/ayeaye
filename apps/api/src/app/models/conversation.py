@@ -185,12 +185,16 @@ STATUS_READY = "ready"
 class Attachment(Base):
     """A file, uploaded straight from the browser to storage.
 
-    **Anchored to a task OR a conversation**, enforced by
-    `CHECK (num_nonnulls(task_id, conversation_id) = 1)`:
+    **Anchored to a task, a conversation, OR an article revision**, enforced
+    by `CHECK (num_nonnulls(task_id, conversation_id, article_revision_id) =
+    1)`:
 
     * `task_id` — attached to the task directly (the Files panel's "Add").
     * `conversation_id` — posted in a comment. `message_id` is NULL while it is
       staged and set when the comment is sent.
+    * `article_revision_id` — an inline image or standalone file on a
+      knowledge-base article, scoped to the specific revision it was added
+      during. See `services/articles.py` for why a revision, not the article.
 
     One table for both because **the Files panel shows both**. A file somebody
     dropped into a reply is exactly as much "a file on this task" as one added
@@ -221,7 +225,8 @@ class Attachment(Base):
             name="ck_attachments_status",
         ),
         CheckConstraint(
-            "num_nonnulls(task_id, conversation_id) = 1", name="ck_attachments_one_anchor"
+            "num_nonnulls(task_id, conversation_id, article_revision_id) = 1",
+            name="ck_attachments_one_anchor",
         ),
         # A message only makes sense on a conversation-anchored row.
         CheckConstraint(
@@ -232,12 +237,13 @@ class Attachment(Base):
         Index("ix_attachments_task", "task_id", "status"),
         # The sweep query, and "what's staged for me here".
         Index("ix_attachments_pending", "conversation_id", "status"),
+        Index("ix_attachments_article_revision", "article_revision_id", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
     )
-    # Exactly one of these two is set. See the CHECK above.
+    # Exactly one of these three is set. See the CHECK above.
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("conversations.id", ondelete="CASCADE"),
@@ -245,6 +251,11 @@ class Attachment(Base):
     )
     task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True
+    )
+    article_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("article_revisions.id", ondelete="CASCADE"),
+        nullable=True,
     )
     # NULL until the comment it belongs to is actually sent.
     message_id: Mapped[uuid.UUID | None] = mapped_column(

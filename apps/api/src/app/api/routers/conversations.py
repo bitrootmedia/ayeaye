@@ -314,12 +314,21 @@ async def confirm_attachment(
 
 async def _anchor_of(db, ctx, user, attachment):
     """Resolve and access-check whatever this attachment hangs off."""
-    from app.models import Conversation
+    from app.models import ArticleRevision, Conversation
+    from app.services import articles as articles_service
     from app.services import tasks as tasks_service
-
 
     if attachment.task_id is not None:
         return await tasks_service.context_for(db, ctx, attachment.task_id, user)
+    if attachment.article_revision_id is not None:
+        revision = (
+            await db.execute(
+                select(ArticleRevision).where(ArticleRevision.id == attachment.article_revision_id)
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise _not_found()
+        return await articles_service.context_for(db, ctx, revision.article_id, user.id)
     conversation = (
         await db.execute(
             select(Conversation).where(

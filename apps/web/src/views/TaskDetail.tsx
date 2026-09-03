@@ -29,7 +29,7 @@ import { PrivateNote } from "@/components/private-note";
 import { ReminderPanel } from "@/components/reminder-panel";
 import { ClosedBadge, StatusBadge } from "@/components/status-badge";
 import { TagStrip } from "@/components/tag-picker";
-import { TaskFilesPanel } from "@/components/task-files";
+import { FilesPanel } from "@/components/files-panel";
 import { TimePanel } from "@/components/time-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -441,11 +441,12 @@ export default function TaskDetail() {
           {/* Above the thread: the files are part of what the task *is*, and
               a panel below a conversation that grows all day is a panel
               nobody finds twice. */}
-          <TaskFilesPanel
+          <FilesPanel
             orgId={org.id}
-            taskId={task.id}
+            basePath={`/organisations/${org.id}/tasks/${task.id}`}
             canEdit={editable}
             refreshKey={filesKey}
+            emptyHint="Files posted in comments show up here too."
           />
 
           {!isWide && commentThread}
@@ -811,7 +812,7 @@ function Details({
         <Label>Description</Label>
         <RichTextEditor
           orgId={orgId}
-          taskId={task.id}
+          basePath={`/organisations/${orgId}/tasks/${task.id}`}
           value={description}
           onChange={setDescription}
           onImageAdded={onImageAdded}

@@ -8,6 +8,7 @@ from app.models.conversation import (
     MessageRead,
 )
 from app.models.export import Export
+from app.models.knowledge_base import Article, ArticleRevision, Book, BookMember
 from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
@@ -40,6 +41,10 @@ from app.models.working_hours import WorkingHour
 
 __all__ = [
     "Announcement",
+    "Article",
+    "ArticleRevision",
+    "Book",
+    "BookMember",
     "Conversation",
     "Attachment",
     "Message",
