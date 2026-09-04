@@ -62,6 +62,8 @@ export function FilesPanel({
    *  accessible name. Same prop, same default, same reasoning as
    *  `RichTextEditor`'s own `noun`. */
   noun = "task",
+  open = true,
+  onLoaded,
 }: {
   orgId: string;
   /** `/organisations/{orgId}/tasks/{taskId}` or
@@ -71,6 +73,14 @@ export function FilesPanel({
   refreshKey?: number;
   emptyHint?: string;
   noun?: string;
+  /** Render the card even with nothing in it — see `ChecklistsPanel`'s own
+   *  `open`, which this mirrors exactly. Defaults true, so the article
+   *  editor (which has no button to reveal it) is unchanged. */
+  open?: boolean;
+  /** Whether there is anything to show, reported after each load. A file
+   *  posted in a comment counts, which is what makes a collapsed panel
+   *  open itself the moment one arrives that way. */
+  onLoaded?: (hasContent: boolean) => void;
 }) {
   const toast = useToastManager();
   const [files, setFiles] = useState<FileItem[] | null>(null);
@@ -89,6 +99,15 @@ export function FilesPanel({
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // A ref, reported from its own effect — see `ChecklistsPanel` for why a
+  // callback in `load`'s dependency list would refetch forever.
+  const report = useRef(onLoaded);
+  report.current = onLoaded;
+  useEffect(() => {
+    if (files === null) return;
+    report.current?.(files.length > 0);
+  }, [files]);
 
   const upload = async (file: File) => {
     setUploading({ name: file.name, percent: 0 });
@@ -144,6 +163,12 @@ export function FilesPanel({
     (files) => void uploadAll(files),
     !canEdit || !!uploading,
   );
+
+  // Nothing attached and nobody asked for it: nothing at all, not even the
+  // heading — see `open`, and `ChecklistsPanel`'s own longer note. Hooks
+  // above this line, all of them, so the early return can't change their
+  // order between renders.
+  if (!open && !(files !== null && files.length > 0)) return null;
 
   return (
     // Named, because a file posted in a comment appears both here and in the

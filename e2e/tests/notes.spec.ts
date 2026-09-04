@@ -1,6 +1,13 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-import { createOrg, createTask, inviteMember, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createTask,
+  inviteMember,
+  openPrivateNote,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * Private notes, from both sides of the same task.
@@ -48,12 +55,19 @@ test.describe("private notes", () => {
 
     const note = (p: Page) => p.getByRole("textbox", { name: "Your private note" });
 
+    await openPrivateNote(page);
     await note(page).fill("Alice thinks the quote is high");
     await note(page).blur();
     await expect(page.getByText(/Saved/)).toBeVisible();
 
     await openTask(them, orgId, "Shared work");
-    // Bob's box is empty on the very same task…
+    // Bob's side of the very same task offers him "+ Private note", not
+    // Alice's card — the panel is collapsed for him precisely *because* he
+    // has no note, which is the promise this test exists for. He can open
+    // one anyway: seeing the task is enough to keep a note on it, and Bob
+    // is only action-required here, not an editor.
+    await expect(them.getByRole("region", { name: "Private note" })).toHaveCount(0);
+    await openPrivateNote(them);
     await expect(note(them)).toHaveValue("");
     await note(them).fill("Bob has done this before");
     await note(them).blur();
@@ -73,6 +87,7 @@ test.describe("private notes", () => {
     const orgId = await createOrg(page, `Notes ${Date.now()}`);
     await createTask(page, orgId, "Remember this");
     await openTask(page, orgId, "Remember this");
+    await openPrivateNote(page);
 
     await page.getByRole("textbox", { name: "Your private note" }).fill("mizzenmast bracket");
     await page.getByRole("textbox", { name: "Your private note" }).blur();
@@ -98,6 +113,7 @@ test.describe("private notes", () => {
     const orgId = await createOrg(page, `Notes ${Date.now()}`);
     await createTask(page, orgId, "Never mind");
     await openTask(page, orgId, "Never mind");
+    await openPrivateNote(page);
 
     const box = page.getByRole("textbox", { name: "Your private note" });
     await box.fill("temporary thought");
@@ -107,6 +123,14 @@ test.describe("private notes", () => {
     await box.fill("");
     await box.blur();
     await page.reload();
+
+    // Gone means gone: an empty note is no note, so on the way back in the
+    // card isn't there at all — the task screen offers "+ Private note" in
+    // its place, exactly as it would for a task that never had one. Opening
+    // it again shows an empty box, which is the "the note was deleted" this
+    // used to assert against a box that was always on screen.
+    await expect(page.getByRole("region", { name: "Private note" })).toHaveCount(0);
+    await openPrivateNote(page);
     await expect(page.getByRole("textbox", { name: "Your private note" })).toHaveValue("");
     // Scoped and exact: the reminder panel on the same screen says "Only you
     // see this…", which a substring match happily finds instead.

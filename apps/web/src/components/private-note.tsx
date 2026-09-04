@@ -24,7 +24,24 @@ const AUTOSAVE_MS = 800;
  * caller in every statement). The padlock here is a description of that, not
  * an implementation of it.
  */
-export function PrivateNote({ orgId, taskId }: { orgId: string; taskId: string }) {
+export function PrivateNote({
+  orgId,
+  taskId,
+  open = true,
+  onLoaded,
+}: {
+  orgId: string;
+  taskId: string;
+  /** Render the card even when the note is empty — see `ChecklistsPanel`'s
+   *  own `open`, which this mirrors. Most tasks never get a note, and an
+   *  empty box asking to be written in is a card's worth of screen saying
+   *  nothing. */
+  open?: boolean;
+  /** Whether there is a note already, reported once the fetch lands. Only
+   *  ever called from the load below: what the box holds *after* that is
+   *  the person typing, and `open` is already true by then. */
+  onLoaded?: (hasContent: boolean) => void;
+}) {
   const [body, setBody] = useState("");
   const [saved, setSaved] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
@@ -35,12 +52,19 @@ export function PrivateNote({ orgId, taskId }: { orgId: string; taskId: string }
   const [loading, setLoading] = useState(true);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A ref so `onLoaded` can stay out of the effect's dependency list — the
+  // task screen passes an inline arrow, and a new identity every render
+  // would refetch the note forever. Same shape as the other panels.
+  const report = useRef(onLoaded);
+  report.current = onLoaded;
+
   useEffect(() => {
     setLoading(true);
     void api<Note>(`/organisations/${orgId}/tasks/${taskId}/note`)
       .then((note) => {
         setBody(note.body);
         setSaved(note.updated_at);
+        report.current?.(note.body.trim().length > 0);
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
@@ -81,6 +105,11 @@ export function PrivateNote({ orgId, taskId }: { orgId: string; taskId: string }
     },
     [],
   );
+
+  // Empty and nobody asked for it: nothing at all — the task screen offers
+  // a "+ Private note" button in its place. Below every hook, so the early
+  // return can't reorder them.
+  if (!open && !body.trim()) return null;
 
   return (
     <Card role="region" aria-label="Private note">

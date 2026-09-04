@@ -121,3 +121,41 @@ export async function createTask(page: Page, orgId: string, title: string, proje
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("link", { name: new RegExp(title) })).toBeVisible();
 }
+
+/**
+ * Reveal the Files panel on a task that has none yet.
+ *
+ * It's collapsed to a "+ Files" button until the task actually has a file —
+ * see CLAUDE.md's Checklists section for why the rarely-used panels hide
+ * themselves. A task that already has one shows the card without this, so
+ * the button is only clicked when it's there: that keeps this usable from
+ * tests that don't know which case they're in.
+ */
+export async function openFilesPanel(page: Page) {
+  await reveal(page, page.getByRole("region", { name: "Files" }), "Files");
+}
+
+/**
+ * The same, for the private note — collapsed to "+ Private note" until the
+ * task actually has one.
+ */
+export async function openPrivateNote(page: Page) {
+  await reveal(page, page.getByRole("region", { name: "Private note" }), "Private note");
+}
+
+/**
+ * Wait for a collapsible panel to settle, then open it if it's collapsed.
+ *
+ * **The wait is the whole point.** Each panel decides between its card and
+ * its button only once its own fetch lands, so a bare `count()` on the
+ * button — which doesn't wait for anything — reads zero on a freshly
+ * opened task, skips the click, and leaves the caller timing out against a
+ * card that was never going to appear. Waiting on `card.or(button)` waits
+ * for whichever the panel settles on, and only then decides.
+ */
+async function reveal(page: Page, card: ReturnType<Page["getByRole"]>, label: string) {
+  const button = page.getByRole("button", { name: label, exact: true });
+  await expect(card.or(button).first()).toBeVisible();
+  if (await button.count()) await button.click();
+  await expect(card).toBeVisible();
+}

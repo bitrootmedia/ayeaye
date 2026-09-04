@@ -1,6 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createOrg, createProject, createTask, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createProject,
+  createTask,
+  openFilesPanel,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /** A real 1×1 PNG, so storage holds genuine bytes. */
 const PNG = Buffer.from(
@@ -167,6 +174,7 @@ test.describe("the files panel", () => {
     const orgId = await createOrg(page, `Files ${Date.now()}`);
     await createTask(page, orgId, "Photograph the keel");
     await openTask(page, orgId, "Photograph the keel");
+    await openFilesPanel(page);
 
     await page.getByLabel("File to add to this task").setInputFiles({
       name: "keel.png",
@@ -224,6 +232,7 @@ test.describe("the files panel", () => {
     const orgId = await createOrg(page, `Files ${Date.now()}`);
     await createTask(page, orgId, "Paper trail");
     await openTask(page, orgId, "Paper trail");
+    await openFilesPanel(page);
 
     await page.getByLabel("File to add to this task").setInputFiles({
       name: "survey.txt",
@@ -242,6 +251,7 @@ test.describe("the files panel", () => {
     const orgId = await createOrg(page, `Files ${Date.now()}`);
     await createTask(page, orgId, "Second thoughts");
     await openTask(page, orgId, "Second thoughts");
+    await openFilesPanel(page);
 
     await page.getByLabel("File to add to this task").setInputFiles({
       name: "wrong.png",
@@ -280,5 +290,38 @@ test.describe("creating a task", () => {
     await page.getByRole("button", { name: "Open" }).click();
     await page.waitForURL(/\/orgs\/[0-9a-f-]+\/tasks\/[0-9a-f-]+$/);
     await expect(page.getByRole("heading", { name: "Order the antifoul" })).toBeVisible();
+  });
+});
+
+test.describe("going straight from one task to another", () => {
+  /**
+   * Reported: jump to a second task from ⌘K while already on a task, and the
+   * Details card keeps the *first* task's title.
+   *
+   * Both tasks match the same route, so React Router keeps the component
+   * instance and `useState(task.title)` — which only runs on mount — never
+   * re-seeds. Everything fed straight from props (the heading, the status
+   * pickers) updated, which is what made it look like only "some fields"
+   * were stale. `Keyed` in main.tsx is the fix; this is the proof, and it
+   * fails loudly without it.
+   */
+  test("the editable fields belong to the task you arrived at", async ({ page }) => {
+    await signUp(page, uniqueEmail("nav"));
+    const orgId = await createOrg(page, `Nav ${Date.now()}`);
+    await createTask(page, orgId, "Alpha winch overhaul");
+    await createTask(page, orgId, "Bravo rudder inspection");
+
+    await openTask(page, orgId, "Alpha winch overhaul");
+    await expect(page.getByLabel("Title")).toHaveValue("Alpha winch overhaul");
+
+    // Through the palette, exactly as reported — not a fresh page load,
+    // which would remount everything and hide the bug.
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByRole("textbox", { name: "Search" }).fill("Bravo");
+    await page.getByText("Bravo rudder inspection").first().click();
+    await page.waitForURL(/\/tasks\/[0-9a-f-]+$/);
+
+    await expect(page.getByRole("heading", { name: "Bravo rudder inspection" })).toBeVisible();
+    await expect(page.getByLabel("Title")).toHaveValue("Bravo rudder inspection");
   });
 });

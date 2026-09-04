@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createOrg, createProject, createTask, inviteMember, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createProject,
+  createTask,
+  inviteMember,
+  openPrivateNote,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * Builds one realistic organisation and photographs every main screen, in both
@@ -189,6 +197,7 @@ test("photograph the product", async ({ page }) => {
   await page.goto(`/orgs/${orgId}/tasks`);
   await page.getByRole("link", { name: /Strip the old antifoul/ }).click();
   await page.waitForURL(/\/tasks\/[0-9a-f-]+$/);
+  await openPrivateNote(page);
   await page.getByRole("textbox", { name: "Your private note" }).fill(
     "The yard quoted 400 for the lift. Worth asking Ada before we book.",
   );

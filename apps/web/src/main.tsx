@@ -162,6 +162,34 @@ function AuthChrome({ children }: { children: React.ReactNode }): React.ReactNod
  *
  * `Landing` renders no `<Outlet>`, so no child route can render underneath it.
  */
+
+/**
+ * A detail screen, keyed to the thing it is showing.
+ *
+ * **Going from one task straight to another — from ⌘K, say — matches the
+ * same route, so React Router keeps the same component instance.** Every
+ * piece of local state seeded from the old one then survives the
+ * navigation: `Details` on the task screen holds its title in
+ * `useState(task.title)`, which only ever runs on mount, so the input went
+ * on showing the *previous* task's title while everything fed straight
+ * from props around it updated. That was the reported bug, and it is a
+ * whole class rather than one field — the same `useState(project.name)`
+ * shape is in `ProjectDetail` and `BookDetail`, and the task screen also
+ * carried its collapsed-panel state, a half-typed delete confirmation and
+ * a half-written comment across.
+ *
+ * Keying on the id says the true thing — a different task is a different
+ * screen — and fixes the class rather than each field, which is the only
+ * version that stays fixed as fields are added. The cost is a remount, and
+ * a remount is what a fresh page load already does: everything here
+ * refetches on the id anyway, and `use-realtime`'s 250ms linger exists
+ * precisely so subscription churn like this drops nothing.
+ */
+function Keyed({ param, element }: { param: string; element: React.ReactElement }) {
+  const params = reactRouterDom.useParams();
+  return <React.Fragment key={params[param]}>{element}</React.Fragment>;
+}
+
 function Root(): React.ReactNode {
   const session = Session.useSessionContext();
   const atRoot = useLocation().pathname === "/";
@@ -227,21 +255,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="orgs/:orgId/projects" element={<Projects />} />
                 <Route
                   path="orgs/:orgId/projects/:projectId"
-                  element={<ProjectDetail />}
+                  element={<Keyed param="projectId" element={<ProjectDetail />} />}
                 />
                 <Route path="orgs/:orgId/tasks" element={<Tasks />} />
                 <Route
                   path="orgs/:orgId/tasks/:taskId"
-                  element={<TaskDetail />}
+                  element={<Keyed param="taskId" element={<TaskDetail />} />}
                 />
                 <Route path="orgs/:orgId/kb" element={<KnowledgeBase />} />
                 <Route
                   path="orgs/:orgId/kb/books/:bookId"
-                  element={<BookDetail />}
+                  element={<Keyed param="bookId" element={<BookDetail />} />}
                 />
                 <Route
                   path="orgs/:orgId/kb/articles/:articleId"
-                  element={<ArticleDetail />}
+                  element={<Keyed param="articleId" element={<ArticleDetail />} />}
                 />
                 <Route path="orgs/:orgId/planner" element={<Planner />} />
                 <Route path="orgs/:orgId/calendar" element={<CalendarView />} />

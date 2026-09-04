@@ -1,6 +1,13 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-import { createOrg, createTask, inviteMember, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createTask,
+  inviteMember,
+  openFilesPanel,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * A task changing under someone else's eyes.
@@ -82,6 +89,10 @@ test.describe("a task changing live", () => {
 
   test("a file uploaded on one tab appears on the other", async ({ page, browser }) => {
     const { them } = await pair(page, browser, "Shared files");
+    // Both tabs start with an empty, collapsed Files panel; the uploading
+    // side needs it open, and the watching side reveals itself when the
+    // file lands, which is half of what this test is checking.
+    await openFilesPanel(page);
 
     await page.getByLabel("File to add to this task").setInputFiles({
       name: "plan.png",

@@ -1,6 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createOrg, createProject, createTask, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createProject,
+  createTask,
+  openPrivateNote,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * The list view: a real table, sorted and filtered by the server.
@@ -134,6 +141,7 @@ test.describe("updated_at is last activity", () => {
     await expect(firstRow(page)).toContainText("Loud one");
 
     await openTask(page, orgId, "Quiet one");
+    await openPrivateNote(page);
     await page.getByRole("textbox", { name: "Your private note" }).fill("nobody sees this");
     await page.getByRole("textbox", { name: "Your private note" }).blur();
     await expect(page.getByText(/Saved/)).toBeVisible();

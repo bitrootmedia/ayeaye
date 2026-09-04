@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createOrg, createTask, signUp, uniqueEmail } from "./helpers";
+import { createOrg, createTask, openFilesPanel, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Dropping a file onto an upload panel.
@@ -47,6 +47,7 @@ test.describe("drag and drop", () => {
     const orgId = await createOrg(page, `Drop ${Date.now()}`);
     await createTask(page, orgId, "Drop target");
     await openTask(page, orgId, "Drop target");
+    await openFilesPanel(page);
 
     const dt = await fileTransfer(page, "dropped.png", "image/png", PNG);
     const panel = '[aria-label="Files"]';
@@ -93,6 +94,7 @@ test.describe("drag and drop", () => {
     const orgId = await createOrg(page, `Drop ${Date.now()}`);
     await createTask(page, orgId, "Not a file");
     await openTask(page, orgId, "Not a file");
+    await openFilesPanel(page);
 
     const dt = await page.evaluateHandle(() => {
       const dt = new DataTransfer();
@@ -110,6 +112,7 @@ test.describe("drag and drop", () => {
     const orgId = await createOrg(page, `Drop ${Date.now()}`);
     await createTask(page, orgId, "Steady");
     await openTask(page, orgId, "Steady");
+    await openFilesPanel(page);
 
     const dt = await fileTransfer(page, "steady.png", "image/png", PNG);
     const panel = '[aria-label="Files"]';

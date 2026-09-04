@@ -662,14 +662,23 @@ testing and shows up as "I checked it off and the other tab still shows it
 unchecked."
 
 **Empty, this panel isn't a panel — it's a `+ Checklist` button, and the
-same goes for Sheets and Depends on.** All three are rare on any given
-task, and three cards each saying "nothing here" was most of a screen
-spent on features most tasks never use. Each now renders **nothing at all**
+same goes for Sheets, Depends on, Files and the private note.** All five
+are rare on any given task, and five cards each saying "nothing here" was
+most of a screen spent on features most tasks never use. Each now renders **nothing at all**
 — not even its heading — until it either turns out to hold something or
 somebody presses its button, which is `TagStrip`'s own `+ Tag` affordance
-(`size="xs"`, ghost, muted, a bare `PlusIcon` and a word) in a single row
-below the three, so revealing one drops its card exactly where you were
-looking. Four things about the wiring:
+(`size="xs"`, ghost, muted, a bare `PlusIcon` and a word). Five things
+about the wiring:
+
+- **Where a button sits is decided by where its card will appear**, not by
+  tidiness. Checklists, Sheets, Depends on and Files share one row placed
+  *between* them — the three above reveal upwards into the space they
+  already occupy, Files reveals downwards into its own, and either way the
+  card lands where you were already looking. The private note gets a row
+  of its own at the very bottom instead of a fifth button in that row,
+  because its card is after History: a button up with the others would
+  reveal something below the fold, which reads as a button that did
+  nothing.
 
 - **The panels still mount and still fetch while collapsed.** Returning
   `null` from render is what hides them; the effects underneath run as
@@ -695,6 +704,44 @@ looking. Four things about the wiring:
 The old `if (empty && !canEdit) return null` guard in each panel is gone,
 subsumed by this: a read-only viewer never gets the button that sets
 `open`, so an empty panel stays hidden for them exactly as it did before.
+
+**`PrivateNote` reports from its fetch rather than from its state**, which
+is the one place this pattern differs. The others answer "is the list
+non-empty"; a note answers "was there anything here when I arrived", and
+what the box holds after that is the person typing — by which time `open`
+is already true, so re-reporting would say nothing new.
+
+**The private note's button is deliberately not gated on `editable`**,
+unlike the four in the row above it. `services/notes.py`'s own rule is
+that seeing the task is enough to keep a note on it — `PrivateNote` never
+took a `canEdit` prop at all — so requiring `write` to reveal the box
+would have quietly removed the feature from exactly the read-only viewer
+most likely to be keeping notes on somebody else's work. `notes.spec.ts`
+pins it: the second person there is only action-required, and still opens
+a note of their own.
+
+**Collapsing Files and the note cost ten browser tests a line each**, and
+that is the honest price rather than a reason not to: a test that writes a
+task's *first* file or note now has to open the panel, because there is
+nothing to drop on or type into until it does. `openFilesPanel` and
+`openPrivateNote` in `e2e/tests/helpers.ts` do it. **Both wait on
+`card.or(button)` before deciding, and that wait is the whole point** —
+each panel only chooses between its card and its button once its own
+fetch lands, so the first version's bare `count()` on the button (which
+waits for nothing) read zero on a freshly opened task, skipped the click,
+and left six tests timing out against a card that was never coming. Tests
+where the content arrives *through* something else — a file posted in a
+comment, a screenshot pasted into the description — needed no change at
+all, because the panel opens itself the moment the refetch comes back
+with content, which is the behaviour worth having.
+
+**Two assertions had to change meaning rather than just gain a line.**
+`notes.spec.ts` proved "the note is gone" and "Bob has his own empty box"
+by reading an empty textarea that was always on screen; an empty note is
+now no card at all, so both now assert the card's *absence* and then open
+it to check the box is empty. That is the truer statement of what the
+product does, and it was worth noticing rather than reaching for the
+smallest edit that made the red go away.
 
 **A freshly created checklist's `items` must never be touched before the
 router builds its response.** Found building `add_checklist`: assigning
@@ -3268,6 +3315,27 @@ Read these before starting Phase 6.
   the second hook is skipped on renders where the first matches and React
   counts hooks by position. Call both, then choose. (`App.tsx` resolves the
   current organisation this way.)
+- **A detail screen must be keyed to the thing it shows, or going straight
+  from one to another carries the last one's state along.** Reported as
+  "jump to a task from ⌘K while already on a task and the title stays from
+  the previous one" — and it was exactly that: both tasks match
+  `orgs/:orgId/tasks/:taskId`, so React Router keeps the same component
+  instance, and `Details`' `useState(task.title)` only ever runs on mount.
+  Everything fed straight from props (the heading, the pickers, the
+  breadcrumb) updated around it, which is what made it look like only
+  *some* fields were stale — the title and the description were the two
+  held in local state. The same `useState(x.name)` shape sat unnoticed in
+  `ProjectDetail` and `BookDetail`; the task screen also carried its
+  collapsed-panel state, a half-typed delete confirmation and a
+  half-written comment across. `Keyed` in `main.tsx` wraps all four detail
+  routes and keys them on their id param, so a different thing is a
+  different screen. **Fix the class, not the field:** syncing each field
+  with an effect works until the next field is added, and the remount
+  costs nothing here — everything on these screens already refetches on
+  the id, and `use-realtime`'s 250ms linger exists precisely so
+  subscription churn drops nothing. Pinned by "the editable fields belong
+  to the task you arrived at" in `task-ux.spec.ts`, which fails on the
+  title without the key.
 - **Slugs are global and never follow a rename.** They're in URLs people have
   bookmarked, so renaming changes the label only. It also means a test that
   asserts a literal slug will drift as the database accumulates rows — see the

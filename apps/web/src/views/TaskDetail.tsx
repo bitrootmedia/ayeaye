@@ -92,6 +92,12 @@ const EXTRAS = [
   { key: "checklists", label: "Checklist" },
   { key: "sheets", label: "Sheet" },
   { key: "dependencies", label: "Depends on" },
+  { key: "files", label: "Files" },
+  // Not in the row with the others: its card is at the very bottom of the
+  // column, and a button up here would reveal something below the fold —
+  // which reads as a button that did nothing. It gets its own button, in
+  // the place its card appears. See `noteButton` below.
+  { key: "note", label: "Private note" },
 ] as const;
 
 type ExtraKey = (typeof EXTRAS)[number]["key"];
@@ -133,6 +139,8 @@ export default function TaskDetail() {
     checklists: "loading",
     sheets: "loading",
     dependencies: "loading",
+    files: "loading",
+    note: "loading",
   });
   const openExtra = useCallback(
     (key: ExtraKey) => setExtras((prev) => ({ ...prev, [key]: "open" })),
@@ -247,7 +255,24 @@ export default function TaskDetail() {
   const editable = canEdit(task.access);
   // Only the ones that have answered and turned out to be empty: "loading"
   // offers no button yet, and "open" no longer needs one.
-  const collapsedExtras = EXTRAS.filter(({ key }) => extras[key] === "empty");
+  // Only the ones that have answered and turned out to be empty: "loading"
+  // offers no button yet, and "open" no longer needs one. The private note
+  // is filtered out here and rendered on its own, beside its own card.
+  const collapsedExtras = EXTRAS.filter(
+    ({ key }) => key !== "note" && extras[key] === "empty",
+  );
+  const extraButton = (key: ExtraKey, label: string) => (
+    <Button
+      key={key}
+      size="xs"
+      variant="ghost"
+      className="text-muted-foreground"
+      onClick={() => openExtra(key)}
+    >
+      <PlusIcon />
+      {label}
+    </Button>
+  );
 
   const act = async (fn: () => Promise<unknown>, success: string) => {
     try {
@@ -491,24 +516,15 @@ export default function TaskDetail() {
             onLoaded={(has) => onExtraLoaded("dependencies", has)}
           />
 
-          {/* What the three panels above collapse to while they're empty.
-              Below them, not above, so revealing one puts its card directly
-              where you were already looking — and the row disappears once
-              there is nothing left to add. */}
+          {/* What the panels around it collapse to while they're empty. It
+              sits between them on purpose: the three above reveal upwards
+              into the space they already occupy, Files reveals downwards
+              into its own — either way the card lands where you were
+              already looking. The row disappears once there is nothing
+              left to add. */}
           {editable && collapsedExtras.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              {collapsedExtras.map(({ key, label }) => (
-                <Button
-                  key={key}
-                  size="xs"
-                  variant="ghost"
-                  className="text-muted-foreground"
-                  onClick={() => openExtra(key)}
-                >
-                  <PlusIcon />
-                  {label}
-                </Button>
-              ))}
+              {collapsedExtras.map(({ key, label }) => extraButton(key, label))}
             </div>
           )}
 
@@ -521,6 +537,8 @@ export default function TaskDetail() {
             canEdit={editable}
             refreshKey={filesKey}
             emptyHint="Files posted in comments show up here too."
+            open={extras.files === "open"}
+            onLoaded={(has) => onExtraLoaded("files", has)}
           />
 
           {!isWide && commentThread}
@@ -556,7 +574,27 @@ export default function TaskDetail() {
               never is — see components/private-note.tsx. Putting it after
               History rather than before keeps every card above it in "things
               anyone with access can see" order. */}
-          <PrivateNote orgId={org.id} taskId={task.id} />
+          <PrivateNote
+            orgId={org.id}
+            taskId={task.id}
+            open={extras.note === "open"}
+            onLoaded={(has) => onExtraLoaded("note", has)}
+          />
+
+          {/* Its own button rather than a place in the row above, because
+              the card it reveals is right here at the bottom — a button up
+              there would appear to do nothing from where you'd be looking.
+              **Not gated on `editable`**, unlike every other button in the
+              row above: a private note is yours, not task content, and
+              `services/notes.py`'s rule is that seeing the task is enough
+              to keep one. Requiring `write` here would quietly take the
+              feature away from exactly the read-only viewer most likely to
+              be keeping notes on somebody else's work. */}
+          {extras.note === "empty" && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {extraButton("note", "Private note")}
+            </div>
+          )}
         </div>
 
         {/* Only rendered once `isWide`, at which point the grid is already
