@@ -671,14 +671,31 @@ somebody presses its button, which is `TagStrip`'s own `+ Tag` affordance
 about the wiring:
 
 - **Where a button sits is decided by where its card will appear**, not by
-  tidiness. Checklists, Sheets, Depends on and Files share one row placed
-  *between* them — the three above reveal upwards into the space they
-  already occupy, Files reveals downwards into its own, and either way the
-  card lands where you were already looking. The private note gets a row
-  of its own at the very bottom instead of a fifth button in that row,
-  because its card is after History: a button up with the others would
-  reveal something below the fold, which reads as a button that did
-  nothing.
+  tidiness. All five share one row placed *between* them — Checklists,
+  Sheets and Depends on reveal upwards into the space they already occupy,
+  Files and the private note reveal downwards into their own, and either
+  way the card lands where you were already looking. **The private note's
+  card had to move up for it to earn a place in that row.** It used to sit
+  last on the page, after History, on the reasoning that everything above
+  it is shared with somebody by construction and this one card never is —
+  which meant a fifth button up in the row would have revealed something
+  below the fold, reading as a button that did nothing, so it got a row of
+  its own at the bottom instead. Asked to put it with the others, the
+  honest fix was to move the card to directly under Files rather than
+  leave the button pointing off-screen; the sharedness ordering is the
+  thing that gave way. It's still the last card in its column at `2xl`,
+  where Comments and History move out of it.
+- **The row is not gated on `editable`, and the private note is why.**
+  Every other button in it writes shared task content and needs `write`;
+  a note is yours, and `services/notes.py`'s rule is that seeing the task
+  is enough to keep one. So the filter that builds the row admits the
+  note for anybody and the other four only for an editor
+  (`extras[key] === "empty" && (editable || key === "note")`), and a
+  read-only viewer gets a row holding exactly one button. Gating the row
+  itself — which is what it did while the note had its own — would
+  quietly remove the feature from the read-only viewer most likely to be
+  keeping notes on somebody else's work. `notes.spec.ts` pins it: the
+  second person there is only action-required, and still opens a note.
 
 - **The panels still mount and still fetch while collapsed.** Returning
   `null` from render is what hides them; the effects underneath run as
@@ -710,15 +727,6 @@ is the one place this pattern differs. The others answer "is the list
 non-empty"; a note answers "was there anything here when I arrived", and
 what the box holds after that is the person typing — by which time `open`
 is already true, so re-reporting would say nothing new.
-
-**The private note's button is deliberately not gated on `editable`**,
-unlike the four in the row above it. `services/notes.py`'s own rule is
-that seeing the task is enough to keep a note on it — `PrivateNote` never
-took a `canEdit` prop at all — so requiring `write` to reveal the box
-would have quietly removed the feature from exactly the read-only viewer
-most likely to be keeping notes on somebody else's work. `notes.spec.ts`
-pins it: the second person there is only action-required, and still opens
-a note of their own.
 
 **Collapsing Files and the note cost ten browser tests a line each**, and
 that is the honest price rather than a reason not to: a test that writes a
@@ -2271,19 +2279,27 @@ two real bugs before landing on the current shape:
   track's height doesn't care which item is aligned where within it.
 
 The fix that stuck: column 1 is **one single grid item**, always — Details
-through Files, then History+note, merged into the same `space-y-4` div, so
-its height is governed purely by its own content and can never be stretched
+through Files, then the private note, in one `space-y-4` div, so its
+height is governed purely by its own content and can never be stretched
 by a taller sibling. `hooks/use-media-query.ts`'s `useMediaQuery` (mirroring
 the grid's own `2xl`, hardcoded to the same 1536px — both must stay in
-sync) decides, once per render, *where* the single `<CommentThread>`
-mounts: inline inside that merged div (below `2xl`, its original position
-between Files and History) or as its own sibling grid item, between column
-1 and the sidebar (at `2xl`). It only ever mounts once — never twice behind
-a `hidden` class toggled by CSS — because it owns a realtime subscription
-and its own thread state; two live copies would double both. This is
-generally the shape to reach for when a component needs to change *DOM
-position* by breakpoint, not just show/hide or restyle: Tailwind's
+sync) decides, once per render, *where* `<CommentThread>` mounts: inline at
+the end of that div (below `2xl`) or as its own sibling grid item, between
+column 1 and the sidebar (at `2xl`). It only ever mounts once — never twice
+behind a `hidden` class toggled by CSS — because it owns a realtime
+subscription and its own thread state; two live copies would double both.
+This is generally the shape to reach for when a component needs to change
+*DOM position* by breakpoint, not just show/hide or restyle: Tailwind's
 responsive classes can express the latter, never the former.
+
+**History travels with Comments, through the same `isWide` decision** —
+it's the tail of the same conversation (who changed what, beside who said
+what), so it's held in a `history` variable and rendered immediately after
+`commentThread` in both branches rather than being left stranded under
+Files once the thread moves to its own column. That's also what freed the
+private note to move up: it is now the last card in column 1 at `2xl`, and
+sits directly under Files at every width, which is what lets its reveal
+button join the row with the other four (see the Checklists section).
 
 **The order toggle is a client-side reversal of an already-fetched array,
 not a second backend query.** `services/conversations.py::list_messages`

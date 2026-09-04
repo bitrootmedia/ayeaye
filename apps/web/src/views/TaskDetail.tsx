@@ -255,11 +255,17 @@ export default function TaskDetail() {
   const editable = canEdit(task.access);
   // Only the ones that have answered and turned out to be empty: "loading"
   // offers no button yet, and "open" no longer needs one.
-  // Only the ones that have answered and turned out to be empty: "loading"
-  // offers no button yet, and "open" no longer needs one. The private note
-  // is filtered out here and rendered on its own, beside its own card.
+  //
+  // The private note is in this row alongside the rest, and it is the one
+  // entry **not** gated on `editable`: a note is yours, not task content,
+  // and `services/notes.py`'s rule is that seeing the task is enough to
+  // keep one. Gating it here would quietly take the feature away from
+  // exactly the read-only viewer most likely to be keeping notes on
+  // somebody else's work — so a viewer with no write access gets a row
+  // holding that one button, which is why the row itself is no longer
+  // gated on `editable` either.
   const collapsedExtras = EXTRAS.filter(
-    ({ key }) => key !== "note" && extras[key] === "empty",
+    ({ key }) => extras[key] === "empty" && (editable || key === "note"),
   );
   const extraButton = (key: ExtraKey, label: string) => (
     <Button
@@ -322,6 +328,40 @@ export default function TaskDetail() {
       label: m.display_name || m.email || "Unknown",
       hint: m.display_name ? (m.email ?? undefined) : undefined,
     }));
+
+  // Held in a variable for the same reason `commentThread` is: it now
+  // renders in whichever column the thread ended up in, and that is decided
+  // in JS rather than by a CSS breakpoint. History reads as the tail of the
+  // conversation — who changed what, next to who said what — so the two
+  // stay together at every width instead of History being stranded under
+  // Files once Comments moves to its own column.
+  const history = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HistoryIcon className="size-4" />
+          History
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {/* Append-only, and the only record of work on a task. Rendered
+            oldest-first so it reads as a story rather than a feed. */}
+        <ol className="space-y-3">
+          {events.map((event) => (
+            <li key={event.id} className="flex gap-3 text-sm">
+              <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-border" />
+              <span className="min-w-0 flex-1">
+                <span>{describeEvent(event)}</span>{" "}
+                <span className="font-mono text-xs text-muted-foreground">
+                  {timestamp(event.created_at)}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </CardContent>
+    </Card>
+  );
 
   const commentThread = (
     <CommentThread
@@ -522,7 +562,7 @@ export default function TaskDetail() {
               into its own — either way the card lands where you were
               already looking. The row disappears once there is nothing
               left to add. */}
-          {editable && collapsedExtras.length > 0 && (
+          {collapsedExtras.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               {collapsedExtras.map(({ key, label }) => extraButton(key, label))}
             </div>
@@ -541,39 +581,16 @@ export default function TaskDetail() {
             onLoaded={(has) => onExtraLoaded("files", has)}
           />
 
-          {!isWide && commentThread}
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <HistoryIcon className="size-4" />
-                History
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {/* Append-only, and the only record of work on a task. Rendered
-                  oldest-first so it reads as a story rather than a feed. */}
-              <ol className="space-y-3">
-                {events.map((event) => (
-                  <li key={event.id} className="flex gap-3 text-sm">
-                    <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-border" />
-                    <span className="min-w-0 flex-1">
-                      <span>{describeEvent(event)}</span>{" "}
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {timestamp(event.created_at)}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </CardContent>
-          </Card>
-
-          {/* Last on the page, deliberately: everything above it is shared
-              with somebody by construction, and this is the one card that
-              never is — see components/private-note.tsx. Putting it after
-              History rather than before keeps every card above it in "things
-              anyone with access can see" order. */}
+          {/* Directly under Files, which is where its own button in the row
+              above reveals it — the same "the card lands where you were
+              already looking" rule every other panel in this column
+              follows. It used to sit last on the page, after History, on
+              the reasoning that everything above it is shared with
+              somebody by construction and this one card never is; that
+              ordering lost out to keeping the button and the card it
+              opens within sight of each other. It's still the last card
+              in this column at `2xl`, where Comments and History move
+              out. See components/private-note.tsx. */}
           <PrivateNote
             orgId={org.id}
             taskId={task.id}
@@ -581,19 +598,11 @@ export default function TaskDetail() {
             onLoaded={(has) => onExtraLoaded("note", has)}
           />
 
-          {/* Its own button rather than a place in the row above, because
-              the card it reveals is right here at the bottom — a button up
-              there would appear to do nothing from where you'd be looking.
-              **Not gated on `editable`**, unlike every other button in the
-              row above: a private note is yours, not task content, and
-              `services/notes.py`'s rule is that seeing the task is enough
-              to keep one. Requiring `write` here would quietly take the
-              feature away from exactly the read-only viewer most likely to
-              be keeping notes on somebody else's work. */}
-          {extras.note === "empty" && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {extraButton("note", "Private note")}
-            </div>
+          {!isWide && (
+            <>
+              {commentThread}
+              {history}
+            </>
           )}
         </div>
 
@@ -602,7 +611,12 @@ export default function TaskDetail() {
             `lg:`/`2xl:` prefixing of its own, unlike the sidebar below,
             which must keep responding to the CSS breakpoint directly since
             it renders at every width. */}
-        {isWide && <div className="col-start-2 row-start-1">{commentThread}</div>}
+        {isWide && (
+          <div className="space-y-4 col-start-2 row-start-1">
+            {commentThread}
+            {history}
+          </div>
+        )}
 
         <div className="space-y-4 lg:col-start-2 lg:row-start-1 2xl:col-start-3">
           <Card>
@@ -736,6 +750,25 @@ export default function TaskDetail() {
             </CardContent>
           </Card>
 
+          {/* Straight after Status and ahead of Assignment: starting the
+              clock is something you do about the state of the work, and it
+              wants to be the first thing under it rather than four cards
+              down past who owns it. */}
+          <TimePanel
+            orgId={org.id}
+            taskId={task.id}
+            meId={me?.id}
+            timer={timer}
+            // Reload the task too, not just the header clock: logging or
+            // correcting time writes a `task_events` row, and the History card
+            // is on the same screen. Refreshing one and not the other leaves
+            // the trail looking like it didn't record anything.
+            onTimerChanged={async () => {
+              await refreshTimer();
+              await load();
+            }}
+          />
+
           <Card>
             <CardHeader>
               <CardTitle>Assignment</CardTitle>
@@ -775,21 +808,6 @@ export default function TaskDetail() {
           </Card>
 
           <ReminderPanel orgId={org.id} taskId={task.id} />
-
-          <TimePanel
-            orgId={org.id}
-            taskId={task.id}
-            meId={me?.id}
-            timer={timer}
-            // Reload the task too, not just the header clock: logging or
-            // correcting time writes a `task_events` row, and the History card
-            // is right there on the same screen. Refreshing one and not the
-            // other leaves the trail looking like it didn't record anything.
-            onTimerChanged={async () => {
-              await refreshTimer();
-              await load();
-            }}
-          />
 
           <TaskAccessCard
             task={task}
