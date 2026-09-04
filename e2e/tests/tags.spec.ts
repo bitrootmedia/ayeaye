@@ -76,7 +76,11 @@ test.describe("tags", () => {
     await page.getByRole("button", { name: "Add a tag" }).click();
     await page.getByRole("textbox", { name: "Find or create a tag" }).fill("Knowledge base");
     await page.getByRole("button", { name: new RegExp(`Create .Knowledge base.`) }).click();
-    await expect(page.getByText("Knowledge base")).toBeVisible();
+    // The chip's own remove button, not `getByText("Knowledge base")`: the
+    // rail has a "Knowledge base" nav item of its own now, and a bare text
+    // match hits both. Same trap as a toast title matching a history line —
+    // assert on the one element that can only be the thing you mean.
+    await expect(page.getByRole("button", { name: "Remove tag Knowledge base" })).toBeVisible();
 
     // Still a task at this point — the tag has to be marked first.
     await page.goto(`/orgs/${orgId}/tasks`);

@@ -6,6 +6,7 @@ import {
   HistoryIcon,
   LockIcon,
   PinIcon,
+  PlusIcon,
   RepeatIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -78,6 +79,23 @@ import {
   type TaskStatus,
 } from "@/lib/types";
 
+/**
+ * The three panels that stay collapsed until they hold something.
+ *
+ * Labels are what the button says after the plus, so they read as the thing
+ * being added ("+ Checklist") rather than as the card's own plural heading —
+ * except "Depends on", which has no singular worth inventing and is what the
+ * card is actually called. Order matches the order they render in, so the
+ * card appears directly above the button that revealed it.
+ */
+const EXTRAS = [
+  { key: "checklists", label: "Checklist" },
+  { key: "sheets", label: "Sheet" },
+  { key: "dependencies", label: "Depends on" },
+] as const;
+
+type ExtraKey = (typeof EXTRAS)[number]["key"];
+
 export default function TaskDetail() {
   const { orgId, taskId } = useParams<{ orgId: string; taskId: string }>();
   const { organisations, me, timer, refreshTimer } = useOutletContext<Shell>();
@@ -105,6 +123,32 @@ export default function TaskDetail() {
   const [checklistsKey, setChecklistsKey] = useState(0);
   const [sheetsKey, setSheetsKey] = useState(0);
   const [dependenciesKey, setDependenciesKey] = useState(0);
+  // Checklists, Sheets and Depends on are rare on any given task, and three
+  // empty cards is most of a screen spent saying "nothing here". Each stays
+  // collapsed behind a "+ Checklist" button — the same affordance "+ Tag"
+  // already is — until its own panel reports something in it, or somebody
+  // presses the button. "loading" until the panel has answered, so the
+  // button never flashes on a task that turns out to have one.
+  const [extras, setExtras] = useState<Record<ExtraKey, "loading" | "empty" | "open">>({
+    checklists: "loading",
+    sheets: "loading",
+    dependencies: "loading",
+  });
+  const openExtra = useCallback(
+    (key: ExtraKey) => setExtras((prev) => ({ ...prev, [key]: "open" })),
+    [],
+  );
+  // A panel opens the moment it has anything to show and never closes itself
+  // again: deleting the last checklist shouldn't yank the card out from
+  // under the person who just deleted it.
+  const onExtraLoaded = useCallback(
+    (key: ExtraKey, hasContent: boolean) =>
+      setExtras((prev) => ({
+        ...prev,
+        [key]: prev[key] === "open" || hasContent ? "open" : "empty",
+      })),
+    [],
+  );
   // Type-the-title-to-confirm — the same bar as deleting an organisation or a
   // project, and for the same reason: a bare "Are you sure?" is exactly the
   // dialog a habitual double-click sails through.
@@ -201,6 +245,9 @@ export default function TaskDetail() {
   }
 
   const editable = canEdit(task.access);
+  // Only the ones that have answered and turned out to be empty: "loading"
+  // offers no button yet, and "open" no longer needs one.
+  const collapsedExtras = EXTRAS.filter(({ key }) => extras[key] === "empty");
 
   const act = async (fn: () => Promise<unknown>, success: string) => {
     try {
@@ -422,6 +469,8 @@ export default function TaskDetail() {
             taskId={task.id}
             canEdit={editable}
             refreshKey={checklistsKey}
+            open={extras.checklists === "open"}
+            onLoaded={(has) => onExtraLoaded("checklists", has)}
           />
 
           <SheetsPanel
@@ -429,6 +478,8 @@ export default function TaskDetail() {
             taskId={task.id}
             canEdit={editable}
             refreshKey={sheetsKey}
+            open={extras.sheets === "open"}
+            onLoaded={(has) => onExtraLoaded("sheets", has)}
           />
 
           <DependenciesPanel
@@ -436,7 +487,30 @@ export default function TaskDetail() {
             taskId={task.id}
             canEdit={editable}
             refreshKey={dependenciesKey}
+            open={extras.dependencies === "open"}
+            onLoaded={(has) => onExtraLoaded("dependencies", has)}
           />
+
+          {/* What the three panels above collapse to while they're empty.
+              Below them, not above, so revealing one puts its card directly
+              where you were already looking — and the row disappears once
+              there is nothing left to add. */}
+          {editable && collapsedExtras.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {collapsedExtras.map(({ key, label }) => (
+                <Button
+                  key={key}
+                  size="xs"
+                  variant="ghost"
+                  className="text-muted-foreground"
+                  onClick={() => openExtra(key)}
+                >
+                  <PlusIcon />
+                  {label}
+                </Button>
+              ))}
+            </div>
+          )}
 
           {/* Above the thread: the files are part of what the task *is*, and
               a panel below a conversation that grows all day is a panel

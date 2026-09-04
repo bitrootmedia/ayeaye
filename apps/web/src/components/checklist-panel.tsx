@@ -1,5 +1,5 @@
 import { CheckSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -24,11 +24,22 @@ export function ChecklistsPanel({
   taskId,
   canEdit,
   refreshKey,
+  open = true,
+  onLoaded,
 }: {
   orgId: string;
   taskId: string;
   canEdit: boolean;
   refreshKey?: number;
+  /** Render the card even with nothing in it. The task screen keeps this
+   *  false until somebody presses its own "+ Checklist" button — most tasks
+   *  have no checklist, and an empty card each for this, Sheets and Depends
+   *  on is most of a screen spent saying "nothing here". Defaults true so
+   *  the panel on its own still behaves as it always did. */
+  open?: boolean;
+  /** Whether there is anything to show, reported after each load, so the
+   *  task screen knows to offer the button instead of the card. */
+  onLoaded?: (hasContent: boolean) => void;
 }) {
   const toast = useToastManager();
   const [checklists, setChecklists] = useState<Checklist[] | null>(null);
@@ -44,6 +55,17 @@ export function ChecklistsPanel({
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // Held in a ref, and reported from its own effect rather than from
+  // `load()`: the task screen passes an inline arrow, which is a new
+  // function every render, and a callback in `load`'s dependency list
+  // would refetch forever.
+  const report = useRef(onLoaded);
+  report.current = onLoaded;
+  useEffect(() => {
+    if (checklists === null) return;
+    report.current?.(checklists.length > 0);
+  }, [checklists]);
 
   const fail = (err: unknown, title: string) => {
     const detail = err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
@@ -75,7 +97,13 @@ export function ChecklistsPanel({
 
   // Checklists themselves are few (a handful per task at most); nothing here
   // needs the pagination or per-column bounding a task list or board does.
-  if (checklists !== null && checklists.length === 0 && !canEdit) return null;
+  //
+  // Nothing in it and nobody asked for it: render nothing at all, not even
+  // the heading — see `open`. This also covers the read-only case that used
+  // to have its own guard here, because a viewer never gets the button that
+  // sets `open`. While the first fetch is still out there is nothing to
+  // show either, which is what keeps a card from flashing in and out.
+  if (!open && !(checklists !== null && checklists.length > 0)) return null;
 
   return (
     <Card role="region" aria-label="Checklists">

@@ -216,6 +216,7 @@ export default function ArticleDetail() {
             basePath={`/organisations/${org.id}/kb/revisions/${revision.id}`}
             canEdit={editable}
             refreshKey={filesKey}
+            noun="article"
           />
 
           {admin && (

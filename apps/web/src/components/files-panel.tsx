@@ -53,6 +53,15 @@ export function FilesPanel({
   /** Extra line in the empty state — a task mentions comment-sourced files;
    *  an article revision has no comment thread, so it says nothing extra. */
   emptyHint,
+  /** What to call the thing these files hang off, in the drop hint and the
+   *  file input's own accessible name — "task" or "article". Generalising
+   *  this panel out of `task-files.tsx` first dropped the noun entirely
+   *  ("File to add", "Drop to attach"), which reads as a control that
+   *  belongs to nothing in particular when a screen reader announces it,
+   *  and quietly broke six browser tests that address the input by its
+   *  accessible name. Same prop, same default, same reasoning as
+   *  `RichTextEditor`'s own `noun`. */
+  noun = "task",
 }: {
   orgId: string;
   /** `/organisations/{orgId}/tasks/{taskId}` or
@@ -61,6 +70,7 @@ export function FilesPanel({
   canEdit: boolean;
   refreshKey?: number;
   emptyHint?: string;
+  noun?: string;
 }) {
   const toast = useToastManager();
   const [files, setFiles] = useState<FileItem[] | null>(null);
@@ -148,7 +158,7 @@ export function FilesPanel({
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/80">
           <span className="flex items-center gap-2 text-sm font-medium">
             <PaperclipIcon className="size-4" />
-            Drop to attach
+            Drop to attach to this {noun}
           </span>
         </div>
       )}
@@ -214,7 +224,7 @@ export function FilesPanel({
               ref={input}
               type="file"
               className="sr-only"
-              aria-label="File to add"
+              aria-label={`File to add to this ${noun}`}
               multiple
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);

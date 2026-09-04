@@ -1,5 +1,5 @@
 import { GitBranchIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
@@ -29,11 +29,20 @@ export function DependenciesPanel({
   taskId,
   canEdit,
   refreshKey,
+  open = true,
+  onLoaded,
 }: {
   orgId: string;
   taskId: string;
   canEdit: boolean;
   refreshKey?: number;
+  /** Render the card even with nothing in it — see `ChecklistsPanel`'s own
+   *  `open`, which this mirrors exactly. */
+  open?: boolean;
+  /** Whether there is anything to show, reported after each load. Both
+   *  directions count: a task nothing depends on but which something else
+   *  is waiting on still has something worth showing. */
+  onLoaded?: (hasContent: boolean) => void;
 }) {
   const toast = useToastManager();
   const [deps, setDeps] = useState<TaskDependencies | null>(null);
@@ -47,6 +56,15 @@ export function DependenciesPanel({
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // A ref, reported from its own effect — see `ChecklistsPanel` for why a
+  // callback in `load`'s dependency list would refetch forever.
+  const report = useRef(onLoaded);
+  report.current = onLoaded;
+  useEffect(() => {
+    if (deps === null) return;
+    report.current?.(deps.depends_on.length > 0 || deps.blocks.length > 0);
+  }, [deps]);
 
   const fail = (err: unknown, title: string) => {
     const detail = err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
@@ -71,9 +89,10 @@ export function DependenciesPanel({
     }
   };
 
-  if (deps !== null && deps.depends_on.length === 0 && deps.blocks.length === 0 && !canEdit) {
-    return null;
-  }
+  // Nothing either way and nobody asked for it: nothing at all, not even the
+  // heading — see `open`, and `ChecklistsPanel`'s own longer note.
+  const hasContent = deps !== null && (deps.depends_on.length > 0 || deps.blocks.length > 0);
+  if (!open && !hasContent) return null;
 
   const openCount = deps?.depends_on.filter((d) => d.task?.is_open).length ?? 0;
   const excludeIds = new Set([taskId, ...(deps?.depends_on.map((d) => d.task?.id ?? "") ?? [])]);

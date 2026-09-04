@@ -1,5 +1,5 @@
 import { Grid3x3Icon, PlusIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -27,11 +27,18 @@ export function SheetsPanel({
   taskId,
   canEdit,
   refreshKey,
+  open = true,
+  onLoaded,
 }: {
   orgId: string;
   taskId: string;
   canEdit: boolean;
   refreshKey?: number;
+  /** Render the card even with nothing in it — see `ChecklistsPanel`'s own
+   *  `open`, which this mirrors exactly. */
+  open?: boolean;
+  /** Whether there is anything to show, reported after each load. */
+  onLoaded?: (hasContent: boolean) => void;
 }) {
   const toast = useToastManager();
   const [sheets, setSheets] = useState<Sheet[] | null>(null);
@@ -47,6 +54,15 @@ export function SheetsPanel({
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // A ref, reported from its own effect — see `ChecklistsPanel` for why a
+  // callback in `load`'s dependency list would refetch forever.
+  const report = useRef(onLoaded);
+  report.current = onLoaded;
+  useEffect(() => {
+    if (sheets === null) return;
+    report.current?.(sheets.length > 0);
+  }, [sheets]);
 
   const fail = (err: unknown, title: string) => {
     const detail = err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
@@ -76,7 +92,9 @@ export function SheetsPanel({
     }
   };
 
-  if (sheets !== null && sheets.length === 0 && !canEdit) return null;
+  // Nothing in it and nobody asked for it: nothing at all, not even the
+  // heading — see `open`, and `ChecklistsPanel`'s own longer note.
+  if (!open && !(sheets !== null && sheets.length > 0)) return null;
 
   return (
     <Card role="region" aria-label="Sheets">

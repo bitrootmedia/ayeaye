@@ -661,6 +661,41 @@ dependency of its own load effect. Missing that wiring is invisible in
 testing and shows up as "I checked it off and the other tab still shows it
 unchecked."
 
+**Empty, this panel isn't a panel — it's a `+ Checklist` button, and the
+same goes for Sheets and Depends on.** All three are rare on any given
+task, and three cards each saying "nothing here" was most of a screen
+spent on features most tasks never use. Each now renders **nothing at all**
+— not even its heading — until it either turns out to hold something or
+somebody presses its button, which is `TagStrip`'s own `+ Tag` affordance
+(`size="xs"`, ghost, muted, a bare `PlusIcon` and a word) in a single row
+below the three, so revealing one drops its card exactly where you were
+looking. Four things about the wiring:
+
+- **The panels still mount and still fetch while collapsed.** Returning
+  `null` from render is what hides them; the effects underneath run as
+  they always did. That's deliberate — it's what makes a task that *does*
+  have a checklist show the card with no button press, and what lets a
+  realtime `checklistsKey` bump reveal one the moment somebody else adds
+  it in another tab.
+- **`open` and `onLoaded` are the whole contract**, and `open` defaults to
+  `true` so a panel used anywhere else behaves exactly as it did before.
+  `TaskDetail.tsx` holds one `"loading" | "empty" | "open"` per panel:
+  `"loading"` offers no button yet (otherwise it flashes on every task
+  that has one), `"empty"` offers the button, `"open"` renders the card.
+- **A panel never closes itself again.** `onExtraLoaded` only ever moves
+  *towards* `"open"` — deleting the last checklist would otherwise yank
+  the card out from under the person who just deleted it, mid-click.
+- **`onLoaded` is held in a ref and reported from its own effect**, not
+  called from `load()`. The task screen passes an inline arrow, which is
+  a new function identity every render; in `load`'s dependency list that
+  is an infinite refetch loop. This is the same class of trap as the
+  `useMatch(a) ?? useMatch(b)` hook-order bug below — cheap to write, and
+  it presents as the network tab quietly catching fire.
+
+The old `if (empty && !canEdit) return null` guard in each panel is gone,
+subsumed by this: a read-only viewer never gets the button that sets
+`open`, so an empty panel stays hidden for them exactly as it did before.
+
 **A freshly created checklist's `items` must never be touched before the
 router builds its response.** Found building `add_checklist`: assigning
 `checklist.items = []` to "seed" the relationship still triggers SQLAlchemy
@@ -2773,6 +2808,36 @@ pasted screenshot in the article editor stages to
 `${basePath}/files` regardless of which resource that is. `TaskFile` (the
 type) is now `FileItem` with `from_comment` made optional, since an article
 revision has no comment thread to have arrived from.
+
+**Generalising a component is not a licence to generalise its copy, and
+this one cost six browser tests to learn.** The first version of
+`FilesPanel` dropped the noun out of the two user-facing strings that had
+one — `aria-label="File to add to this task"` became `"File to add"`, and
+the drop overlay's "Drop to attach to this task" became "Drop to attach" —
+on the reasoning that the panel no longer knows it's a task. Both are
+worse copy on their own terms: an accessible name of "File to add" tells a
+screen reader nothing about what it attaches to, which is the one thing
+that label exists to say. They also broke `task-ux.spec.ts` (×3),
+`realtime-task.spec.ts` and `drag-drop.spec.ts` (×2), every one of which
+addresses those controls by exactly that wording — and none of it showed
+up until the browser suite was next run, several commits later, because
+neither `pnpm typecheck` nor any HTTP suite can see a string. `FilesPanel`
+now takes the same `noun` prop `RichTextEditor` already had, defaulting to
+`"task"`, so the task screen's strings are byte-identical to what they
+always were and `ArticleDetail` passes `noun="article"`. **When a shared
+component swallows a caller-specific word, give it a prop, not a
+shrug** — and run `./scripts/e2e-browser.sh` after any refactor that
+touches copy, because it is the only suite that reads it.
+
+**A nav item can break a test three screens away.** Adding "Knowledge base"
+to the rail made `tags.spec.ts`'s `getByText("Knowledge base")` — asserting
+a tag chip had been created — match two elements and fail on strict mode.
+The product was right and the locator was loose; it now asserts on the
+chip's own `Remove tag Knowledge base` button, which can only ever be the
+one thing meant. Same family as the toast-title-versus-history-line trap
+below: any bare `getByText` for a word that could plausibly become a nav
+item, a heading or a button label somewhere else is a test waiting to fail
+for a reason that has nothing to do with what it's testing.
 
 **No locking: silent last-write-wins**, same as everything else in this
 product that isn't explicitly collaborative — two people editing the same
