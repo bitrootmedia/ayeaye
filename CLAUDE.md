@@ -81,8 +81,8 @@ reminders with a scheduler, the account screen, and an organisation dashboard.
 Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
-Verified by 229 infra-free unit tests, 534 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 125 browser tests in a real Chromium
+Verified by 303 infra-free unit tests, 534 end-to-end checks over HTTP
+(`./scripts/e2e-*.sh`) and 127 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -3398,6 +3398,43 @@ Read these before starting Phase 6.
   layer fixes every instance at once rather than each screen needing its
   own patch. Firefox draws this control differently and isn't a target
   here; the product's own e2e suite runs Chromium.
+- **A dialog taller than the viewport used to grow off the top *and* the
+  bottom of it at once, with nothing anywhere allowed to scroll.**
+  `DialogContent` is `fixed top-1/2 left-1/2 -translate-y-1/2` — centred,
+  so overflow is symmetrical — and it carried no `max-height` and no
+  `overflow`. Reported against the new-task dialog, where `Textarea`'s
+  default `field-sizing-content` (the same auto-growing behaviour the
+  notepad's own editor documents) means the description field grows with
+  every line typed until the Title field is above the screen and Create is
+  below it, both unreachable, no scrollbar in sight. Latent in *every*
+  dialog, not that one. Fixed in two places, deliberately:
+  `DialogContent`'s base classes gained `max-h-[calc(100dvh-2rem)]
+  overflow-y-auto` as a **safety net** — `dvh` so a phone's collapsing
+  browser chrome can't hide the footer — so the worst any dialog can now
+  do is scroll as a whole. That is a hand edit inside
+  `components/ui/`, which is generated: re-adding `dialog` to update it
+  drops the fix silently, and every dialog in the product goes back to
+  being able to grow off-screen. And a dialog that would rather pin its header
+  and footer says so itself with `flex flex-col` plus a `min-h-0 flex-1
+  overflow-y-auto` body, which `NewTaskDialog` now does and the notepad's
+  editor already did (`cn`'s tailwind-merge lets that `flex` replace the
+  base `grid`). Two things about the fix are load-bearing: **`min-h-0` on
+  the scrolling body** — a flex child's default `min-height: auto` floors
+  it at its content's height, so `flex-1` alone lets it push the footer
+  out of the dialog instead of scrolling, the exact vertical twin of the
+  `min-w-0` trap the duplicate-title box on the same dialog already
+  documents — and **`overflow-hidden` on any popup that scrolls
+  internally**, or the base `overflow-y-auto` leaves it a second scroll
+  container nested around the first. Nothing floating was clipped by the
+  new overflow because `EntityPicker` and every menu already portal to
+  `document.body`; the search palette was already `overflow-hidden` for
+  its own results list. Pinned by `e2e/tests/task-ux.spec.ts`'s "a long
+  description leaves the title and Create reachable", which asserts on
+  **geometry, not `toBeVisible`** — every control stayed rendered and
+  "visible" all along, which is exactly why nothing caught this earlier;
+  the test reads the popup's own bounding box (it sat at `y = -501.5`
+  before the fix) and calls `scrollIntoViewIfNeeded`, which has nothing to
+  scroll on a `fixed` popup with no scroll container inside it.
 
 Two more real deployment incidents — a Caddy restart that didn't actually
 reload, and an orphaned dev container on a production host — are documented

@@ -239,8 +239,14 @@ export function NewTaskDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent>
-          <DialogHeader>
+        {/* A bounded column, not the default grid: the description grows
+            with what you type (`Textarea` is `field-sizing-content`), and
+            the whole dialog used to grow with it until the title and the
+            Create button were both off-screen. Now only the middle
+            scrolls — `DialogContent`'s own `max-h` catches anything that
+            still doesn't fit. */}
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               New task
               {dirty && (
@@ -261,7 +267,13 @@ export function NewTaskDialog({
               or truncating. `min-w-0` here is what lets the `truncate`
               further down actually take effect instead of being overflowed
               past before it gets the chance. */}
-          <div className="min-w-0 space-y-4">
+          {/* `min-h-0` is what actually makes this scroll: a flex child's
+              default `min-height: auto` floors it at its own content's
+              height, so `flex-1` alone would let it push the footer out
+              of the dialog instead of scrolling — the vertical twin of
+              the `min-w-0` note above. `-mx-1 px-1` keeps focus rings on
+              the inputs from being clipped by the new scroll container. */}
+          <div className="min-w-0 min-h-0 flex-1 -mx-1 space-y-4 overflow-y-auto px-1">
             <div className="space-y-2">
               <Label htmlFor="task-title">Title</Label>
               <Input
@@ -365,7 +377,7 @@ export function NewTaskDialog({
               </p>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
             <Button onClick={submit} disabled={busy || !title.trim()}>
               Create

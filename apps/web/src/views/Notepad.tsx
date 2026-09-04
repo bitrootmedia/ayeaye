@@ -300,7 +300,7 @@ function NoteEditorDialog({
           fought that. flex-col + a flex-1 textarea is what lets the body
           claim every pixel of height the title and footer don't need,
           instead of a fixed row count. */}
-      <DialogContent className="flex h-[90vh] max-h-[90vh] w-full flex-col gap-0 p-0 sm:max-w-4xl">
+      <DialogContent className="flex h-[90vh] max-h-[90vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
         {/* pr-12 reserves room for DialogContent's own corner X (absolutely
             positioned, top-2 right-2) — without it, a long title's text
             runs directly under the close button instead of stopping short
