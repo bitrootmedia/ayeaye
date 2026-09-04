@@ -2292,6 +2292,29 @@ This is generally the shape to reach for when a component needs to change
 *DOM position* by breakpoint, not just show/hide or restyle: Tailwind's
 responsive classes can express the latter, never the former.
 
+**Comments is a flexible track, weighted above the main column —
+`minmax(0,1fr) minmax(0,1.2fr) 22rem`, not the fixed `28rem` it shipped
+with.** A fixed column couldn't answer the question actually asked of this
+screen: collapsing the rail handed every pixel it freed to column 1 while
+the thread — where the reading and the typing happen — stayed exactly as
+narrow as before. The weight is also what makes it wider at any given
+width (463px rather than 448 at `2xl`, 785 rather than 448 at 1920 with
+the rail hidden). The sidebar stays fixed: it's a column of form fields
+with a natural width, and stretching those buys nothing. **`minmax(0, …)`
+rather than a bare `1fr` on both** — a bare `1fr` is `minmax(auto, 1fr)`,
+whose content-based floor one long unbreakable string (a URL in a comment,
+an id in a description) is enough to blow past, taking the whole grid into
+a sideways scroll.
+
+The trade, stated because it's real and was measured rather than guessed:
+at exactly 1536 **with the rail open** there is no slack left, so the
+Details column drops to 385px and the rich-text toolbar wraps to two rows.
+Every other combination is one row — including 1536 with the rail hidden,
+which is the case this change was asked for. Buying that one row back
+would mean container queries plus a second breakpoint plus plumbing the
+sidebar's open state into the `isWide` decision below, which is a lot of
+machinery for a toolbar that wraps gracefully.
+
 **History travels with Comments, through the same `isWide` decision** —
 it's the tail of the same conversation (who changed what, beside who said
 what), so it's held in a `history` variable and rendered immediately after

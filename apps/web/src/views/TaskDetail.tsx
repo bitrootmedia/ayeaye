@@ -511,8 +511,23 @@ export default function TaskDetail() {
           sibling grid item (at `2xl`, between this column and the sidebar).
           It only ever mounts once — never both at once behind a `hidden`
           class — because it holds its own thread state and a realtime
-          subscription; mounting two copies live at once would double both. */}
-      <div className="grid gap-4 lg:grid-cols-[1fr_22rem] 2xl:grid-cols-[1fr_28rem_22rem]">
+          subscription; mounting two copies live at once would double both.
+
+          Comments is a *flexible* track, weighted above the main column,
+          not the fixed `28rem` it started as. A fixed column can't answer
+          the question people actually ask of this screen — collapsing the
+          rail handed every pixel it freed to column 1 while the thread,
+          which is where the reading and typing happens, stayed exactly as
+          narrow as before. `1.2fr` against column 1's `1fr` is also what
+          makes it a little wider at any given width, without going so far
+          that Details is the cramped one instead. The sidebar stays fixed
+          at `22rem`: it's a column of form fields with a natural width,
+          and stretching those buys nothing. `minmax(0, …)` rather than a
+          bare `1fr` on both — a bare `1fr` is `minmax(auto, 1fr)`, whose
+          content-based floor a single long unbreakable string (a URL in a
+          comment, an id in the description) is enough to blow past, and
+          then the whole grid overflows sideways. */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_22rem]">
         <div className="space-y-4 lg:col-start-1">
           <Card>
             <CardHeader>
