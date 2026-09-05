@@ -5,6 +5,7 @@ organisation membership and grants — see services/access.py (Phase 3). There i
 no policy engine and no staff tier; PLAN.md §2.1 explains why.
 """
 
+import asyncio
 import logging
 import re
 from typing import Annotated
@@ -202,27 +203,51 @@ def _override_emailpassword_apis(original):
             user_context,
         )
         user = getattr(response, "user", None)
-        if user is not None:
-            try:
-                from supertokens_python.recipe.emailverification.asyncio import (
-                    send_email_verification_email,
-                )
-
-                await send_email_verification_email(
-                    tenant_id=tenant_id,
-                    user_id=user.id,
-                    recipe_user_id=(
-                        getattr(response, "recipe_user_id", None)
-                        or user.login_methods[0].recipe_user_id
-                    ),
-                    email=user.emails[0] if user.emails else None,
-                )
-            except Exception as exc:
-                logger.warning("could not send the verification email on sign-up: %s", exc)
+        # **Only when it is actually enforced.** With verification off, a
+        # "confirm your address" email on every sign-up is a nag about
+        # something that doesn't gate anything — and it is still an SMTP
+        # round trip. An address can still be confirmed voluntarily; the
+        # recipe stays registered either way.
+        if user is not None and settings.email_verification_required:
+            recipe_user_id = (
+                getattr(response, "recipe_user_id", None)
+                or user.login_methods[0].recipe_user_id
+            )
+            email = user.emails[0] if user.emails else None
+            # **Not awaited.** Sending it inline puts an SMTP round trip in
+            # the middle of every sign-up — which is exactly what
+            # `tasks/invites.py` exists to avoid for the invitation email,
+            # and it showed up here as the browser suite going from twelve
+            # minutes to twenty-seven with navigations timing out under the
+            # load. A taskiq job would be the closer parallel, but the token
+            # is minted by the same call that sends, and the worker has no
+            # SuperTokens recipe registered to mint it with.
+            asyncio.create_task(
+                _send_verification_email(tenant_id, user.id, recipe_user_id, email)
+            )
         return response
 
     original.sign_up_post = sign_up_post
     return original
+
+
+async def _send_verification_email(tenant_id, user_id, recipe_user_id, email) -> None:
+    """The send itself, off the request's critical path. Never raises: the
+    account exists, and a mail that didn't go is recoverable from the screen
+    that offers to send it again."""
+    try:
+        from supertokens_python.recipe.emailverification.asyncio import (
+            send_email_verification_email,
+        )
+
+        await send_email_verification_email(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            recipe_user_id=recipe_user_id,
+            email=email,
+        )
+    except Exception as exc:
+        logger.warning("could not send the verification email on sign-up: %s", exc)
 
 
 def _override_session_functions(original: RecipeInterface) -> RecipeInterface:

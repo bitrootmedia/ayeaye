@@ -129,7 +129,33 @@ SuperTokens.init({
     // actually comes back refused, exactly as it already does for MFA. The
     // server is the thing that decides; the UI reacts to what it says.
     EmailVerification.init({ mode: "OPTIONAL" }),
-    Session.init(),
+    // **And its claim validator is removed again**, which is not the
+    // contradiction it looks like.
+    //
+    // Registering the recipe is what gives us the screen the link in the
+    // email lands on, and `sendVerificationEmail`. What comes with it is a
+    // global claim validator, and that is the part this app must not have:
+    // `SessionAuth` then checks `st-ev` on every protected page load, finds
+    // no value in the access token, and calls `/auth/session/refresh` to go
+    // and fetch one — on every navigation, whether or not this server
+    // enforces verification at all.
+    //
+    // Measured, not assumed: with the validator in place the browser suite
+    // went from twelve minutes to twenty-seven, one file's tests went from
+    // 19s to 45s, and assertions started missing their five-second windows
+    // for no reason visible on screen.
+    //
+    // The server is what refuses an unverified session, and `App.tsx`
+    // renders the gate when it does. The client has nothing to decide here.
+    Session.init({
+      override: {
+        functions: (original) => ({
+          ...original,
+          getGlobalClaimValidators: ({ claimValidatorsAddedByOtherRecipes }) =>
+            claimValidatorsAddedByOtherRecipes.filter((v) => v.id !== "st-ev"),
+        }),
+      },
+    }),
   ],
 });
 
