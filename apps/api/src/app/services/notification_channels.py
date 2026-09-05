@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import NotificationChannel, User
+from app.models import NotificationChannel, OrganisationMember, User
 from app.models.notification import NOTIFICATION_KINDS
 from app.models.notification_channel import (
     CHANNEL_EMAIL,
@@ -41,6 +41,7 @@ from app.models.notification_channel import (
     CHANNEL_TELEGRAM,
     CHANNEL_WEBHOOK,
 )
+from app.models.organisation import STATUS_ACTIVE
 
 # How long a "link your Telegram" deep link stays valid. Short enough that a
 # stale link sitting in an old chat isn't a standing way in; long enough that
@@ -283,8 +284,110 @@ async def create_webhook(
     return row, secret
 
 
+# --- where this organisation's mail goes ------------------------------------------
+
+
+def resolve_email(account_email: str | None, override: str | None) -> str | None:
+    """The one place the fallback rule is written down.
+
+    An override that is blank, whitespace, or absent means "use the account
+    address" — three spellings of the same intention, and treating them
+    differently is how a saved-but-empty field becomes mail nobody receives.
+    Returns None only when there is nothing to send to at all, which the
+    caller must treat as "don't send" rather than as an address.
+    """
+    chosen = (override or "").strip() or (account_email or "").strip()
+    return chosen or None
+
+
+def normalise_override(value: str | None) -> str | None:
+    """What to store for a typed-in override. Blank stores NULL, so clearing
+    the box and clearing the override are the same act — the alternative is
+    an empty string that reads as "set" everywhere it is checked."""
+    cleaned = (value or "").strip().lower()
+    if not cleaned:
+        return None
+    if len(cleaned) > 320 or "@" not in cleaned or cleaned.startswith("@") or cleaned.endswith("@"):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="that doesn't look like an email address",
+        )
+    return cleaned
+
+
+async def email_for_organisation(
+    db: AsyncSession, *, user: User, organisation_id: uuid.UUID | None
+) -> str | None:
+    """Where to send this person's mail about this organisation.
+
+    A notification with no organisation (nothing raises one today, but the
+    column is nullable) goes to the account address, as does one for an
+    organisation they have set no preference for. **Scoped to an active
+    membership**: a disabled or removed member's row shouldn't keep steering
+    mail, and after removal there is no row to read anyway.
+    """
+    override: str | None = None
+    if organisation_id is not None:
+        override = (
+            await db.execute(
+                select(OrganisationMember.notification_email).where(
+                    OrganisationMember.user_id == user.id,
+                    OrganisationMember.organisation_id == organisation_id,
+                    OrganisationMember.status == STATUS_ACTIVE,
+                )
+            )
+        ).scalar_one_or_none()
+    return resolve_email(user.email, override)
+
+
+async def overrides_for(db: AsyncSession, user: User) -> dict[uuid.UUID, str]:
+    """Every override this person has set, by organisation id.
+
+    One statement for the whole settings screen rather than a lookup per
+    row — the same discipline every list in this codebase follows, and this
+    list is as long as somebody's organisation count.
+    """
+    rows = (
+        await db.execute(
+            select(OrganisationMember.organisation_id, OrganisationMember.notification_email).where(
+                OrganisationMember.user_id == user.id,
+                OrganisationMember.status == STATUS_ACTIVE,
+                OrganisationMember.notification_email.isnot(None),
+            )
+        )
+    ).all()
+    return {org_id: email for org_id, email in rows}
+
+
+async def set_email_for_organisation(
+    db: AsyncSession, *, user: User, organisation_id: uuid.UUID, email: str | None
+) -> str | None:
+    """Set or clear the override. Only your own membership, ever — there is no
+    branch here that lets an admin redirect somebody else's mail, which would
+    be a rather effective way to read it."""
+    membership = (
+        await db.execute(
+            select(OrganisationMember).where(
+                OrganisationMember.user_id == user.id,
+                OrganisationMember.organisation_id == organisation_id,
+                OrganisationMember.status == STATUS_ACTIVE,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
+    membership.notification_email = normalise_override(email)
+    await db.commit()
+    return membership.notification_email
+
+
 __all__ = [
     "CHANNEL_KINDS",
+    "resolve_email",
+    "normalise_override",
+    "email_for_organisation",
+    "overrides_for",
+    "set_email_for_organisation",
     "get_or_create_email_channel",
     "mine",
     "channels_for",

@@ -284,6 +284,7 @@ async def build_export(export_id: str) -> None:
                 title=f"Your export of {project_name or 'your organisation'} is ready",
                 body="Download it from the Export card where you started it.",
                 link_path=_export_link_path(export),
+                organisation_id=export.organisation_id,
             )
         except Exception as exc:  # pragma: no cover - defensive, mirrors thumbnails.py
             logger.warning("export %s failed: %s", export_id, exc)
@@ -298,6 +299,7 @@ async def build_export(export_id: str) -> None:
                 title="Your export couldn't be built",
                 body="Something went wrong while preparing it. Try again, or ask an admin.",
                 link_path=_export_link_path(export),
+                organisation_id=export.organisation_id,
             )
 
 

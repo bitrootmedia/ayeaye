@@ -90,6 +90,11 @@ async def _notify(db, reminder_id, *, ahead: bool) -> int:
         link_path=(
             f"/orgs/{task.organisation_id}/tasks/{task.id}" if task is not None else "/reminders"
         ),
+        # A standalone reminder carries its own organisation (see
+        # `ck_reminders_org_iff_standalone`); a task-anchored one takes the
+        # task's. Either way there is one, so either way the mail can be
+        # routed to the address chosen for it.
+        organisation_id=task.organisation_id if task is not None else reminder.organisation_id,
     )
     logger.debug("reminder %s for %s fired (ahead=%s)", reminder_id, when, ahead)
     return 1

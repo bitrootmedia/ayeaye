@@ -21,7 +21,13 @@ import { PageHeader } from "@/components/page-header";
 import { WorkingHoursGrid } from "@/components/working-hours-grid";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -32,6 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
 import {
@@ -41,6 +48,7 @@ import {
   type NotificationChannel,
   type OAuthGrant,
   type Organisation,
+  type OrganisationEmail,
   type WorkingHourCell,
   type WorkingHours,
 } from "@/lib/types";
@@ -755,7 +763,114 @@ function NotificationsSection({ organisations }: { organisations: Organisation[]
     <>
       <NotificationChannelsCard channels={channels} organisations={organisations} onChanged={load} />
       <NotificationRoutingCard channels={channels} onChanged={load} />
+      <OrganisationEmailsCard />
     </>
+  );
+}
+
+/**
+ * Where each organisation's email goes.
+ *
+ * Here rather than on an organisation's own settings screen, because it is a
+ * personal preference that only makes sense seen all at once: the question
+ * is "which address for which organisation", and answering it one screen at
+ * a time is how you end up with two of them pointing at an address you
+ * stopped reading.
+ *
+ * Every organisation is listed, override or not — this is the place the
+ * setting exists, so one missing from the list would be one you cannot
+ * configure. The placeholder carries the account address, which makes the
+ * fallback visible without a second column explaining it: an empty box that
+ * says `person@example.com` in grey is the rule, drawn.
+ */
+function OrganisationEmailsCard() {
+  const toast = useToastManager();
+  const [rows, setRows] = useState<OrganisationEmail[] | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const list = await api<OrganisationEmail[]>("/me/notification-emails").catch(() => []);
+    setRows(list);
+    setDrafts(Object.fromEntries(list.map((r) => [r.organisation_id, r.email ?? ""])));
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async (row: OrganisationEmail) => {
+    const value = drafts[row.organisation_id] ?? "";
+    // Nothing to do if it hasn't moved. Without this, tabbing through the
+    // list PUTs every row you passed over.
+    if (value.trim() === (row.email ?? "")) return;
+    setSaving(row.organisation_id);
+    try {
+      await api(`/me/notification-emails/${row.organisation_id}`, {
+        method: "PUT",
+        body: JSON.stringify({ email: value }),
+      });
+      await load();
+      toast.add({
+        title: value.trim() ? "Saved" : "Back to your account address",
+        description: value.trim()
+          ? `${row.organisation_name} will email ${value.trim()}.`
+          : undefined,
+      });
+    } catch (err) {
+      const detail =
+        err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+      toast.add({ title: "Couldn't save that", description: detail });
+      // Put the box back to what is actually stored, so the screen never
+      // shows an address that was refused as though it had been accepted.
+      setDrafts((d) => ({ ...d, [row.organisation_id]: row.email ?? "" }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (rows !== null && rows.length === 0) return null;
+
+  return (
+    <Card className="lg:col-span-2" role="region" aria-label="Email per organisation">
+      <CardHeader>
+        <CardTitle>Email per organisation</CardTitle>
+        <CardDescription>
+          Notifications go to your account address unless you name another one here. Useful when
+          one of these is work and another isn&rsquo;t.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows === null ? (
+          <div className="flex justify-center py-4">
+            <Spinner />
+          </div>
+        ) : (
+          rows.map((row) => (
+            <div key={row.organisation_id} className="flex flex-wrap items-center gap-3">
+              <span className="min-w-0 flex-1 truncate text-sm">{row.organisation_name}</span>
+              <Input
+                className="w-full sm:w-80"
+                type="email"
+                aria-label={`Email for ${row.organisation_name}`}
+                placeholder={row.effective ?? "your account address"}
+                value={drafts[row.organisation_id] ?? ""}
+                disabled={saving === row.organisation_id}
+                onChange={(e) =>
+                  setDrafts((d) => ({ ...d, [row.organisation_id]: e.target.value }))
+                }
+                // Saved on blur and on Enter, with no Save button — the same
+                // trade every other autosaving field in this product makes.
+                onBlur={() => void save(row)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                }}
+              />
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

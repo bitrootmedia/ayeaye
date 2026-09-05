@@ -1,4 +1,4 @@
-import { BellRingIcon, CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { BellRingIcon, CheckIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 
@@ -139,6 +139,13 @@ export default function Reminders() {
 }
 
 function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Promise<void> }) {
+  const toast = useToastManager();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [when, setWhen] = useState(reminder.remind_on);
+  const [note, setNote] = useState(reminder.note ?? "");
+  const [title, setTitle] = useState(reminder.title ?? "");
+
   const done = async () => {
     await api(`/reminders/${reminder.id}`, { method: "PATCH", body: JSON.stringify({ done: true }) });
     await onChanged();
@@ -151,6 +158,83 @@ function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Pro
   // Exactly one of the two is ever set — a task-anchored reminder has no
   // `title` column value, a standalone one has no task (ck_reminders_one_anchor).
   const label = reminder.task_title ?? reminder.title ?? "Reminder";
+  const standalone = reminder.task_id === null;
+
+  const startEditing = () => {
+    // Seeded here rather than left to `useState`'s initial value, which runs
+    // once and would hand you last week's date after a save — the same
+    // stale-local-state trap the task screen documents for its own editors.
+    setWhen(reminder.remind_on);
+    setNote(reminder.note ?? "");
+    setTitle(reminder.title ?? "");
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      // Only what this reminder actually has. A task-anchored one has no
+      // title to send, and `update_one` ignores the field for one anyway —
+      // but sending it would still be the client asserting something about
+      // a shape it doesn't have.
+      const body: Record<string, unknown> = { remind_on: when, note };
+      if (standalone) body.title = title;
+      await api(`/reminders/${reminder.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setEditing(false);
+      await onChanged();
+      toast.add({ title: "Reminder updated" });
+    } catch (err) {
+      const detail =
+        err instanceof ApiError ? (JSON.parse(err.body).detail as string) : "Try again.";
+      toast.add({ title: "Couldn't save that", description: detail });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="space-y-2 rounded-lg border p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            type="date"
+            aria-label={`Date for ${label}`}
+            className="w-40"
+            value={when}
+            onChange={(e) => setWhen(e.target.value)}
+          />
+          {standalone ? (
+            <Input
+              aria-label={`Title for ${label}`}
+              className="min-w-40 flex-1"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{label}</span>
+          )}
+        </div>
+        <Input
+          aria-label={`Note for ${label}`}
+          placeholder="What about?"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void save()}
+        />
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+          {/* Moving the date clears the "already notified" stamps server-side,
+              which is what makes snoozing actually notify again — see
+              services/reminders.py. */}
+          <Button size="sm" disabled={busy || !when} onClick={() => void save()}>
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
@@ -180,6 +264,9 @@ function Row({ reminder, onChanged }: { reminder: Reminder; onChanged: () => Pro
       <Button size="sm" variant="outline" aria-label={`Done with ${label}`} onClick={done}>
         <CheckIcon />
         Done
+      </Button>
+      <Button size="sm" variant="ghost" aria-label={`Edit ${label}`} onClick={startEditing}>
+        <PencilIcon />
       </Button>
       <Button size="sm" variant="ghost" aria-label={`Delete reminder for ${label}`} onClick={remove}>
         <Trash2Icon />

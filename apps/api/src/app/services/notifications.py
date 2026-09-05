@@ -36,8 +36,17 @@ async def notify(
     title: str,
     body: str | None = None,
     link_path: str | None = None,
+    organisation_id: uuid.UUID | None = None,
 ) -> Notification | None:
     """Write one notification and queue its email nudge.
+
+    `organisation_id` is what lets the email go to the address chosen for
+    *that* organisation rather than the account's own — see
+    `notification_channels.email_for_organisation`. Every caller has it: they
+    have just built a `/orgs/{id}/…` link with it. Optional only because
+    nothing structurally requires a notification to belong to one, and a
+    caller that genuinely doesn't have one should send to the account
+    address rather than guess.
 
     Never raises. A notification is a side effect of something that already
     happened and committed; failing the caller's request because the inbox row
@@ -45,7 +54,12 @@ async def notify(
     """
     try:
         row = Notification(
-            user_id=user_id, kind=kind, title=title, body=body, link_path=link_path
+            user_id=user_id,
+            kind=kind,
+            title=title,
+            body=body,
+            link_path=link_path,
+            organisation_id=organisation_id,
         )
         db.add(row)
         await db.commit()

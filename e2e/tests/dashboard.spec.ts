@@ -121,3 +121,47 @@ test.describe("the dashboard", () => {
     await expect(page.getByLabel("Status")).toHaveValue("Heads-down on the refit");
   });
 });
+
+/**
+ * Where each organisation's notifications are emailed.
+ *
+ * The HTTP suite proves the routing by reading Mailpit and checking the
+ * address a real notification was delivered to. What only a browser shows is
+ * the part that makes the rule legible: an empty box whose placeholder is
+ * your account address, so "unset" reads as "goes to me" without a second
+ * column explaining it.
+ */
+test.describe("email per organisation", () => {
+  test("an empty box shows the account address it falls back to", async ({ page }) => {
+    const email = uniqueEmail("orgmail");
+    await signUp(page, email);
+    await createOrg(page, `Alpha ${Date.now()}`);
+
+    await page.goto("/account");
+    const card = page.getByRole("region", { name: "Email per organisation" });
+    const field = card.getByRole("textbox", { name: /^Email for Alpha/ });
+    await expect(field).toHaveValue("");
+    await expect(field).toHaveAttribute("placeholder", email);
+
+    await field.fill("elsewhere@example.com");
+    await field.blur();
+    await expect(page.getByRole("heading", { name: "Saved" })).toBeVisible();
+
+    await page.reload();
+    const again = page
+      .getByRole("region", { name: "Email per organisation" })
+      .getByRole("textbox", { name: /^Email for Alpha/ });
+    await expect(again).toHaveValue("elsewhere@example.com");
+
+    // Clearing it is how you go back — the same act, not a separate control.
+    await again.fill("");
+    await again.blur();
+    await expect(page.getByRole("heading", { name: "Back to your account address" })).toBeVisible();
+    await page.reload();
+    await expect(
+      page
+        .getByRole("region", { name: "Email per organisation" })
+        .getByRole("textbox", { name: /^Email for Alpha/ }),
+    ).toHaveAttribute("placeholder", email);
+  });
+});

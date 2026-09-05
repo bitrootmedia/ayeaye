@@ -507,6 +507,7 @@ async def create(
             kind=KIND_ACTION_REQUIRED,
             title=f"{_who(user)} needs you on “{title}”",
             link_path=f"/orgs/{ctx.organisation.id}/tasks/{task.id}",
+            organisation_id=ctx.organisation.id,
         )
     if task.owner_user_id != user.id:
         await notifications.notify(
@@ -515,6 +516,7 @@ async def create(
             kind=KIND_TASK_OWNER,
             title=f"{_who(user)} made you the owner of “{title}”",
             link_path=f"/orgs/{ctx.organisation.id}/tasks/{task.id}",
+            organisation_id=ctx.organisation.id,
         )
 
     # A new task is a change to the organisation's board like any other, and
@@ -761,6 +763,7 @@ async def update(
             kind=KIND_ACTION_REQUIRED,
             title=f"{_who(user)} needs you on “{task.title}”",
             link_path=link,
+            organisation_id=ctx.organisation.id,
         )
     if notify_new_owner:
         await notifications.notify(
@@ -769,6 +772,7 @@ async def update(
             kind=KIND_TASK_OWNER,
             title=f"{_who(user)} made you the owner of “{task.title}”",
             link_path=link,
+            organisation_id=ctx.organisation.id,
         )
     if notify_handback:
         await notifications.notify(
@@ -778,6 +782,7 @@ async def update(
             title=f"Back to you: “{task.title}”",
             body="Nobody else needs to act on this anymore.",
             link_path=link,
+            organisation_id=ctx.organisation.id,
         )
     return task
 
@@ -822,6 +827,7 @@ async def set_open(
                 kind=KIND_TASK_CLOSED,
                 title=f"{_who(user)} closed “{task.title}”",
                 link_path=f"/orgs/{ctx.organisation.id}/tasks/{task.id}",
+            organisation_id=ctx.organisation.id,
             )
     return task
 
@@ -974,6 +980,7 @@ async def grant(
             kind=KIND_TASK_SHARED,
             title=f"{_who(user)} shared “{tctx.task.title}” with you",
             link_path=f"/orgs/{ctx.organisation.id}/tasks/{tctx.task.id}",
+            organisation_id=ctx.organisation.id,
         )
     return row
 

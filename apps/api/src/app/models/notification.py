@@ -95,6 +95,23 @@ class Notification(Base):
     # Where to go. Relative, so it works whatever hostname this is deployed on.
     link_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # Which organisation this is about. Nullable because nothing structurally
+    # requires one — but in practice every notification this product raises
+    # is organisation-scoped, and every call site has the id to hand because
+    # it just built a `/orgs/{id}/…` link with it.
+    #
+    # It exists so an email can be routed to the address chosen *for that
+    # organisation* (`organisation_members.notification_email`). Deliberately
+    # a real column rather than parsing the id back out of `link_path`: a
+    # value recovered from a display string is a second answer that can
+    # disagree with the first, and this one decides where mail goes.
+    #
+    # CASCADE: an organisation's notifications are about things that no
+    # longer exist once it is deleted.
+    organisation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=True
+    )
+
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set once the nudge has actually gone. It is the guard that stops a taskiq
     # retry sending the same message twice.

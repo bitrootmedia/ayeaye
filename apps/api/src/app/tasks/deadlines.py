@@ -60,6 +60,7 @@ async def _notify(db, task_id) -> int:
             kind=KIND_DEADLINE_TOMORROW,
             title=f"Due tomorrow: “{task.title}”",
             link_path=link,
+            organisation_id=task.organisation_id,
         )
         sent += 1
     return sent

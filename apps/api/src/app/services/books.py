@@ -288,6 +288,7 @@ async def grant(
             kind=KIND_BOOK_SHARED,
             title=f"{_who(granted_by)} shared “{bctx.book.name}” with you",
             link_path=f"/orgs/{ctx.organisation.id}/kb/books/{bctx.book.id}",
+            organisation_id=ctx.organisation.id,
         )
     return row
 

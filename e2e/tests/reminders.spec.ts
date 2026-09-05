@@ -85,4 +85,61 @@ test.describe("reminders", () => {
     });
     expect(me.timezone).toBeTruthy();
   });
+
+  /**
+   * Reported: reminders couldn't be edited.
+   *
+   * The endpoint always accepted the change — `PATCH /reminders/{id}` takes
+   * the date, the note and a standalone one's title — so this was a missing
+   * control, not a missing feature. Both surfaces get it, because a reminder
+   * on a task is most likely edited on that task.
+   */
+  test("one on a task can be moved and re-worded in place", async ({ page }) => {
+    await signUp(page, uniqueEmail("rmedit"));
+    const orgId = await createOrg(page, `Remind ${Date.now()}`);
+    await createTask(page, orgId, "Windlass service");
+    await openTask(page, orgId, "Windlass service");
+
+    await page.getByLabel("Remind me on").fill(inDays(30));
+    await page.getByLabel("What about").fill("Order the spare");
+    await page.getByRole("button", { name: "Add reminder" }).click();
+    await expect(page.getByText("Order the spare")).toBeVisible();
+
+    const panel = page.getByRole("region", { name: "Reminders" });
+    await page.getByRole("button", { name: /^Edit the reminder for/ }).click();
+    await page.getByLabel(/^Date for the reminder/).fill(inDays(60));
+    await page.getByLabel(/^Note for the reminder/).fill("Order two spares");
+    // Scoped: the Details card on this same screen has its own Save button.
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Reminder updated" })).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByText("Order two spares")).toBeVisible();
+    await expect(panel.getByText(inDays(60))).toBeVisible();
+  });
+
+  test("a standalone one can have its title changed too", async ({ page }) => {
+    await signUp(page, uniqueEmail("rmedit"));
+    await createOrg(page, `Remind ${Date.now()}`);
+
+    await page.goto("/reminders");
+    await page.getByRole("button", { name: "New reminder" }).first().click();
+    const dialog = page.locator('[data-slot="dialog-content"]');
+    await dialog.getByLabel("What about", { exact: true }).fill("Renew the mooring");
+    await dialog.getByLabel("Remind me on").fill(inDays(20));
+    await dialog.getByRole("button", { name: "Set reminder" }).click();
+    await expect(page.getByText("Renew the mooring")).toBeVisible();
+
+    await page.getByRole("button", { name: /^Edit Renew the mooring/ }).click();
+    // The title is only editable on a standalone reminder: a task-anchored
+    // one takes its name from the task (ck_reminders_one_anchor).
+    await page.getByLabel(/^Title for/).fill("Renew the mooring fee");
+    await page.getByLabel(/^Note for/).fill("Harbour office, before April");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Reminder updated" })).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByText("Renew the mooring fee")).toBeVisible();
+    await expect(page.getByText("Harbour office, before April")).toBeVisible();
+  });
 });

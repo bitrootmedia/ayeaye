@@ -837,6 +837,19 @@ export type TaskRevision = {
   created_at: string;
 };
 
+/** Where one organisation's notification emails go, for you.
+ *
+ *  `email` is the override you set, or null. `effective` is where mail would
+ *  actually be addressed right now — the override if there is one, otherwise
+ *  your account address. Both, because the client should not have to
+ *  reimplement the fallback rule to show what is happening. */
+export type OrganisationEmail = {
+  organisation_id: string;
+  organisation_name: string;
+  email: string | null;
+  effective: string | null;
+};
+
 export type ArticleRevision = {
   id: string;
   article_id: string;

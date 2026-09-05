@@ -56,6 +56,7 @@ async def _notify(db, user_id, *, tz_name: str) -> int:
             title=f"Your day in {org.organisation_name}",
             body="\n".join(lines),
             link_path=f"/orgs/{org.organisation_id}/planner",
+            organisation_id=org.organisation_id,
         )
         sent += 1
     return sent

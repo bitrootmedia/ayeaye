@@ -602,6 +602,18 @@ Two more that will bite:
 - **Moving a reminder clears both stamps.** Otherwise snoozing until next week
   silences it permanently.
 
+**Reminders are editable, from both surfaces.** The date, the note, and a
+standalone one's title — `PATCH /reminders/{id}` always accepted all three,
+so the gap was a missing control rather than a missing feature, and it
+presented as "I can only delete it and retype it". Edited in place rather
+than in a dialog: two or three short fields don't earn a modal, and the row
+is where you are already looking. The task panel offers no title field,
+because a task-anchored reminder takes its name from its task
+(`ck_reminders_one_anchor`) and there is nothing there to edit. Both
+editors reseed their fields when opened rather than trusting `useState`'s
+initial value — the same stale-local-state trap `Keyed` fixes for the task
+screen, which here would hand you last week's date on a second edit.
+
 **A reminder doesn't need a task.** `ck_reminders_one_anchor`
 (`num_nonnulls(task_id, title) = 1`) is the same one-of-two-anchors idiom
 `attachments` and `conversations` already use — a standalone reminder carries
@@ -2494,6 +2506,37 @@ fix in both cases was to use Playwright's auto-retrying assertions
 Read `services/notification_channels.py`. Telegram and a generic webhook,
 alongside email — configurable per notification kind, from `/account`.
 
+**Which address, per organisation, with the account's as the fallback.**
+`organisation_members.notification_email` is where one person wants *this*
+organisation's mail to go. On the membership rather than in a table of its
+own, because a membership already **is** "this person, in this
+organisation" — the exact scope of the override — so it needs no cleanup
+when somebody leaves. NULL means the account address; there is no third
+state, and `resolve_email` treats blank, whitespace and absent as the same
+intention, because a saved-but-empty field is how mail starts going
+nowhere.
+
+Reaching it at send time needed `notifications.organisation_id`, which is
+new — every notification this product raises is organisation-scoped and
+every call site had the id in hand (it had just built a `/orgs/{id}/…`
+link with it), so this records something the sender already knew and used
+to throw away. **A real column rather than parsing the id back out of
+`link_path`**: a value recovered from a display string is a second answer
+that can disagree with the first, and this one decides where mail goes.
+The address is resolved in the worker, not stamped on the notification when
+it was raised — an override changed this morning should apply to a nudge
+queued last night, and the queue is exactly where a stale copy would sit.
+
+**Set from the Account screen, never by an admin.**
+`set_email_for_organisation` takes the caller's own `User` and looks up
+their own active membership; there is no branch that lets somebody redirect
+a colleague's mail, which would be a rather effective way to read it. Note
+that signup addresses are unverified in this product (there is no
+`emailverification` recipe), so an override to an arbitrary address grants
+nothing that signing up with that address doesn't already — which is why
+there's no confirmation flow here. The day email verification arrives, this
+should get one too.
+
 **Email becomes a row in `notification_channels`, not a special case beside
 it.** Every user gets one, auto-provisioned lazily the first time anything
 needs to notify them (`get_or_create_email_channel`, the identical lazy
@@ -3659,6 +3702,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
 ./scripts/e2e-task-revisions.sh         # what a save replaced, one row per save, restoring is write
 ./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
+./scripts/e2e-notification-emails.sh    # per-organisation address, proved against what Mailpit received
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
 ./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
 ./scripts/e2e-kb.sh                     # book access, private-article vanish, revision sessions, search

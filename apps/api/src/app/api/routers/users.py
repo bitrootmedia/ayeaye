@@ -20,6 +20,7 @@ from app.security.authn import MfaPendingSession, mark_mfa_satisfied
 from app.services import mfa as mfa_service
 from app.services import notification_channels as channels_service
 from app.services import oauth as oauth_service
+from app.services import organisations as orgs_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
 from app.services import working_hours as working_hours_service
@@ -409,6 +410,73 @@ def _channel_out(row) -> NotificationChannelOut:
         default_organisation_id=row.config.get("default_organisation_id")
         if row.kind == "telegram"
         else None,
+    )
+
+
+class OrganisationEmailOut(BaseModel):
+    """One organisation, and where its mail goes for you.
+
+    `email` is the override or None; `effective` is what an email would
+    actually be addressed to right now. Both, because "unset" and "set to
+    the same thing as the account" look identical in the UI otherwise, and
+    the second answers "so where does it go?" without the client having to
+    reimplement the fallback rule.
+    """
+
+    organisation_id: str
+    organisation_name: str
+    email: str | None
+    effective: str | None
+
+
+class OrganisationEmailIn(BaseModel):
+    # Blank or absent clears the override. Same act, same result — see
+    # `notification_channels.normalise_override`.
+    email: str | None = None
+
+
+@router.get("/me/notification-emails", response_model=list[OrganisationEmailOut])
+async def list_notification_emails(user: CurrentUser, db: DbSession):
+    """Where each of your organisations' notifications are sent.
+
+    Every active membership, whether or not it has an override — the list is
+    the place you set them, so an organisation missing from it would be an
+    organisation you cannot configure.
+    """
+    rows = await orgs_service.list_for_user(db, user)
+    memberships = await channels_service.overrides_for(db, user)
+    return [
+        OrganisationEmailOut(
+            organisation_id=str(org.id),
+            organisation_name=org.name,
+            email=memberships.get(org.id),
+            effective=channels_service.resolve_email(user.email, memberships.get(org.id)),
+        )
+        for org, _role in rows
+    ]
+
+
+@router.put("/me/notification-emails/{organisation_id}", response_model=OrganisationEmailOut)
+async def set_notification_email(
+    organisation_id: uuid.UUID, body: OrganisationEmailIn, user: CurrentUser, db: DbSession
+):
+    """Send this organisation's notifications somewhere else. Blank to stop.
+
+    Only ever your own membership — see the service. An admin redirecting a
+    colleague's mail would be a rather effective way to read it.
+    """
+    stored = await channels_service.set_email_for_organisation(
+        db, user=user, organisation_id=organisation_id, email=body.email
+    )
+    # `context_for` is the one gate every organisation-scoped read goes
+    # through, and it 404s rather than 403s for a stranger — the same answer
+    # the service above gives for a membership that isn't yours.
+    ctx = await orgs_service.context_for(db, organisation_id, user)
+    return OrganisationEmailOut(
+        organisation_id=str(organisation_id),
+        organisation_name=ctx.organisation.name,
+        email=stored,
+        effective=channels_service.resolve_email(user.email, stored),
     )
 
 

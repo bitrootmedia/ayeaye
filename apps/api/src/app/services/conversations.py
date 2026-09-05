@@ -309,6 +309,7 @@ async def _announce(
             kind=KIND_TASK_SHARED if thread.anchor_kind == "task" else "project_shared",
             title=f"{who} commented on “{thread.anchor_title}”",
             link_path=link,
+            organisation_id=ctx.organisation.id,
         )
 
 

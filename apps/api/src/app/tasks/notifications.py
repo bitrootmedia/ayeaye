@@ -13,6 +13,7 @@ from app.core import mailer
 from app.core.config import settings
 from app.db import SessionLocal
 from app.models import Notification, User
+from app.services import notification_channels as channels_service
 from app.tasks.broker import broker
 
 logger = logging.getLogger("app.tasks.notifications")
@@ -44,10 +45,23 @@ async def send_notification_email(notification_id: str) -> None:
             # person has demonstrably read.
             logger.info("notification %s already read, not emailing", notification_id)
             return
-        to = user.email
+        # Where this organisation's mail goes, which is the account address
+        # unless they have said otherwise for this one. Resolved here rather
+        # than stamped onto the notification when it was raised: an override
+        # changed this morning should apply to a nudge queued last night,
+        # and the queue is exactly where a stale copy would sit.
+        to = await channels_service.email_for_organisation(
+            db, user=user, organisation_id=notification.organisation_id
+        )
         title = notification.title
         body = notification.body or ""
         link = f"{settings.site_url}{notification.link_path or ''}"
+
+    if not to:
+        # An account with no address at all. Nothing to do, and nothing worth
+        # retrying — marking it emailed would be a lie, so it simply isn't.
+        logger.info("notification %s has nowhere to go", notification_id)
+        return
 
     paragraphs = [title]
     if body:
