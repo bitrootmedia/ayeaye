@@ -34,7 +34,7 @@ import { FilesPanel } from "@/components/files-panel";
 import { TimePanel } from "@/components/time-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -56,7 +56,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { useToastManager } from "@/components/ui/toast";
-import { timestamp } from "@/lib/format";
+import { ago, timestamp } from "@/lib/format";
 import {
   LEVEL_LABEL,
   PLANNER_BUCKETS,
@@ -74,29 +74,30 @@ import {
   type Task,
   type TaskAccess,
   type TaskEvent,
+  type TaskRevision,
   type Team,
   type TaskPriority,
   type TaskStatus,
 } from "@/lib/types";
 
 /**
- * The three panels that stay collapsed until they hold something.
+ * The five panels that stay collapsed until they hold something.
  *
  * Labels are what the button says after the plus, so they read as the thing
  * being added ("+ Checklist") rather than as the card's own plural heading —
  * except "Depends on", which has no singular worth inventing and is what the
  * card is actually called. Order matches the order they render in, so the
- * card appears directly above the button that revealed it.
+ * card appears directly above or below the button that revealed it.
  */
 const EXTRAS = [
   { key: "checklists", label: "Checklist" },
   { key: "sheets", label: "Sheet" },
   { key: "dependencies", label: "Depends on" },
   { key: "files", label: "Files" },
-  // Not in the row with the others: its card is at the very bottom of the
-  // column, and a button up here would reveal something below the fold —
-  // which reads as a button that did nothing. It gets its own button, in
-  // the place its card appears. See `noteButton` below.
+  // In the row with the other four, which is why its card sits directly
+  // under Files rather than last on the page — a button whose card is
+  // below the fold reads as a button that did nothing. It's also the one
+  // entry offered to a read-only viewer; see `collapsedExtras`.
   { key: "note", label: "Private note" },
 ] as const;
 
@@ -162,6 +163,23 @@ export default function TaskDetail() {
   // dialog a habitual double-click sails through.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  // Bumped only by a restore, to force `Details` to remount and reseed its
+  // editor from the task it has just been handed.
+  //
+  // `Details` holds the title and the description in `useState(task.title)`,
+  // which runs on mount and never again — the same fact behind the stale-
+  // title bug `Keyed` in main.tsx fixes for navigation between two tasks.
+  // Here there is no navigation, so no route key to lean on: refetching the
+  // task updates every field fed straight from props while the editor keeps
+  // showing the text the restore just replaced, which looks exactly like a
+  // restore that silently did nothing. Deliberately *not* keyed on
+  // `task.updated_at` — that changes on every save, every comment and every
+  // realtime nudge, and remounting the editor under someone mid-sentence
+  // would throw away what they were typing. A restore is the one moment
+  // discarding the editor's contents is the correct thing to do, because
+  // replacing them is what was asked for.
+  const [detailsKey, setDetailsKey] = useState(0);
 
   const load = useCallback(async () => {
     if (!orgId || !taskId) return;
@@ -532,9 +550,25 @@ export default function TaskDetail() {
           <Card>
             <CardHeader>
               <CardTitle>Details</CardTitle>
+              {/* "Versions", not "History" — the History card on this same
+                  screen is the append-only trail of what happened, and two
+                  controls with one name would leave people guessing which
+                  is which. This one is specifically the recoverable text. */}
+              <CardAction>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  onClick={() => setVersionsOpen(true)}
+                >
+                  <HistoryIcon />
+                  Versions
+                </Button>
+              </CardAction>
             </CardHeader>
             <CardContent>
               <Details
+                key={detailsKey}
                 task={task}
                 orgId={org.id}
                 editable={editable}
@@ -910,7 +944,208 @@ export default function TaskDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VersionsDialog
+        open={versionsOpen}
+        onOpenChange={setVersionsOpen}
+        orgId={org.id}
+        taskId={task.id}
+        canRestore={editable}
+        onRestored={async () => {
+          setVersionsOpen(false);
+          // In this order: the task first, then the remount, so `Details`
+          // reseeds from the restored content rather than from what it was
+          // still holding.
+          await load();
+          setDetailsKey((k) => k + 1);
+          toast.add({ title: "Restored" });
+        }}
+      />
     </>
+  );
+}
+
+/**
+ * One line of a version's prose, for telling two versions apart in a list.
+ *
+ * The same tags-to-spaces strip Postgres does for `tasks.description_text`,
+ * and for the same reason: what a person recognises is the words, not the
+ * markup around them. A regex rather than `innerHTML` + `textContent` — the
+ * input is already sanitised, so parsing it would be safe, but building a
+ * DOM node to read one label off is more machinery than this needs. Only the
+ * four entities the sanitiser actually emits are decoded; anything rarer
+ * showing up as `&hellip;` in a preview line is a cosmetic cost worth
+ * paying to keep this a pure function.
+ */
+function snippet(html: string | null): string {
+  if (!html) return "";
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Every version of the title and description a save has replaced.
+ *
+ * The recovery surface: somebody overwrote a description and the text needs
+ * to come back. Modelled on the knowledge base's own history dialog, with
+ * one difference that matters — an article's newest revision *is* its live
+ * body, so that list shows a "Current" row; here the newest row is the
+ * version replaced by the most recent save, and the live text is on the
+ * screen behind this dialog. So no row is ever the current one, and an
+ * unedited task correctly has nothing to show.
+ *
+ * Fetched on open rather than with the task: descriptions are the largest
+ * thing a task carries, and the overwhelming majority of visits never ask
+ * for the old ones.
+ */
+function VersionsDialog({
+  open,
+  onOpenChange,
+  orgId,
+  taskId,
+  canRestore,
+  onRestored,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  orgId: string;
+  taskId: string;
+  canRestore: boolean;
+  onRestored: () => void | Promise<void>;
+}) {
+  const toast = useToastManager();
+  const [revisions, setRevisions] = useState<TaskRevision[] | null>(null);
+  const [viewing, setViewing] = useState<TaskRevision | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      // Cleared on close, so reopening never shows a stale list — a save
+      // made in between would otherwise be missing from it.
+      setRevisions(null);
+      setViewing(null);
+      return;
+    }
+    void api<TaskRevision[]>(`/organisations/${orgId}/tasks/${taskId}/revisions`).then(
+      setRevisions,
+      // A failed fetch leaves the spinner rather than blanking the dialog;
+      // the list is not something a retry loop should be built around.
+      () => setRevisions([]),
+    );
+  }, [open, orgId, taskId]);
+
+  const restore = async (revision: TaskRevision) => {
+    setBusy(true);
+    try {
+      await api(`/organisations/${orgId}/tasks/${taskId}/revisions/${revision.id}/restore`, {
+        method: "POST",
+      });
+      await onRestored();
+    } catch {
+      toast.add({ title: "That didn't work", description: "Try again." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>{viewing ? "Earlier version" : "Versions"}</DialogTitle>
+          <DialogDescription>
+            {viewing
+              ? `What this task said until ${personName(viewing.replaced_by)} saved over it, ${ago(viewing.created_at)}.`
+              : "Every version a save has replaced, newest first. The task's current text is on the screen behind this."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {viewing ? (
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+            <Button variant="ghost" size="sm" onClick={() => setViewing(null)}>
+              Back to the list
+            </Button>
+            <div className="space-y-1">
+              <Label>Title</Label>
+              <p className="text-sm">{viewing.title}</p>
+            </div>
+            <div className="space-y-1">
+              <Label>Description</Label>
+              {viewing.description ? (
+                <RichText html={viewing.description} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  This version had no description.
+                </p>
+              )}
+            </div>
+          </div>
+        ) : revisions === null ? (
+          <div className="flex justify-center py-8">
+            <Spinner />
+            <span className="sr-only">Loading</span>
+          </div>
+        ) : revisions.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            Nothing has been saved over yet. Every future edit to the title or the description
+            keeps what it replaced, so it can be put back from here.
+          </p>
+        ) : (
+          <ul className="min-h-0 flex-1 divide-y overflow-y-auto">
+            {revisions.map((rev) => (
+              <li key={rev.id} className="flex items-center gap-3 py-2.5">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 rounded-md px-1 py-1 text-left hover:bg-accent/50"
+                  onClick={() => setViewing(rev)}
+                >
+                  <span className="block truncate text-sm">{rev.title}</span>
+                  {/* The snippet is what makes this list usable at all.
+                      Several versions of one task routinely share a title —
+                      a description edited three times gives three rows whose
+                      title, author and even minute are identical, and
+                      picking the right one by clicking through each is not
+                      recovery, it's a guessing game. */}
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {snippet(rev.description) || "No description"}
+                  </span>
+                  <span className="block text-xs text-muted-foreground/70">
+                    replaced by {personName(rev.replaced_by)} · {ago(rev.created_at)}
+                  </span>
+                </button>
+                {canRestore && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    className="shrink-0"
+                    onClick={() => void restore(rev)}
+                  >
+                    Restore
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <DialogFooter className="shrink-0">
+          {viewing && canRestore && (
+            <Button disabled={busy} onClick={() => void restore(viewing)}>
+              Restore this version
+            </Button>
+          )}
+          <DialogClose render={<Button variant="ghost" />}>Close</DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1279,6 +1514,13 @@ function describeEvent(event: TaskEvent): string {
       return `${who} created this task`;
     case "renamed":
       return `${who} renamed it from “${d.was}”`;
+    // No old text in either of these: a description is far too big for the
+    // event's own `data`. It's in Versions, on the Details card, which is
+    // where both lines point people.
+    case "description_changed":
+      return `${who} edited the description — earlier versions are under Versions`;
+    case "restored":
+      return `${who} restored an earlier version of the title and description`;
     case "status_changed":
       return `${who} moved it to ${STATUS_LABEL[d.now as TaskStatus] ?? d.now}`;
     case "hidden":

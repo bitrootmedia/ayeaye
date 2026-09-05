@@ -821,6 +821,22 @@ export type Article = {
   access: AccessLevel;
 };
 
+/** A version of a task's content that a save replaced.
+ *
+ *  `replaced_by` and `created_at` describe the *overwrite*, not who wrote the
+ *  text — "this is what the task said until they saved over it at 14:03",
+ *  which is the question somebody asks when their description has vanished.
+ *  Unlike `ArticleRevision`, the newest row here is **not** the live content:
+ *  the task itself holds that. */
+export type TaskRevision = {
+  id: string;
+  title: string;
+  /** Sanitised HTML — render with `RichText`, like any task description. */
+  description: string | null;
+  replaced_by: Person | null;
+  created_at: string;
+};
+
 export type ArticleRevision = {
   id: string;
   article_id: string;

@@ -263,6 +263,21 @@ class TaskEventOut(BaseModel):
     created_at: datetime
 
 
+class TaskRevisionOut(BaseModel):
+    """A version of the content that a save replaced.
+
+    `replaced_by` and `created_at` describe the overwrite, not the authorship
+    of the text in it — "this is what the task said until they saved over it".
+    See `models/task_revision.py`.
+    """
+
+    id: str
+    title: str
+    description: str | None
+    replaced_by: PersonOut | None
+    created_at: datetime
+
+
 class TaskAccessOut(BaseModel):
     """Everyone who can see this task, and how.
 

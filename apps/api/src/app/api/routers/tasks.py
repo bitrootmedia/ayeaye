@@ -58,6 +58,7 @@ from app.schemas.tasks import (
     TaskOut,
     TaskRecurrenceIn,
     TaskRecurrenceOut,
+    TaskRevisionOut,
     TaskSummaryOut,
     TaskUpdate,
 )
@@ -1215,6 +1216,52 @@ async def task_history(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, d
         )
         for event, actor in await tasks_service.list_events(db, task_id)
     ]
+
+
+# --- revisions -------------------------------------------------------------------
+
+
+@router.get("/tasks/{task_id}/revisions", response_model=list[TaskRevisionOut])
+async def task_revisions(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Every version of the title and description a save has replaced.
+
+    Seeing the task is enough — this is the task's own content, not a personal
+    record, and somebody with `read` who watched a description they contributed
+    get overwritten is exactly who needs to look it up. Putting one back is
+    `write`, on the restore endpoint below.
+    """
+    await tasks_service.context_for(db, ctx, task_id, user)
+    return [
+        TaskRevisionOut(
+            id=str(revision.id),
+            title=revision.title,
+            description=revision.description,
+            replaced_by=_person(who),
+            created_at=revision.created_at,
+        )
+        for revision, who in await tasks_service.list_revisions(db, task_id)
+    ]
+
+
+@router.post("/tasks/{task_id}/revisions/{revision_id}/restore", response_model=TaskOut)
+async def restore_task_revision(
+    task_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """Put an earlier version's title and description back.
+
+    No re-resolution of the caller's level afterwards, unlike `PATCH /tasks`:
+    a restore only ever touches title and description, neither of which is a
+    route into the task, so there is no way for this call to take away the
+    access that made it — the case that handler's `try/except HTTPException`
+    exists for cannot arise here.
+    """
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    await tasks_service.restore_revision(db, tctx, ctx, user, revision_id)
+    return await _task_response(db, ctx, tctx, user)
 
 
 # --- dependencies ----------------------------------------------------------------

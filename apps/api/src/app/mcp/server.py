@@ -295,6 +295,44 @@ async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
 
 
 @mcp.tool()
+async def task_versions(ctx: Context, organisation_id: str, task_id: str) -> str:
+    """Earlier versions of a task's title and description, newest first.
+
+    Every version a save replaced, for "what did this say before somebody
+    overwrote it". Read-only — restoring one is deliberately not a tool: it
+    silently replaces text somebody is working on, and the person asking is
+    better served by the words back in front of them than by an assistant
+    picking a version for them. Copy the one they want into `update_task`
+    if that is what they actually ask for.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        revisions = await tasks_service.list_revisions(db, tctx.task.id)
+        if not revisions:
+            return "Nothing has been saved over on this task yet."
+        lines = [f"Earlier versions of {tctx.task.title}  [{tctx.task.id}]", ""]
+        for revision, who in revisions:
+            lines.append(
+                f"{revision.created_at:%Y-%m-%d %H:%M} — replaced by "
+                f"{who.email if who else 'someone since removed'}"
+            )
+            lines.append(f"  title: {revision.title}")
+            # Stripped of markup, the same reason `task` above reads
+            # `description_text` rather than the stored HTML — there is no
+            # generated column here (history isn't searched), so this is
+            # `richtext`'s own converter doing the same job on demand.
+            body = richtext.to_plain_text(revision.description or "").strip()
+            lines.append(f"  description: {body or '(none)'}")
+            lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def activity(
     ctx: Context,
     organisation_id: str,

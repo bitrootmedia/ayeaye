@@ -55,6 +55,7 @@ from app.models.task import (
     EVENT_ACTION_REQUIRED_SET,
     EVENT_CLOSED,
     EVENT_CREATED,
+    EVENT_DESCRIPTION_CHANGED,
     EVENT_DUE_CHANGED,
     EVENT_HIDDEN,
     EVENT_MOVED,
@@ -62,12 +63,14 @@ from app.models.task import (
     EVENT_PRIORITY_CHANGED,
     EVENT_RENAMED,
     EVENT_REOPENED,
+    EVENT_RESTORED,
     EVENT_STATUS_CHANGED,
     EVENT_UNHIDDEN,
     PRIORITIES,
     PRIORITY_NORMAL,
     STATUSES,
 )
+from app.models.task_revision import TaskRevision
 from app.realtime import events as realtime
 from app.services import access, notifications, richtext
 from app.services.organisations import OrgContext
@@ -224,6 +227,80 @@ async def list_events(
         )
     ).all()
     return [(event, actor) for event, actor in rows]
+
+
+async def list_revisions(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[tuple[TaskRevision, User | None]]:
+    """Every version this task's content has been saved over, newest first.
+
+    Newest first, unlike `list_events` — history reads as a story oldest-first,
+    but recovery starts from "what did it say before the save that just
+    happened", so the row somebody wants is nearly always the newest one.
+
+    Not paged, deliberately: the same reasoning as `list_events` beside it. A
+    silent cap on a recovery surface is the one place a truncated answer is
+    actively harmful — the version you need would be the one missing.
+    """
+    rows = (
+        await db.execute(
+            select(TaskRevision, User)
+            .outerjoin(User, User.id == TaskRevision.replaced_by_user_id)
+            .where(TaskRevision.task_id == task_id)
+            .order_by(TaskRevision.id.desc())
+        )
+    ).all()
+    return [(revision, who) for revision, who in rows]
+
+
+async def restore_revision(
+    db: AsyncSession,
+    tctx: TaskContext,
+    ctx: OrgContext,
+    user: User,
+    revision_id: uuid.UUID,
+) -> Task:
+    """Put an earlier version's title and description back.
+
+    **A plain `update()`, not a second write path.** Everything that makes an
+    edit an edit — the `write` check, the snapshot of what this restore is
+    itself replacing (so a restore is undoable in turn), the history rows, the
+    realtime announce — is already in there and is not worth a second
+    implementation that can drift from the first. The only thing added here is
+    the `restored` event, so the trail says the content came back from a
+    version rather than being retyped from memory.
+
+    Scoped to this task, so a revision id from a task the caller can't see is
+    a 404 rather than a way to read its content.
+    """
+    revision = (
+        await db.execute(
+            select(TaskRevision).where(
+                TaskRevision.id == revision_id,
+                TaskRevision.task_id == tctx.task.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if revision is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
+
+    # Before `update()`, which is what commits it — the same "not committed
+    # here" contract `record()` already documents. Written first so the trail
+    # reads as the restore and then the changes it caused.
+    record(
+        db,
+        tctx.task,
+        user,
+        EVENT_RESTORED,
+        restored_from=revision.created_at.isoformat(),
+    )
+    return await update(
+        db,
+        tctx,
+        ctx,
+        user,
+        fields={"title": revision.title, "description": revision.description or ""},
+    )
 
 
 # --- reads ------------------------------------------------------------------------
@@ -500,21 +577,55 @@ async def update(
     notify_new_owner: uuid.UUID | None = None
     notify_handback = False
 
+    # Content, both fields together, ahead of everything else in this
+    # function — because a snapshot has to be taken from the *outgoing*
+    # values and there is exactly one per save, however many of the two
+    # actually moved. The Details card saves title and description in one
+    # PATCH, so one row per save is the honest granularity: two rows would
+    # claim two edits happened.
+    new_title: str | None = None
     if "title" in fields:
-        title = (fields["title"] or "").strip()
-        if not title:
+        new_title = (fields["title"] or "").strip()
+        if not new_title:
             raise HTTPException(
                 status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="a task needs a title",
             )
-        if title != task.title:
-            record(db, task, user, EVENT_RENAMED, was=task.title, now=title)
-            task.title = title
-
+    # Sanitised on the way in, always. The editor produces tidy HTML and that
+    # is irrelevant — anyone can PATCH a `<script>` with curl. Sanitising
+    # *before* the comparison also stops a save that only reformats markup
+    # into its already-stored equivalent from being recorded as an edit.
+    new_description: str | None = None
     if "description" in fields:
-        # Sanitised on the way in, always. The editor produces tidy HTML and
-        # that is irrelevant — anyone can PATCH a `<script>` with curl.
-        task.description = richtext.sanitise(fields["description"])
+        new_description = richtext.sanitise(fields["description"])
+
+    renamed = new_title is not None and new_title != task.title
+    # `or ""` on both sides: a task that has never had a description holds
+    # NULL, and the editor posts back "" for it — without normalising, opening
+    # such a task and pressing Save with nothing typed would record an edit
+    # from empty to empty, and leave a revision of nothing to recover.
+    redescribed = "description" in fields and (new_description or "") != (task.description or "")
+    if renamed or redescribed:
+        # What the task said until this save. Kept whether or not anybody
+        # ever asks for it, because by the time they ask it is too late to
+        # start keeping it — which is the entire bug this fixes.
+        db.add(
+            TaskRevision(
+                task_id=task.id,
+                title=task.title,
+                description=task.description,
+                replaced_by_user_id=user.id,
+            )
+        )
+    if renamed:
+        record(db, task, user, EVENT_RENAMED, was=task.title, now=new_title)
+        task.title = new_title  # type: ignore[assignment]
+    if redescribed:
+        # No `was`/`now` on this one: a description is far too big for `data`,
+        # which is only ever rendered. The text is in `task_revisions`; this
+        # row is the trail saying a save happened, and who made it.
+        record(db, task, user, EVENT_DESCRIPTION_CHANGED)
+        task.description = new_description
 
     if "status" in fields and fields["status"] != task.status:
         status = fields["status"]

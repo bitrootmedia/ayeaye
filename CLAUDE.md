@@ -81,8 +81,8 @@ reminders with a scheduler, the account screen, and an organisation dashboard.
 Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
-Verified by 303 infra-free unit tests, 534 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 127 browser tests in a real Chromium
+Verified by 303 infra-free unit tests, 555 end-to-end checks over HTTP
+(`./scripts/e2e-*.sh`) and 130 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -1315,6 +1315,95 @@ schema work. The only thing missing was rendering it, which is entirely a
   renders the current draft through the identical `RichText` the read-only
   view uses — one rendering path, not two.
 
+## Task versions — recovering a save somebody made over yours
+
+Read `models/task_revision.py`. Reported plainly: "sometimes somebody can
+overwrite that and it's a problem not being able to recover." They were
+right, and the gap was worse than it looked — a title change had always
+written a `renamed` event carrying `was`/`now`, so a title was at least
+readable out of the history, but **a description change wrote nothing at
+all.** No event, no old value, nowhere to look. Overwritten meant gone.
+
+**A row holds the content the save *replaced*, not the new content.** That
+one choice is what lets this table exist without a second answer to "what
+does this task say now": `tasks.title` and `tasks.description` stay the only
+source of the live version, and every row in `task_revisions` is strictly a
+version already overwritten. This is deliberately **not**
+`article_revisions`' shape, where the latest revision *is* the live body —
+that works for the knowledge base because an article's content lives in its
+revisions and nowhere else, but a task's lives on the task, and the newest
+row and the task row both claiming to be current is exactly the kind of
+disagreement this codebase keeps getting bitten by.
+
+The consequence to hold on to: `created_at` and `replaced_by_user_id`
+describe the **overwrite**, not the authorship of the text in the row —
+"this is what the task said until Bob saved over it at 14:03". Which is the
+question somebody asks when their description has vanished.
+
+- **One row per save, however many of the two fields moved.** The Details
+  card saves title and description in one `PATCH`, so the snapshot is taken
+  once, from the outgoing values, before either is applied. Two rows would
+  claim two edits happened.
+- **A save that changes nothing records nothing**, so the list stays a list
+  of real overwrites. The comparison normalises both sides with `or ""` —
+  a task that never had a description holds NULL while the editor posts
+  back `""` for it, and without that, opening such a task and pressing
+  Save with nothing typed would file a revision of nothing.
+- **Sanitised before the comparison, not after.** Same reason: a save that
+  only reformats markup into what is already stored isn't an edit.
+- **Reading is `read`, restoring is `write`.** Somebody with read-only
+  access who watched a description they contributed get overwritten is
+  exactly who needs to look it up — and copy-paste out of the dialog is a
+  legitimate recovery for them. Putting it back is an edit and clears the
+  ordinary bar.
+- **`restore_revision` is a plain `update()`, not a second write path.**
+  Everything that makes an edit an edit — the `write` check, the snapshot of
+  what the restore is *itself* replacing (so a restore is undoable in turn),
+  the history rows, the realtime announce — already lives there. The only
+  thing added is the `restored` event, so the trail says the text came back
+  from a version rather than being retyped from memory.
+- **No re-resolution of the caller's level after a restore**, unlike
+  `PATCH /tasks`. A restore only ever touches title and description, neither
+  of which is a route into the task, so the "you can lose your own access by
+  editing" case that handler's `try/except HTTPException` exists for cannot
+  arise here.
+- **Not paged, and no cap.** The same reasoning as `list_events` beside it,
+  but sharper: a silently truncated answer on a recovery surface means the
+  version you needed is the one missing.
+- **No `description_text` generated column**, unlike `article_revisions`'
+  `body_text` — search matches the live content only, the same "search the
+  live content, not history" rule the knowledge base already follows, so
+  there is nothing here to index.
+
+Two things on the frontend are worth knowing before touching it:
+
+- **It's called "Versions", not "History".** The History card on the same
+  screen is the append-only trail of *what happened*; this is the
+  recoverable *text*. Two controls with one name would leave people
+  guessing, and would make every `getByText("History")` in the browser
+  suite ambiguous.
+- **Each row carries a snippet of its own prose, and that is what makes the
+  list usable at all.** Several versions of one task routinely share a
+  title — a description edited three times gives three rows whose title,
+  author and even minute are identical, and picking the right one by
+  opening each in turn is a guessing game rather than recovery. Found
+  immediately, by a browser test that couldn't tell two rows apart either.
+- **Restoring has to remount `Details`, and a refetch alone will not do
+  it.** `Details` seeds the title and the description into
+  `useState(task.title)`, which runs on mount and never again — the same
+  fact behind the stale-title bug `Keyed` fixes for navigation between two
+  tasks. Here nothing navigates, so there's no route key to lean on:
+  `load()` updates every field fed straight from props while the editor
+  keeps showing the text the restore just replaced, which looks exactly
+  like a restore that silently did nothing. A `detailsKey` counter bumped
+  **after** `load()` resolves is what forces the reseed. Deliberately not
+  keyed on `task.updated_at`: that moves on every save, every comment and
+  every realtime nudge, and remounting the editor under somebody
+  mid-sentence would throw away what they were typing. A restore is the one
+  moment discarding the editor's contents is the right thing to do, because
+  replacing them is what was asked for. `rich-text.spec.ts` fails on
+  exactly this assertion with the key removed.
+
 ## MCP — somebody's own assistant
 
 Read `app/mcp/server.py`. **Every tool resolves through `services/access.py`,
@@ -1400,6 +1489,17 @@ which one argument was supplied; `update_reminder` mirrors the REST
 those service functions already resolve the task through
 `_readable_task()` internally, the identical reason `set_open` needed no
 separate `context_for` call either.
+
+**`task_versions` is read-only, and restoring is deliberately not a tool.**
+It reports the earlier versions of a task's title and description (see the
+Task versions section above), stripped to prose with `richtext.to_plain_text`
+the same way `task` reads `description_text` rather than stored HTML — there
+is no generated column on a revision, so the converter does that job on
+demand. What it won't do is put one back: a restore silently replaces text
+somebody may be working on, and a person asking "what did this say before"
+is better served by the words in front of them than by an assistant picking
+a version on their behalf. If they genuinely want it back, the text is right
+there to pass to `update_task`.
 
 Four things cost real time here, all of them non-obvious:
 
@@ -3523,6 +3623,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
 ./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
+./scripts/e2e-task-revisions.sh         # what a save replaced, one row per save, restoring is write
 ./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
 ./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
@@ -3567,6 +3668,21 @@ Writing browser tests here, three things bite every time:
   comment it was posted to. Both cards are named regions, so scope with
   `getByRole("region", { name: "Files" | "Comments" })` rather than reaching
   for `.first()`, which picks whichever happens to be earlier in the DOM.
+- **`getByRole("dialog")` also matches every toast on screen.** Base UI's
+  toast is `role="dialog" aria-modal="false"`, so an assertion scoped to
+  "the dialog" starts failing on strict mode the moment a test asserts a
+  toast and then opens a popup — which is the ordinary shape of "save,
+  then check the result". Scope with
+  `page.locator('[data-slot="dialog-content"]')` when a toast could still
+  be alive. Cost real time on the Versions dialog, where it looked like
+  the dialog hadn't opened.
+- **A test organisation named after the feature will collide with the
+  feature's own controls.** An org called `Versions 1788…` gave the
+  organisation switcher the accessible name "Versions 1788…", so
+  `getByRole("button", { name: "Versions" })` opened the org menu instead
+  of the dialog, and the failure screenshot showed a wide-open switcher
+  with no explanation. Name test orgs after nothing in particular, and use
+  `{ exact: true }` on button names that are also common words.
 - **A toast title and a history line often say the same thing.** "Moved" is
   both a toast and part of "… moved it to another project". Use
   `getByRole("heading", { name, exact: true })` for the toast.

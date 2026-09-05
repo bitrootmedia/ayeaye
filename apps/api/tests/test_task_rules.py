@@ -303,6 +303,12 @@ def test_event_kinds_cover_every_workflow_change():
         "owner_changed",
         "action_required_set",
         "action_required_cleared",
+        # Editing the description used to write nothing at all, which is
+        # what made an overwrite unrecoverable — the text itself lives in
+        # `task_revisions`, but the fact that a save happened belongs here
+        # with every other change.
+        "description_changed",
+        "restored",
     ):
         assert kind in EVENT_KINDS
 

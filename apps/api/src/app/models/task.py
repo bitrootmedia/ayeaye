@@ -112,6 +112,16 @@ EVENT_HIDDEN = "hidden"
 EVENT_UNHIDDEN = "unhidden"
 EVENT_DEPENDENCY_ADDED = "dependency_added"
 EVENT_DEPENDENCY_REMOVED = "dependency_removed"
+# Content. `renamed` has always carried the old and new title in its own
+# `was`/`now`, but a description change used to write **nothing at all** —
+# no event, no old value — so an overwritten description was gone for good.
+# The text itself is far too big for `data`, which is only ever rendered:
+# it lives in `task_revisions`, and this row is the trail that says a save
+# happened and who made it. `restored` is the other half, so putting an
+# earlier version back reads as a deliberate act rather than as somebody
+# retyping the whole description from memory.
+EVENT_DESCRIPTION_CHANGED = "description_changed"
+EVENT_RESTORED = "restored"
 EVENT_KINDS = (
     EVENT_CREATED,
     EVENT_STATUS_CHANGED,
@@ -133,6 +143,8 @@ EVENT_KINDS = (
     EVENT_UNHIDDEN,
     EVENT_DEPENDENCY_ADDED,
     EVENT_DEPENDENCY_REMOVED,
+    EVENT_DESCRIPTION_CHANGED,
+    EVENT_RESTORED,
 )
 
 
