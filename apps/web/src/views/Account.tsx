@@ -786,21 +786,38 @@ function NotificationsSection({ organisations }: { organisations: Organisation[]
 function OrganisationEmailsCard() {
   const toast = useToastManager();
   const [rows, setRows] = useState<OrganisationEmail[] | null>(null);
+  // **Only what somebody has typed**, never seeded from the server.
+  //
+  // The first version filled this in `load()`, and that is a race with the
+  // person: a fetch that lands after you start typing replaces what you
+  // wrote with what was stored, and the save that follows then finds
+  // nothing changed and quietly does nothing. React's StrictMode invokes
+  // the mount effect twice in development, so the second fetch reliably
+  // arrives late enough to do it — which is how a browser test caught this
+  // and a person would have called it "sometimes it doesn't save".
+  //
+  // Now `load()` touches only `rows`, the box falls back to the stored
+  // value when there is no draft, and a draft is cleared once it has been
+  // saved. Nothing the server sends can overwrite what you are typing.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const list = await api<OrganisationEmail[]>("/me/notification-emails").catch(() => []);
-    setRows(list);
-    setDrafts(Object.fromEntries(list.map((r) => [r.organisation_id, r.email ?? ""])));
+    setRows(await api<OrganisationEmail[]>("/me/notification-emails").catch(() => []));
   }, []);
+
+  const forget = (id: string) =>
+    setDrafts((d) => {
+      const { [id]: _gone, ...rest } = d;
+      return rest;
+    });
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const save = async (row: OrganisationEmail) => {
-    const value = drafts[row.organisation_id] ?? "";
+    const value = drafts[row.organisation_id] ?? row.email ?? "";
     // Nothing to do if it hasn't moved. Without this, tabbing through the
     // list PUTs every row you passed over.
     if (value.trim() === (row.email ?? "")) return;
@@ -810,6 +827,7 @@ function OrganisationEmailsCard() {
         method: "PUT",
         body: JSON.stringify({ email: value }),
       });
+      forget(row.organisation_id);
       await load();
       toast.add({
         title: value.trim() ? "Saved" : "Back to your account address",
@@ -823,7 +841,7 @@ function OrganisationEmailsCard() {
       toast.add({ title: "Couldn't save that", description: detail });
       // Put the box back to what is actually stored, so the screen never
       // shows an address that was refused as though it had been accepted.
-      setDrafts((d) => ({ ...d, [row.organisation_id]: row.email ?? "" }));
+      forget(row.organisation_id);
     } finally {
       setSaving(null);
     }
@@ -854,7 +872,7 @@ function OrganisationEmailsCard() {
                 type="email"
                 aria-label={`Email for ${row.organisation_name}`}
                 placeholder={row.effective ?? "your account address"}
-                value={drafts[row.organisation_id] ?? ""}
+                value={drafts[row.organisation_id] ?? row.email ?? ""}
                 disabled={saving === row.organisation_id}
                 onChange={(e) =>
                   setDrafts((d) => ({ ...d, [row.organisation_id]: e.target.value }))

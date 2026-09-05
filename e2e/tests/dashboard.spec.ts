@@ -143,9 +143,17 @@ test.describe("email per organisation", () => {
     await expect(field).toHaveValue("");
     await expect(field).toHaveAttribute("placeholder", email);
 
+    // Waits for the request, not the toast. A toast is transient by design
+    // and this assertion was flaky in the full suite while passing alone —
+    // the signature of racing something with its own clock, not of a broken
+    // save. What is worth asserting is that the PUT happened at all.
     await field.fill("elsewhere@example.com");
-    await field.blur();
-    await expect(page.getByRole("heading", { name: "Saved" })).toBeVisible();
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes("/me/notification-emails/") && r.request().method() === "PUT",
+      ),
+      field.blur(),
+    ]);
 
     await page.reload();
     const again = page
@@ -155,8 +163,12 @@ test.describe("email per organisation", () => {
 
     // Clearing it is how you go back — the same act, not a separate control.
     await again.fill("");
-    await again.blur();
-    await expect(page.getByRole("heading", { name: "Back to your account address" })).toBeVisible();
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes("/me/notification-emails/") && r.request().method() === "PUT",
+      ),
+      again.blur(),
+    ]);
     await page.reload();
     await expect(
       page
