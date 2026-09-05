@@ -2306,6 +2306,27 @@ its apps were on other origins. Note `#HttpOnly_` when reading a curl cookie
 jar in a test: skipping every line starting with `#` drops exactly the session
 cookie.
 
+**A native client gets in with a personal access token instead**, in an
+`Authorization` header on the handshake, resolved through the same
+`tokens_service.authenticate` path `/mcp` uses. It can do that precisely
+because it is not a browser: the WebSocket API in a browser cannot set
+request headers, which is the entire reason query-string tokens exist as a
+pattern — so nothing here needs one, and the token never touches a URL.
+**Any valid token is enough; there is no write check.** Watching is reading,
+a read-only token is exactly the right credential for a status light, and
+the events carry no content either way. This is what the macOS menu bar app
+(its own repo, `ayeaye-menubar`) uses to watch `org:<id>` and follow
+critical tasks live rather than polling.
+
+**Creating a task announces too, and used not to.** `tasks_service.create`
+was the one mutation that wrote a task and published nothing — so a board
+open on somebody else's screen showed every edit live and stayed silent
+about a task *appearing*, which is the change most worth seeing. It calls
+`realtime.publish_task_changed` directly rather than `announce()`: announce
+also stamps `updated_at` and commits, and a row created two lines earlier
+already has both timestamps right. There is nothing to restate, only
+somebody to tell.
+
 **The board is live too, but coalesced.** It watches `org:<id>` rather than
 every card on it — hundreds of registrations per tab otherwise — and collects
 events for 1.5s before refetching, skipping the refresh entirely while the tab

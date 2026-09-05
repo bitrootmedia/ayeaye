@@ -16,6 +16,7 @@ from app.schemas.structure import PersonOut
 from app.services import attachments as attachments_service
 from app.services import conversations as conversations_service
 from app.services import tasks as tasks_service
+from app.services import tokens as tokens_service
 from app.services import users as users_service
 
 logger = logging.getLogger("app.api.conversations")
@@ -504,34 +505,54 @@ def _not_found():
 async def realtime(ws: WebSocket):
     """Live updates.
 
-    **Authenticated by the session cookie**, which single-origin buys us for
-    free: the SPA, the API and this socket share a host, so the browser sends
-    the cookie with the upgrade request. The reference project had to pass an
+    **Two ways in, and the second one is not a browser.**
+
+    A browser authenticates with the session cookie, which single-origin buys
+    us for free: the SPA, the API and this socket share a host, so the cookie
+    rides along with the upgrade request. The reference project had to pass an
     access token as a query parameter — where it lands in server logs and
     browser history — precisely because its apps were on other origins.
+
+    A native client (the macOS menu bar app) authenticates with a **personal
+    access token in an `Authorization` header**, the same credential and the
+    same `tokens_service.authenticate` path `/mcp` uses. It can do that
+    because it is not a browser: the WebSocket API in a browser cannot set
+    request headers, which is the entire reason query-string tokens exist as
+    a pattern. Nothing here needs one.
+
+    **Any valid token is enough — there is no write check.** Watching is
+    reading, and a read-only token is exactly the credential somebody should
+    be able to use for a status light. The events carry no content either
+    way.
 
     The socket is a notification channel and nothing more. It never carries
     message bodies; the client refetches over HTTP, so there is one
     authorisation path for content rather than two.
     """
-    token = ws.cookies.get("sAccessToken")
-    if not token:
-        await ws.close(code=4401)
-        return
-    try:
-        session = await get_session_without_request_response(token)
-        if session is None:
-            raise ValueError("no session")
-        supertokens_id = session.get_user_id()
-    except Exception:
-        await ws.close(code=4401)
-        return
+    user_id: str | None = None
+    if cookie := ws.cookies.get("sAccessToken"):
+        try:
+            session = await get_session_without_request_response(cookie)
+            if session is None:
+                raise ValueError("no session")
+            supertokens_id = session.get_user_id()
+        except Exception:
+            await ws.close(code=4401)
+            return
+        # Map to our own user id — that is what everything else keys on, and
+        # what the publisher puts in `user_ids`.
+        async with SessionLocal() as db:
+            user = await users_service.get_or_create(db, supertokens_user_id=supertokens_id)
+            user_id = str(user.id)
+    else:
+        async with SessionLocal() as db:
+            resolved = await tokens_service.authenticate(db, ws.headers.get("authorization"))
+            if resolved is not None:
+                user_id = str(resolved[0].id)
 
-    # Map to our own user id — that is what everything else keys on, and what
-    # the publisher puts in `user_ids`.
-    async with SessionLocal() as db:
-        user = await users_service.get_or_create(db, supertokens_user_id=supertokens_id)
-        user_id = str(user.id)
+    if user_id is None:
+        await ws.close(code=4401)
+        return
 
     await manager.connect(user_id, ws)
     try:

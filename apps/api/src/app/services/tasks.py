@@ -516,6 +516,22 @@ async def create(
             title=f"{_who(user)} made you the owner of “{title}”",
             link_path=f"/orgs/{ctx.organisation.id}/tasks/{task.id}",
         )
+
+    # A new task is a change to the organisation's board like any other, and
+    # the rule in this module is that anything writing to a task announces.
+    # Creation was the one mutation that didn't — so a board open on somebody
+    # else's screen showed every edit live and stayed silent about a task
+    # appearing, which is the change most worth seeing. Found while giving the
+    # menu bar app a live channel: a task created as critical left its icon
+    # calm until the next poll.
+    #
+    # `publish_task_changed` directly rather than `announce()`: announce also
+    # stamps `updated_at` and commits, and this row was created and committed
+    # a few lines ago with both timestamps already right. There is nothing to
+    # restate, only somebody to tell.
+    await realtime.publish_task_changed(
+        task_id=str(task.id), organisation_id=str(task.organisation_id), change="created"
+    )
     return task
 
 

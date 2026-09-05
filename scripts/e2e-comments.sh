@@ -170,6 +170,85 @@ PYEOF
     echo "  FAIL realtime delivery"; fail=$((fail+1))
   fi
 
+  echo "== a native client gets in with a personal access token"
+  # The menu bar app's way in: no cookie, an Authorization header instead.
+  # A browser cannot set headers on a WebSocket handshake, which is why
+  # query-string tokens exist as a pattern; nothing here needs one.
+  #
+  # Written to a file rather than passed with `-c`. A `{...}` containing a
+  # comma, nested inside a `"$(...)"` capture, is torn in two by brace
+  # expansion — and the first attempt at this test did exactly that, sent a
+  # watch with no id, and still printed "task", because the token's owner is
+  # a participant in the thread and a *message* event reaches participants
+  # without any watch at all. Hence the assertion below is on a **task**
+  # event: those carry `user_ids: []`, so nothing but the org watch can
+  # deliver one.
+  WSTOK=$(post /tmp/ca.jar $B/api/me/tokens '{"name":"socket","scope":"read"}' | j "d['token']")
+  cat > /tmp/ws-token-watch.py <<'PYEOF'
+import asyncio, json, os, urllib.request
+from websockets.asyncio.client import connect
+
+
+def cookies(jar):
+    # `#HttpOnly_` is the line that matters: skipping every `#` line drops
+    # exactly the session cookie.
+    out = []
+    for line in open(jar):
+        line = line.removeprefix("#HttpOnly_")
+        if line.startswith("#") or not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            out.append(f"{parts[5]}={parts[6].strip()}")
+    return "; ".join(out)
+
+
+async def main():
+    async with connect(
+        "ws://localhost/api/ws",
+        additional_headers={"Authorization": "Bearer " + os.environ["WSTOK"]},
+    ) as ws:
+        await ws.send(json.dumps({"watch": {"kind": "org", "id": os.environ["OID"]}}))
+        await asyncio.sleep(0.3)
+        req = urllib.request.Request(
+            os.environ["TASKURL"],
+            data=json.dumps({"priority": "high"}).encode(),
+            headers={"Content-Type": "application/json", "Cookie": cookies("/tmp/ca.jar")},
+            method="PATCH",
+        )
+        urllib.request.urlopen(req).read()
+        try:
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=8))
+        except asyncio.TimeoutError:
+            print("nothing")
+            return
+        print(event.get("type"))
+
+
+asyncio.run(main())
+PYEOF
+  ok "a token connects and hears its organisation" "$(WSTOK="$WSTOK" OID="$OID" TASKURL="$B/api/organisations/$OID/tasks/$TID" "${PYWS[@]}" /tmp/ws-token-watch.py)" "task"
+  cat > /tmp/ws-bad-token.py <<'PYEOF'
+import asyncio
+from websockets.asyncio.client import connect
+
+
+async def main():
+    try:
+        async with connect(
+            "ws://localhost/api/ws",
+            additional_headers={"Authorization": "Bearer ayc_definitely_not_real"},
+        ) as ws:
+            await asyncio.wait_for(ws.recv(), timeout=3)
+            print("accepted")
+    except Exception:
+        print("refused")
+
+
+asyncio.run(main())
+PYEOF
+  ok "a bad token is refused" "$("${PYWS[@]}" /tmp/ws-bad-token.py)" "refused"
+
   echo "== the socket needs a session"
   ok "no cookie is refused" "$("${PYWS[@]}" -c "
 import asyncio
