@@ -1862,6 +1862,67 @@ rather than breaking it, and that is exactly the regression nobody notices.
 The button label is literally the string "SIGN UP"; that is their copy, not a
 `text-transform`, and it is not worth overriding.
 
+## Email verification
+
+Read `settings.email_verification_required` first — the mode is a product
+decision more than a config one.
+
+**Required only where SMTP is configured** (`EMAIL_VERIFICATION=auto`, the
+default). Enforcing it with no mail server would mean a fresh self-hoster
+signs up and is immediately locked out, recoverable only by reading the link
+out of `docker compose logs api` — and "two commands to a working install"
+is a bar this project actually holds (PLAN.md §8). Password reset degrades
+that way because it is an exceptional path; signing up is *the* path.
+`required` and `off` force it either way for an operator who knows better.
+
+Unlike MFA and OAuth, **this recipe is free** — no hand-rolling. What it
+needed was the same treatment password reset already had: its own delivery
+service (`MailerVerificationDelivery`) so mail goes through this product's
+SMTP and from its own domain, rather than SuperTokens' managed sender.
+
+**The server sends on sign-up; SuperTokens doesn't.** It sends when a
+*client* asks it to, which the prebuilt UI does on its way to the verify
+screen — leaving an API sign-up (curl, a script, the e2e suites) with no
+email at all, and even a browser being told "we sent you a link" before
+anything had been sent. `_override_emailpassword_apis` wraps the sign-up API
+and sends it. It never fails the sign-up: the account exists by then, and
+refusing the request would leave somebody with an account they were told
+they don't have.
+
+**The gate is `App.tsx`'s, not the recipe's.** `EmailVerification.init` runs
+at module load, before anything is fetched, so it cannot know whether *this
+server* enforces — hardcoding `REQUIRED` would strand a self-hoster on a
+screen their server was never going to demand. So the frontend registers the
+recipe as `OPTIONAL` (the routes and screen still exist, because the link in
+the email has to land somewhere) and `App.tsx` renders `VerifyEmailGate`
+when `GET /me` actually comes back refused, matching on the `st-ev` claim id
+exactly as it already does for `st-mfa-ok`.
+
+**Confirming needs a session refresh, and the gate does it.** Verification is
+recorded against the account, but the browser's access token still carries
+the claim's old value — and SuperTokens' fetch interceptor refreshes on a
+401, not on a 403 that says a claim failed. Without
+`Session.attemptRefreshingSession()` the "I've confirmed it" button re-checks,
+gets the same stale answer, and puts you back on the same screen forever.
+`scripts/e2e-email-verification.sh` asserts this explicitly, because a test
+that skipped it would report a working feature as broken.
+
+**Existing accounts are grandfathered, and not by the migration.**
+Verification lives in SuperTokens' own database — a schema this project
+doesn't own — so migration 0040 flags every account that exists at that
+moment and `services/verification.py` completes it at startup, claiming rows
+with the same `UPDATE … RETURNING` shape `reminders.claim` uses so several
+uvicorn workers can't do it twice. It is a background task, never awaited: a
+SuperTokens core that isn't up yet is not a reason for the API to refuse to
+boot, and anything left flagged is picked up next start.
+
+**A checkout runs with it off**, unlike production's `auto`. Every e2e suite
+signs up accounts by the dozen and each would otherwise have to fish a link
+out of Mailpit before doing the thing it is actually testing. The feature has
+its own suite, which turns it on for the duration and puts it back — so the
+enforced path is covered without every other suite paying for it. That suite
+is the only one that restarts the API.
+
 ## Two-factor authentication
 
 Read `services/mfa.py`. Optional per person, forceable per organisation —
@@ -2528,14 +2589,30 @@ it was raised — an override changed this morning should apply to a nudge
 queued last night, and the queue is exactly where a stale copy would sit.
 
 **Set from the Account screen, never by an admin.**
-`set_email_for_organisation` takes the caller's own `User` and looks up
+`request_email_for_organisation` takes the caller's own `User` and looks up
 their own active membership; there is no branch that lets somebody redirect
-a colleague's mail, which would be a rather effective way to read it. Note
-that signup addresses are unverified in this product (there is no
-`emailverification` recipe), so an override to an arbitrary address grants
-nothing that signing up with that address doesn't already — which is why
-there's no confirmation flow here. The day email verification arrives, this
-should get one too.
+a colleague's mail, which would be a rather effective way to read it.
+
+**And it is confirmed before it is used.** `notification_email` only ever
+holds an address somebody has proved they can read: a newly typed one waits
+in `notification_email_pending` with a hashed, single-use, 48-hour token,
+and mail keeps going to the account address until the link is opened. That
+ordering is the feature — a typo costs nothing, and pointing this at a
+colleague's inbox achieves nothing, because only they can open the link and
+they have no reason to. The confirm route is **unauthenticated**, the same
+"the token is the authority" trade `services/invites.py` documents, and for
+a sharper reason: the link is sent *to the address being confirmed*, which
+is usually read in a different browser from the one that asked.
+
+Three states, three fields on the wire (`email`, `pending`, `effective`) —
+collapsing any two of them tells somebody something untrue, and the one
+that matters is that a pending address must never render as though it were
+in use. Two bugs found by testing exactly that: the Account card seeded its
+draft state from the server, so a fetch landing after you typed replaced
+what you wrote and the save then silently did nothing; and the "has this
+changed?" guard compared only against the *confirmed* value, which made
+clearing a pending request impossible — the one thing somebody who has just
+mistyped an address wants to do.
 
 **Email becomes a row in `notification_channels`, not a special case beside
 it.** Every user gets one, auto-provisioned lazily the first time anything
@@ -3702,7 +3779,8 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced
 ./scripts/e2e-task-revisions.sh         # what a save replaced, one row per save, restoring is write
 ./scripts/e2e-notification-channels.sh  # email/Telegram/webhook routing, a signed delivery, /task and /org
-./scripts/e2e-notification-emails.sh    # per-organisation address, proved against what Mailpit received
+./scripts/e2e-notification-emails.sh    # per-organisation address, confirmed first, proved against Mailpit
+./scripts/e2e-email-verification.sh     # the enforced path; restarts the API to turn it on, and back
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
 ./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
 ./scripts/e2e-kb.sh                     # book access, private-article vanish, revision sessions, search

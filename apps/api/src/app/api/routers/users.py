@@ -15,8 +15,10 @@ from supertokens_python.types import RecipeUserId
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
+from app.models import Organisation
 from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
-from app.security.authn import MfaPendingSession, mark_mfa_satisfied
+from app.security import authn
+from app.security.authn import MfaPendingSession, PendingSession, mark_mfa_satisfied
 from app.services import mfa as mfa_service
 from app.services import notification_channels as channels_service
 from app.services import oauth as oauth_service
@@ -24,6 +26,7 @@ from app.services import organisations as orgs_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
 from app.services import working_hours as working_hours_service
+from app.tasks.notification_emails import send_notification_email_confirmation
 
 router = APIRouter(tags=["users"])
 
@@ -416,16 +419,22 @@ def _channel_out(row) -> NotificationChannelOut:
 class OrganisationEmailOut(BaseModel):
     """One organisation, and where its mail goes for you.
 
-    `email` is the override or None; `effective` is what an email would
-    actually be addressed to right now. Both, because "unset" and "set to
-    the same thing as the account" look identical in the UI otherwise, and
-    the second answers "so where does it go?" without the client having to
-    reimplement the fallback rule.
+    Three fields because there are three genuinely different states, and
+    collapsing any two of them tells somebody something untrue:
+
+    * `email` — the confirmed override, in use. None means the account
+      address.
+    * `pending` — an address that has been asked for and not yet confirmed.
+      **Not in use.** Showing this as though it were is the one mistake this
+      screen must not make.
+    * `effective` — where mail would actually be addressed right now, so the
+      client never has to reimplement the fallback rule to display it.
     """
 
     organisation_id: str
     organisation_name: str
     email: str | None
+    pending: str | None
     effective: str | None
 
 
@@ -433,6 +442,26 @@ class OrganisationEmailIn(BaseModel):
     # Blank or absent clears the override. Same act, same result — see
     # `notification_channels.normalise_override`.
     email: str | None = None
+
+
+class PendingIdentityOut(BaseModel):
+    email: str | None
+
+
+@router.get("/me/pending-identity", response_model=PendingIdentityOut)
+async def pending_identity(session: PendingSession):
+    """Who this session belongs to, for a screen that is *blocked*.
+
+    Deliberately not `/me`: that one is gated on every claim, and this is
+    called precisely when one of them has refused. It answers one question —
+    the address on the account — because the confirm-your-email screen is
+    much more useful when it names the address, given the commonest reason
+    for being stuck there is a typo in it.
+
+    Nothing else is exposed. A session that cannot use the app can learn the
+    address it already typed, and no more.
+    """
+    return PendingIdentityOut(email=await authn.get_user_email(session.get_user_id()))
 
 
 @router.get("/me/notification-emails", response_model=list[OrganisationEmailOut])
@@ -444,39 +473,94 @@ async def list_notification_emails(user: CurrentUser, db: DbSession):
     organisation you cannot configure.
     """
     rows = await orgs_service.list_for_user(db, user)
-    memberships = await channels_service.overrides_for(db, user)
+    overrides = await channels_service.overrides_for(db, user)
     return [
-        OrganisationEmailOut(
-            organisation_id=str(org.id),
-            organisation_name=org.name,
-            email=memberships.get(org.id),
-            effective=channels_service.resolve_email(user.email, memberships.get(org.id)),
-        )
+        _organisation_email_out(org.id, org.name, overrides.get(org.id, (None, None)), user)
         for org, _role in rows
     ]
+
+
+def _organisation_email_out(
+    organisation_id, name: str, state: tuple[str | None, str | None], user
+) -> OrganisationEmailOut:
+    live, pending = state
+    return OrganisationEmailOut(
+        organisation_id=str(organisation_id),
+        organisation_name=name,
+        email=live,
+        pending=pending,
+        # The *confirmed* one decides, never the pending one — that is the
+        # whole promise of the confirmation step.
+        effective=channels_service.resolve_email(user.email, live),
+    )
 
 
 @router.put("/me/notification-emails/{organisation_id}", response_model=OrganisationEmailOut)
 async def set_notification_email(
     organisation_id: uuid.UUID, body: OrganisationEmailIn, user: CurrentUser, db: DbSession
 ):
-    """Send this organisation's notifications somewhere else. Blank to stop.
+    """Ask to send this organisation's notifications somewhere else.
+
+    **Asks — nothing moves yet.** The address is emailed a confirmation link
+    and mail keeps going where it was going until that link is opened. Blank
+    clears both the confirmed override and anything pending.
 
     Only ever your own membership — see the service. An admin redirecting a
     colleague's mail would be a rather effective way to read it.
     """
-    stored = await channels_service.set_email_for_organisation(
+    membership, token = await channels_service.request_email_for_organisation(
         db, user=user, organisation_id=organisation_id, email=body.email
     )
+    if token:
+        # Queued after the commit: a confirmation for a request that then
+        # failed to save is worse than one that arrives a moment late.
+        await send_notification_email_confirmation.kiq(str(membership.id), token)
     # `context_for` is the one gate every organisation-scoped read goes
     # through, and it 404s rather than 403s for a stranger — the same answer
     # the service above gives for a membership that isn't yours.
     ctx = await orgs_service.context_for(db, organisation_id, user)
-    return OrganisationEmailOut(
-        organisation_id=str(organisation_id),
-        organisation_name=ctx.organisation.name,
-        email=stored,
-        effective=channels_service.resolve_email(user.email, stored),
+    return _organisation_email_out(
+        organisation_id,
+        ctx.organisation.name,
+        (membership.notification_email, membership.notification_email_pending),
+        user,
+    )
+
+
+class NotificationEmailConfirmedOut(BaseModel):
+    organisation_name: str
+    email: str
+
+
+@router.post("/notification-emails/confirm/{token}", response_model=NotificationEmailConfirmedOut)
+async def confirm_notification_email(token: str, db: DbSession):
+    """Turn a pending address on. **Unauthenticated, on purpose.**
+
+    The token is the authority, exactly as it is for an invitation link —
+    and for a sharper reason here: the link is sent *to the address being
+    confirmed*, which is very often read in a different browser from the one
+    that asked. Requiring a session would mean the link only works where it
+    is least likely to be opened.
+
+    What that authority buys is small and self-limiting: whoever holds the
+    token can point one person's notifications for one organisation at the
+    inbox the token was mailed to. It is single-use, expires, and reveals
+    nothing about the account — the response names the organisation and the
+    address, both of which the holder already knew.
+
+    Anything unrecognised is 404: a wrong token, a used one and an expired
+    one look identical, because distinguishing them tells a stranger which
+    tokens once existed.
+    """
+    membership = await channels_service.confirm_email_for_organisation(db, token)
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="that link is no longer valid"
+        )
+    organisation = await db.get(Organisation, membership.organisation_id)
+    return NotificationEmailConfirmedOut(
+        organisation_name=organisation.name if organisation else "your organisation",
+        email=membership.notification_email or "",
     )
 
 

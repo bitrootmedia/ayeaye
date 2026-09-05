@@ -4,6 +4,8 @@ import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import * as reactRouterDom from "react-router-dom";
 import SuperTokens, { SuperTokensWrapper } from "supertokens-auth-react";
 import EmailPassword from "supertokens-auth-react/recipe/emailpassword";
+import EmailVerification from "supertokens-auth-react/recipe/emailverification";
+import { EmailVerificationPreBuiltUI } from "supertokens-auth-react/recipe/emailverification/prebuiltui";
 import { EmailPasswordPreBuiltUI } from "supertokens-auth-react/recipe/emailpassword/prebuiltui";
 import Session, { SessionAuth } from "supertokens-auth-react/recipe/session";
 import { getSuperTokensRoutesForReactRouterDom } from "supertokens-auth-react/ui";
@@ -16,6 +18,7 @@ import { BRAND } from "@/lib/brand";
 import { applyStoredTheme } from "@/lib/theme";
 import { lastOrg } from "@/lib/current-org";
 import AcceptInvite from "@/views/AcceptInvite";
+import ConfirmNotificationEmail from "@/views/ConfirmNotificationEmail";
 import OAuthAuthorize from "@/views/OAuthAuthorize";
 import Account from "@/views/Account";
 import CalendarView from "@/views/Calendar";
@@ -112,6 +115,20 @@ SuperTokens.init({
         },
       },
     }),
+    // **`OPTIONAL`, and the gate is elsewhere.** `REQUIRED` would have this
+    // recipe redirect every unverified session to the confirm screen — but
+    // whether verification is enforced is the *server's* decision (it is
+    // off where SMTP isn't configured, see settings.email_verification_
+    // required), and that answer isn't knowable here: `init` runs at module
+    // load, before anything has been fetched. Hardcoding `REQUIRED` would
+    // strand a self-hoster with no mail server on a screen their server was
+    // never going to demand.
+    //
+    // So this registers the routes and the screen — the link in the email
+    // has to land somewhere — and `App.tsx` renders the gate when `GET /me`
+    // actually comes back refused, exactly as it already does for MFA. The
+    // server is the thing that decides; the UI reacts to what it says.
+    EmailVerification.init({ mode: "OPTIONAL" }),
     Session.init(),
   ],
 });
@@ -220,11 +237,20 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               {/* Sign in, sign up, forgot password and reset password. */}
               {getSuperTokensRoutesForReactRouterDom(reactRouterDom, [
                 EmailPasswordPreBuiltUI,
+                EmailVerificationPreBuiltUI,
               ])}
 
               {/* Outside the shell and outside SessionAuth on purpose: whoever
                 follows an invitation usually has no account yet. */}
               <Route path="/invites/:token" element={<AcceptInvite />} />
+
+              {/* Same reasoning as the invitation above, only more so: this
+                  link is sent to the address being confirmed, so it is
+                  usually opened somewhere the person isn't signed in. */}
+              <Route
+                path="/notification-email/:token"
+                element={<ConfirmNotificationEmail />}
+              />
 
               {/* The OAuth consent screen — same reasoning as the invite
                 link above it: it does its own signed-in check and its own

@@ -42,6 +42,7 @@ from app.models.notification_channel import (
     CHANNEL_WEBHOOK,
 )
 from app.models.organisation import STATUS_ACTIVE
+from app.services import tokens as tokens_service
 
 # How long a "link your Telegram" deep link stays valid. Short enough that a
 # stale link sitting in an old chat isn't a standing way in; long enough that
@@ -340,31 +341,57 @@ async def email_for_organisation(
     return resolve_email(user.email, override)
 
 
-async def overrides_for(db: AsyncSession, user: User) -> dict[uuid.UUID, str]:
-    """Every override this person has set, by organisation id.
+async def overrides_for(
+    db: AsyncSession, user: User
+) -> dict[uuid.UUID, tuple[str | None, str | None]]:
+    """Every override this person has, live and pending, by organisation id.
 
     One statement for the whole settings screen rather than a lookup per
-    row — the same discipline every list in this codebase follows, and this
-    list is as long as somebody's organisation count.
+    row — the same discipline every list in this codebase follows. Both
+    values, because the screen has to say "going here" and "waiting on a
+    confirmation" differently; one column would make a pending address look
+    like it was already in use, which is the one thing it must not do.
     """
     rows = (
         await db.execute(
-            select(OrganisationMember.organisation_id, OrganisationMember.notification_email).where(
+            select(
+                OrganisationMember.organisation_id,
+                OrganisationMember.notification_email,
+                OrganisationMember.notification_email_pending,
+            ).where(
                 OrganisationMember.user_id == user.id,
                 OrganisationMember.status == STATUS_ACTIVE,
-                OrganisationMember.notification_email.isnot(None),
             )
         )
     ).all()
-    return {org_id: email for org_id, email in rows}
+    return {org_id: (live, pending) for org_id, live, pending in rows}
 
 
-async def set_email_for_organisation(
+#: How long a confirmation link is good for. Long enough to survive a "I'll
+#: do it when I'm at my desk", short enough that a forgotten one expires
+#: rather than sitting there indefinitely.
+CONFIRM_TTL = timedelta(hours=48)
+
+
+async def request_email_for_organisation(
     db: AsyncSession, *, user: User, organisation_id: uuid.UUID, email: str | None
-) -> str | None:
-    """Set or clear the override. Only your own membership, ever — there is no
-    branch here that lets an admin redirect somebody else's mail, which would
-    be a rather effective way to read it."""
+) -> tuple[OrganisationMember, str | None]:
+    """Ask to send this organisation's mail somewhere else.
+
+    **Nothing changes where mail goes until the address is confirmed.** The
+    new address waits in `notification_email_pending`, and the live
+    `notification_email` is untouched until somebody opens the link sent to
+    the new address. That is what makes this safe to point anywhere: a typo
+    costs nothing, and aiming it at a colleague's inbox achieves nothing,
+    because only they could open the link and they have no reason to.
+
+    Blank clears everything — the live override *and* anything pending — so
+    "stop sending it elsewhere" is one act rather than two.
+
+    Returns the membership and the plaintext token, which exists only here
+    and in the email. Only your own membership, ever: there is no branch that
+    lets an admin redirect somebody else's mail.
+    """
     membership = (
         await db.execute(
             select(OrganisationMember).where(
@@ -376,9 +403,67 @@ async def set_email_for_organisation(
     ).scalar_one_or_none()
     if membership is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
-    membership.notification_email = normalise_override(email)
+
+    wanted = normalise_override(email)
+    membership.notification_email_pending = None
+    membership.notification_email_token = None
+    membership.notification_email_requested_at = None
+
+    if wanted is None:
+        membership.notification_email = None
+        await db.commit()
+        return membership, None
+    if wanted == membership.notification_email:
+        # Already confirmed and already in use. Re-sending a link for an
+        # address that is working would be a confusing thing to receive.
+        await db.commit()
+        return membership, None
+
+    plaintext = secrets.token_urlsafe(32)
+    membership.notification_email_pending = wanted
+    membership.notification_email_token = tokens_service.hash_token(plaintext)
+    membership.notification_email_requested_at = datetime.now(UTC)
     await db.commit()
-    return membership.notification_email
+    return membership, plaintext
+
+
+async def confirm_email_for_organisation(
+    db: AsyncSession, token: str
+) -> OrganisationMember | None:
+    """Promote a pending address to the live one. Returns None for anything
+    unrecognised — a wrong, used or expired token all look the same, because
+    telling them apart tells a stranger which tokens once existed.
+
+    Unauthenticated by design: the token is the authority, exactly as it is
+    for an invitation link (see `services/invites.py`). The person who can
+    read the mail sent to an address is the person entitled to say it is
+    theirs — requiring a signed-in session as well would mean the link only
+    works in the browser it was requested from, which is precisely the
+    browser it probably wasn't opened in.
+    """
+    if not token:
+        return None
+    membership = (
+        await db.execute(
+            select(OrganisationMember).where(
+                OrganisationMember.notification_email_token == tokens_service.hash_token(token)
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None or membership.notification_email_pending is None:
+        return None
+    requested = membership.notification_email_requested_at
+    if requested is None or datetime.now(UTC) - requested > CONFIRM_TTL:
+        return None
+
+    membership.notification_email = membership.notification_email_pending
+    membership.notification_email_pending = None
+    # Cleared, so the link is single-use — the same rule an invite token
+    # follows, and for the same reason.
+    membership.notification_email_token = None
+    membership.notification_email_requested_at = None
+    await db.commit()
+    return membership
 
 
 __all__ = [
@@ -387,7 +472,8 @@ __all__ = [
     "normalise_override",
     "email_for_organisation",
     "overrides_for",
-    "set_email_for_organisation",
+    "request_email_for_organisation",
+    "confirm_email_for_organisation",
     "get_or_create_email_channel",
     "mine",
     "channels_for",

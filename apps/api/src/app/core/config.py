@@ -78,6 +78,32 @@ class Settings(BaseSettings):
     # Falls back to a brand-derived address when unset — see mailer.from_address().
     mail_from: str = ""
 
+    # Whether a new account must confirm its address before it can use the
+    # app: "auto", "required" or "off".
+    #
+    # **"auto" means required only where SMTP is configured**, which is the
+    # whole reason this setting isn't a plain boolean. Enforcing it with no
+    # mail server would mean a fresh self-hoster signs up and is immediately
+    # locked out, recoverable only by reading the link out of
+    # `docker compose logs api` — and "two commands to a working install" is
+    # a bar this project actually holds itself to (PLAN.md §8). Password
+    # reset degrades that way because it is an exceptional path; signing up
+    # is *the* path.
+    #
+    # "required" forces it on regardless, for an operator who knows their
+    # mail works. "off" turns the gate off while leaving the recipe in
+    # place, so addresses can still be confirmed voluntarily.
+    email_verification: str = "auto"
+
+    @property
+    def email_verification_required(self) -> bool:
+        """The one place that rule is written down."""
+        if self.email_verification == "required":
+            return True
+        if self.email_verification == "off":
+            return False
+        return bool(self.smtp_host)
+
     # --- notification channels: Telegram --------------------------------
     # Empty disables the feature entirely, the identical "optional
     # infrastructure" contract SMTP_HOST already holds — nothing hard-depends

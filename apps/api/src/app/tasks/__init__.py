@@ -15,6 +15,7 @@ from app.tasks import (
     exports,  # noqa: F401  registers build_export, sweep_expired_exports
     invites,  # noqa: F401  registers send_invite_email
     notification_channels,  # noqa: F401  registers send_telegram_message, send_webhook_notification
+    notification_emails,  # noqa: F401  registers send_notification_email_confirmation
     notifications,  # noqa: F401  registers send_notification_email
     recurrence,  # noqa: F401  registers sweep_recurring_tasks
     reminders,  # noqa: F401  registers sweep_reminders
@@ -37,6 +38,7 @@ __all__ = [
     "deadlines",
     "exports",
     "invites",
+    "notification_emails",
     "notification_channels",
     "notifications",
     "recurrence",

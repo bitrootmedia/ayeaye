@@ -839,14 +839,20 @@ export type TaskRevision = {
 
 /** Where one organisation's notification emails go, for you.
  *
- *  `email` is the override you set, or null. `effective` is where mail would
- *  actually be addressed right now — the override if there is one, otherwise
- *  your account address. Both, because the client should not have to
- *  reimplement the fallback rule to show what is happening. */
+ *  Three genuinely different states, and collapsing any two of them says
+ *  something untrue:
+ *
+ *  - `email` — the **confirmed** override, in use. Null means the account
+ *    address.
+ *  - `pending` — asked for, not yet confirmed, and **not in use**. Showing
+ *    this as though it were is the one mistake this screen must not make.
+ *  - `effective` — where mail is actually addressed right now, so nothing
+ *    here has to reimplement the fallback rule to display it. */
 export type OrganisationEmail = {
   organisation_id: string;
   organisation_name: string;
   email: string | null;
+  pending: string | null;
   effective: string | null;
 };
 

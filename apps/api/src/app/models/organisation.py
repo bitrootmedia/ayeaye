@@ -182,7 +182,19 @@ class OrganisationMember(Base):
     # preference. Nothing enforces that beyond nobody offering the field
     # until you are a member — a stray value there would simply never be
     # read, since the resolver looks up an active membership.
+    # **Only ever a confirmed address.** A newly typed one waits in
+    # `notification_email_pending` until its link is opened, and mail keeps
+    # going to the account address in the meantime — so a typo costs nothing
+    # and pointing this at somebody else's inbox achieves nothing, since
+    # only they can open the link that would turn it on.
     notification_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    notification_email_pending: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    # SHA-256, same as a personal access token: the plaintext exists in one
+    # email and nowhere else.
+    notification_email_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notification_email_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     invited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

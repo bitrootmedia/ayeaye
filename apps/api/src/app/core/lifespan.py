@@ -7,6 +7,7 @@ running.
 
 import asyncio
 import contextlib
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,6 +17,8 @@ from app.realtime.connections import manager
 from app.realtime.events import realtime_subscriber
 from app.storage import s3
 from app.tasks import broker
+
+logger = logging.getLogger("app.lifespan")
 
 
 @asynccontextmanager
@@ -27,6 +30,13 @@ async def lifespan(app: FastAPI):
     # Every uvicorn worker holds only its own sockets, so each one subscribes
     # and forwards to whichever browsers it happens to be holding.
     subscriber = asyncio.create_task(realtime_subscriber(manager))
+    # Marks accounts that predate email verification as verified, once.
+    #
+    # A background task rather than awaited: it talks to the SuperTokens
+    # core, which may not be up yet on a cold `docker compose up`, and a
+    # slow or unreachable core is not a reason for the API to refuse to
+    # boot. Anything it can't finish stays flagged for the next start.
+    grandfather = asyncio.create_task(_grandfather())
     try:
         # The MCP transport runs its own task group, and it has to be entered
         # here rather than per request: a session manager started inside a
@@ -34,8 +44,24 @@ async def lifespan(app: FastAPI):
         async with mcp.session_manager.run():
             yield
     finally:
+        grandfather.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await grandfather
         subscriber.cancel()
         # Let it observe the cancellation before the broker goes away.
         with contextlib.suppress(asyncio.CancelledError):
             await subscriber
         await broker.shutdown()
+
+
+async def _grandfather() -> None:
+    from app.db import SessionLocal
+    from app.services import verification
+
+    try:
+        async with SessionLocal() as db:
+            await verification.grandfather_existing_accounts(db)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("could not grandfather existing accounts: %s", exc)

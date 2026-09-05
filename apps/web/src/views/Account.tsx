@@ -802,8 +802,21 @@ function OrganisationEmailsCard() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
 
+  const [failed, setFailed] = useState(false);
+
   const load = useCallback(async () => {
-    setRows(await api<OrganisationEmail[]>("/me/notification-emails").catch(() => []));
+    try {
+      setRows(await api<OrganisationEmail[]>("/me/notification-emails"));
+      setFailed(false);
+    } catch {
+      // Kept apart from an empty list on purpose. Swallowing this into `[]`
+      // made the whole card vanish on a failed request, which reads exactly
+      // like "you have no organisations" — a screen quietly telling you
+      // something untrue about your own account is worse than one admitting
+      // it couldn't load.
+      setRows([]);
+      setFailed(true);
+    }
   }, []);
 
   const forget = (id: string) =>
@@ -818,9 +831,16 @@ function OrganisationEmailsCard() {
 
   const save = async (row: OrganisationEmail) => {
     const value = drafts[row.organisation_id] ?? row.email ?? "";
-    // Nothing to do if it hasn't moved. Without this, tabbing through the
+    // Nothing to do if it hasn't moved — without this, tabbing through the
     // list PUTs every row you passed over.
-    if (value.trim() === (row.email ?? "")) return;
+    //
+    // **Unless something is pending**, and that exception is the whole
+    // point: while an address is awaiting confirmation, the *confirmed*
+    // value hasn't changed, so comparing against it alone makes clearing
+    // the box a no-op. That left a request you had just made impossible to
+    // cancel, and re-typing the same address impossible to resend — both
+    // reachable only by knowing to type something else first.
+    if (value.trim() === (row.email ?? "") && !row.pending) return;
     setSaving(row.organisation_id);
     try {
       await api(`/me/notification-emails/${row.organisation_id}`, {
@@ -829,10 +849,13 @@ function OrganisationEmailsCard() {
       });
       forget(row.organisation_id);
       await load();
+      // "Check your inbox", not "Saved" — nothing has moved yet, and a
+      // toast that says it has is how somebody concludes the feature is
+      // broken when the next notification arrives in the old place.
       toast.add({
-        title: value.trim() ? "Saved" : "Back to your account address",
+        title: value.trim() ? "Confirm it first" : "Back to your account address",
         description: value.trim()
-          ? `${row.organisation_name} will email ${value.trim()}.`
+          ? `We've sent a link to ${value.trim()}. ${row.organisation_name} mail moves there once you open it.`
           : undefined,
       });
     } catch (err) {
@@ -847,7 +870,9 @@ function OrganisationEmailsCard() {
     }
   };
 
-  if (rows !== null && rows.length === 0) return null;
+  // Nothing to configure is a reason to render nothing. Failing to find out
+  // is not.
+  if (rows !== null && rows.length === 0 && !failed) return null;
 
   return (
     <Card className="lg:col-span-2" role="region" aria-label="Email per organisation">
@@ -863,10 +888,24 @@ function OrganisationEmailsCard() {
           <div className="flex justify-center py-4">
             <Spinner />
           </div>
+        ) : failed ? (
+          <p className="text-sm text-muted-foreground">
+            Couldn&rsquo;t load these just now. Reload the page to try again.
+          </p>
         ) : (
           rows.map((row) => (
             <div key={row.organisation_id} className="flex flex-wrap items-center gap-3">
-              <span className="min-w-0 flex-1 truncate text-sm">{row.organisation_name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">{row.organisation_name}</span>
+                {/* Said out loud, because a pending address is *not* in use
+                    and the box above it can't show that on its own — it
+                    holds the confirmed value, which may well be empty. */}
+                {row.pending && (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    Waiting on {row.pending} — check that inbox for the link
+                  </span>
+                )}
+              </span>
               <Input
                 className="w-full sm:w-80"
                 type="email"

@@ -75,11 +75,43 @@ ok "both organisations"        "$(echo "$LIST" | j "len(d)")" "2"
 ok "no override yet"           "$(echo "$LIST" | j "[o['email'] for o in d]")" "[None, None]"
 ok "…so mail goes to the account" "$(echo "$LIST" | j "sorted({o['effective'] for o in d})")" "['$MATE']"
 
-echo "== setting one, and the fallback staying put for the other"
+echo "== asking for one does NOT start using it"
+# The whole point of the confirmation step: an address nobody has proved
+# they can read is not somewhere this will send mail.
 ALIAS=ne-alias$S@example.com
 put /tmp/nem.jar $B/api/me/notification-emails/$ONE "$(body email=$ALIAS)" >/dev/null
 LIST=$(curl -s -b /tmp/nem.jar $B/api/me/notification-emails)
-ok "Alpha overridden"          "$(echo "$LIST" | j "[o['effective'] for o in d if o['organisation_id']=='$ONE'][0]")" "$ALIAS"
+ok "it is pending"             "$(echo "$LIST" | j "[o['pending'] for o in d if o['organisation_id']=='$ONE'][0]")" "$ALIAS"
+ok "…and not yet the override" "$(echo "$LIST" | j "[o['email'] for o in d if o['organisation_id']=='$ONE'][0]")" "None"
+ok "…so mail still goes to the account" "$(echo "$LIST" | j "[o['effective'] for o in d if o['organisation_id']=='$ONE'][0]")" "$MATE"
+
+echo "== confirming it is what switches it over"
+CONFIRM_TOKEN=$(for _ in $(seq 1 25); do
+  found=$(curl -s "$M/api/v1/messages?limit=30" | TO="$ALIAS" python3 -c "
+import json, os, sys, urllib.request
+want = os.environ['TO']
+for m in json.load(sys.stdin).get('messages', []):
+    if m['To'][0]['Address'] != want or 'Confirm this address' not in m['Subject']:
+        continue
+    raw = json.loads(urllib.request.urlopen('http://localhost:8025/api/v1/message/' + m['ID']).read())
+    for word in raw.get('Text', '').split():
+        if '/notification-email/' in word:
+            print(word.rsplit('/', 1)[1])
+            break
+    break
+" 2>/dev/null)
+  [ -n "$found" ] && { echo "$found"; break; }
+  sleep 1
+done)
+ok "a confirmation email arrived" "$([ -n "$CONFIRM_TOKEN" ] && echo yes || echo no)" "yes"
+# Unauthenticated on purpose: the link is read in whichever inbox it was
+# sent to, which is very often a different browser.
+ok "the link confirms it"      "$(curl -s -X POST $B/api/notification-emails/confirm/$CONFIRM_TOKEN | j "d['email']")" "$ALIAS"
+LIST=$(curl -s -b /tmp/nem.jar $B/api/me/notification-emails)
+ok "Alpha overridden now"      "$(echo "$LIST" | j "[o['effective'] for o in d if o['organisation_id']=='$ONE'][0]")" "$ALIAS"
+ok "nothing left pending"      "$(echo "$LIST" | j "[o['pending'] for o in d if o['organisation_id']=='$ONE'][0]")" "None"
+ok "the link is single-use"    "$(code -X POST $B/api/notification-emails/confirm/$CONFIRM_TOKEN)" "404"
+ok "a made-up token is 404"    "$(code -X POST $B/api/notification-emails/confirm/not-a-real-token)" "404"
 ok "Beta still the account"    "$(echo "$LIST" | j "[o['effective'] for o in d if o['organisation_id']=='$TWO'][0]")" "$MATE"
 
 echo "== and the mail actually goes there"

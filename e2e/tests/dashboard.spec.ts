@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-import { createOrg, inviteMember, signUp, uniqueEmail } from "./helpers";
+import { createOrg, inviteMember, shellIsUp, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The dashboard and the account screen.
@@ -132,21 +132,32 @@ test.describe("the dashboard", () => {
  * column explaining it.
  */
 test.describe("email per organisation", () => {
+  /**
+   * Where each organisation's notifications are emailed.
+   *
+   * The HTTP suite proves the routing by reading Mailpit and checking the
+   * address a real notification was delivered to. What only a browser shows
+   * is the part that makes the rule legible: an empty box whose placeholder
+   * is your account address, so "unset" reads as "goes to me" without a
+   * second column explaining it — and, once the confirmation step exists, a
+   * pending address that is visibly *not* the one in use.
+   */
   test("an empty box shows the account address it falls back to", async ({ page }) => {
     const email = uniqueEmail("orgmail");
     await signUp(page, email);
     await createOrg(page, `Alpha ${Date.now()}`);
 
     await page.goto("/account");
+    await shellIsUp(page);
     const card = page.getByRole("region", { name: "Email per organisation" });
+    await expect(card).toBeVisible({ timeout: 15_000 });
     const field = card.getByRole("textbox", { name: /^Email for Alpha/ });
     await expect(field).toHaveValue("");
     await expect(field).toHaveAttribute("placeholder", email);
 
-    // Waits for the request, not the toast. A toast is transient by design
-    // and this assertion was flaky in the full suite while passing alone —
-    // the signature of racing something with its own clock, not of a broken
-    // save. What is worth asserting is that the PUT happened at all.
+    // Waits for the request, not the toast: a toast is transient by design,
+    // and racing one is how this was flaky in the full suite while passing
+    // alone. What is worth asserting is that the PUT happened.
     await field.fill("elsewhere@example.com");
     await Promise.all([
       page.waitForResponse(
@@ -155,25 +166,86 @@ test.describe("email per organisation", () => {
       field.blur(),
     ]);
 
-    await page.reload();
-    const again = page
-      .getByRole("region", { name: "Email per organisation" })
-      .getByRole("textbox", { name: /^Email for Alpha/ });
-    await expect(again).toHaveValue("elsewhere@example.com");
+    // **Asked for, not in use.** The box still holds the confirmed value —
+    // nothing — and the waiting line says why. Getting this wrong would tell
+    // somebody their mail had moved when it hadn't.
+    await expect(card.getByText(/Waiting on elsewhere@example.com/)).toBeVisible();
+    await expect(field).toHaveValue("");
+    await expect(field).toHaveAttribute("placeholder", email);
 
-    // Clearing it is how you go back — the same act, not a separate control.
-    await again.fill("");
+    // Clearing it drops the pending request too — one act, not two.
+    await field.fill("");
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes("/me/notification-emails/") && r.request().method() === "PUT",
       ),
-      again.blur(),
+      field.blur(),
     ]);
-    await page.reload();
-    await expect(
-      page
-        .getByRole("region", { name: "Email per organisation" })
-        .getByRole("textbox", { name: /^Email for Alpha/ }),
-    ).toHaveAttribute("placeholder", email);
+    await expect(card.getByText(/Waiting on/)).toHaveCount(0);
+  });
+
+  /**
+   * The confirmation handshake, end to end, including the link.
+   *
+   * The HTTP suite proves the token rules. This proves the two screens
+   * either side of the email actually join up.
+   */
+  test("the link in the email switches it over", async ({ page, request }) => {
+    const account = uniqueEmail("conf");
+    await signUp(page, account);
+    await createOrg(page, `Alpha ${Date.now()}`);
+    const alias = uniqueEmail("alias");
+
+    await page.goto("/account");
+    await shellIsUp(page);
+    const card = page.getByRole("region", { name: "Email per organisation" });
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    const field = card.getByRole("textbox", { name: /^Email for Alpha/ });
+    await field.fill(alias);
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes("/me/notification-emails/") && r.request().method() === "PUT",
+      ),
+      field.blur(),
+    ]);
+    await expect(card.getByText(new RegExp(`Waiting on ${alias}`))).toBeVisible();
+
+    // The link, out of Mailpit, opened in this browser. A real one would be
+    // opened in whichever browser reads that inbox — which is exactly why
+    // the page behind it needs no session.
+    let token = "";
+    for (let i = 0; i < 25 && !token; i++) {
+      const res = await request.get("http://localhost:8025/api/v1/messages?limit=30");
+      const data = (await res.json()) as {
+        messages: { ID: string; Subject: string; To: { Address: string }[] }[];
+      };
+      for (const m of data.messages) {
+        if (m.To[0]?.Address !== alias || !m.Subject.includes("Confirm this address")) continue;
+        const full = (await (
+          await request.get(`http://localhost:8025/api/v1/message/${m.ID}`)
+        ).json()) as { Text: string };
+        const word = full.Text.split(/\s+/).find((w) => w.includes("/notification-email/"));
+        if (word) token = word.split("/").pop()!;
+        break;
+      }
+      if (!token) await page.waitForTimeout(1000);
+    }
+    expect(token).not.toEqual("");
+
+    await page.goto(`/notification-email/${token}`);
+    await expect(page.getByText("Address confirmed")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(alias)).toBeVisible();
+
+    await page.goto("/account");
+    // The shell first: this is a full page load after navigating away from
+    // the app, and the account screen is one of the heaviest. Asserting on
+    // the card before the shell exists is racing the whole bundle.
+    await shellIsUp(page);
+    const after = page.getByRole("region", { name: "Email per organisation" });
+    await expect(after).toBeVisible({ timeout: 15_000 });
+    await expect(after.getByRole("textbox", { name: /^Email for Alpha/ })).toHaveValue(alias, {
+      timeout: 15_000,
+    });
+    await expect(after.getByText(/Waiting on/)).toHaveCount(0);
   });
 });

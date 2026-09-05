@@ -53,6 +53,21 @@ services:
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_START_TLS: "false"
+      # Off in a checkout, unlike production's "auto" (which means required
+      # wherever SMTP is configured — and Mailpit above is SMTP).
+      #
+      # Not a shortcut: every one of the e2e suites signs up accounts by the
+      # dozen, and each would otherwise have to fish a link out of Mailpit
+      # before it could do the thing it is actually testing. That is a lot of
+      # machinery, and a lot of seconds, spent by suites about something
+      # else entirely. The feature has its own suite —
+      # `scripts/e2e-email-verification.sh` — which turns it on for the
+      # duration and puts it back, so the enforced path is covered without
+      # every other suite paying for it.
+      #
+      # Overridable from the shell, which is how that suite does it:
+      #   EMAIL_VERIFICATION=required docker compose up -d api
+      EMAIL_VERIFICATION: ${EMAIL_VERIFICATION:-off}
     ports:
       # Only for the interactive API docs at http://localhost:8000/docs, which
       # Caddy doesn't route (it serves the SPA at everything but /api and

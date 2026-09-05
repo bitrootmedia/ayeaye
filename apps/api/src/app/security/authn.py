@@ -5,6 +5,7 @@ organisation membership and grants — see services/access.py (Phase 3). There i
 no policy engine and no staff tier; PLAN.md §2.1 explains why.
 """
 
+import logging
 import re
 from typing import Annotated
 
@@ -12,7 +13,7 @@ from fastapi import Depends
 from supertokens_python import InputAppInfo, SupertokensConfig, get_request_from_user_context, init
 from supertokens_python.asyncio import get_user
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
-from supertokens_python.recipe import emailpassword, session
+from supertokens_python.recipe import emailpassword, emailverification, session
 from supertokens_python.recipe.emailpassword import InputFormField, InputSignUpFeature
 from supertokens_python.recipe.emailpassword.constants import FORM_FIELD_PASSWORD_ID
 from supertokens_python.recipe.session import SessionContainer
@@ -22,7 +23,7 @@ from supertokens_python.recipe.session.interfaces import RecipeInterface
 from supertokens_python.recipe.session.utils import SessionOverrideConfig
 
 from app.core.config import settings
-from app.security.email import MailerEmailDelivery
+from app.security.email import MailerEmailDelivery, MailerVerificationDelivery
 
 
 async def _fetch_mfa_satisfied(user_id, _recipe_user_id, _tenant_id, _payload, _user_context):
@@ -112,6 +113,14 @@ MfaPendingSession = Annotated[
     Depends(verify_session(override_global_claim_validators=_skip_mfa_validator)),
 ]
 
+# The same thing under a name that says what it is used for now: a session
+# that is real but hasn't yet satisfied whatever claim is standing in its
+# way. `_skip_mfa_validator` returns an *empty* list rather than filtering
+# one claim out, so this skips the email-verification claim too — which is
+# exactly what a route the gate calls needs, since asking an unverified
+# session for its own address is the one question it must be able to answer.
+PendingSession = MfaPendingSession
+
 # SuperTokens' own default (8 characters, one letter, one digit) passes
 # "aaaaaaa1" — length and mixed case are what actually resist guessing, and
 # both are cheap to require. Stops short of demanding a symbol: that mostly
@@ -148,6 +157,72 @@ def _client_ip(request) -> str | None:
     if raw is not None and getattr(raw, "client", None):
         return raw.client.host
     return None
+
+
+logger = logging.getLogger("app.authn")
+
+
+def _override_emailpassword_apis(original):
+    """Send the verification email when an account is created.
+
+    SuperTokens does not do this on its own: it sends when a *client* asks
+    it to, which the prebuilt UI does on its way to the verify screen. That
+    leaves two gaps this closes. A sign-up over the API — curl, a script,
+    the e2e suites — would get no email at all; and even in a browser the
+    "we sent you a link" screen would be describing something that hadn't
+    happened yet, which is the kind of small lie that costs somebody ten
+    minutes staring at an empty inbox.
+
+    Wrapped around the sign-up API rather than the sign-up *function*, so it
+    fires for a person signing up and not for anything internal that creates
+    a user by another route.
+
+    **Never fails the sign-up.** The account exists by this point; refusing
+    the request because the mail didn't go would leave somebody with an
+    account they were told they don't have. With no SMTP the mailer logs the
+    link instead, which is the same escape hatch password reset already
+    relies on.
+    """
+    original_sign_up_post = original.sign_up_post
+
+    async def sign_up_post(
+        form_fields,
+        tenant_id,
+        session,
+        should_try_linking_with_session_user,
+        api_options,
+        user_context,
+    ):
+        response = await original_sign_up_post(
+            form_fields,
+            tenant_id,
+            session,
+            should_try_linking_with_session_user,
+            api_options,
+            user_context,
+        )
+        user = getattr(response, "user", None)
+        if user is not None:
+            try:
+                from supertokens_python.recipe.emailverification.asyncio import (
+                    send_email_verification_email,
+                )
+
+                await send_email_verification_email(
+                    tenant_id=tenant_id,
+                    user_id=user.id,
+                    recipe_user_id=(
+                        getattr(response, "recipe_user_id", None)
+                        or user.login_methods[0].recipe_user_id
+                    ),
+                    email=user.emails[0] if user.emails else None,
+                )
+            except Exception as exc:
+                logger.warning("could not send the verification email on sign-up: %s", exc)
+        return response
+
+    original.sign_up_post = sign_up_post
+    return original
 
 
 def _override_session_functions(original: RecipeInterface) -> RecipeInterface:
@@ -221,10 +296,25 @@ def init_auth() -> None:
         framework="fastapi",
         recipe_list=[
             session.init(override=SessionOverrideConfig(functions=_override_session_functions)),
+            # Verification, and the mode is a product decision as much as a
+            # config one — see `settings.email_verification_required`.
+            #
+            # REQUIRED puts SuperTokens' own `EmailVerificationClaim` on
+            # every session, so `verify_session()` refuses an unverified one
+            # everywhere at once rather than each route remembering to ask.
+            # OPTIONAL registers exactly the same endpoints and emails and
+            # gates nothing, which is what makes "off" a usable state rather
+            # than a missing feature: an address can still be confirmed, it
+            # just isn't a condition of getting in.
+            emailverification.init(
+                mode="REQUIRED" if settings.email_verification_required else "OPTIONAL",
+                email_delivery=EmailDeliveryConfig(service=MailerVerificationDelivery()),
+            ),
             emailpassword.init(
                 # Replaces SuperTokens' managed sending service: password-reset
                 # mail goes out through our own SMTP, from our own domain.
                 email_delivery=EmailDeliveryConfig(service=MailerEmailDelivery()),
+                override=emailpassword.InputOverrideConfig(apis=_override_emailpassword_apis),
                 # See `strong_password_validator` above — the email field
                 # keeps SuperTokens' own default validator by not being
                 # listed here.

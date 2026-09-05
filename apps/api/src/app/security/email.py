@@ -27,6 +27,9 @@ import logging
 
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryInterface
 from supertokens_python.recipe.emailpassword.types import EmailTemplateVars
+from supertokens_python.recipe.emailverification.types import (
+    EmailTemplateVars as VerificationEmailTemplateVars,
+)
 
 from app.core import mailer
 from app.core.config import settings
@@ -72,6 +75,48 @@ class MailerEmailDelivery(EmailDeliveryInterface[EmailTemplateVars]):
             # the account is still recoverable.
             logger.error(
                 "could not send the password reset for %s: %s — the link was %s",
+                template_vars.user.email,
+                exc,
+                link,
+            )
+
+
+def verification_email_body(link: str) -> str:
+    """Same plain text, and for the same reason as the reset above."""
+    return (
+        "Confirm this address to finish setting up your account.\n\n"
+        f"{link}\n\n"
+        "If you didn't sign up, ignore this — the address won't be used.\n"
+    )
+
+
+def verification_email_subject() -> str:
+    return f"Confirm your email for {settings.brand_name}"
+
+
+class MailerVerificationDelivery(EmailDeliveryInterface[VerificationEmailTemplateVars]):
+    """The same route for verification mail. A separate class only because
+    the recipe hands over a different template-vars type — the body of it is
+    the reset delivery's, down to the reason for swallowing failures.
+
+    **Swallowed here too, and it matters more.** With no SMTP configured the
+    mailer logs the message rather than sending it, so a self-hoster can
+    still finish signing up from `docker compose logs api` — which is part of
+    why verification is only *enforced* where SMTP is set up. See
+    `security/authn.py`.
+    """
+
+    async def send_email(self, template_vars: VerificationEmailTemplateVars, user_context) -> None:
+        link = template_vars.email_verify_link
+        try:
+            await mailer.send(
+                to=template_vars.user.email,
+                subject=verification_email_subject(),
+                text=verification_email_body(link),
+            )
+        except Exception as exc:
+            logger.error(
+                "could not send the verification email for %s: %s — the link was %s",
                 template_vars.user.email,
                 exc,
                 link,

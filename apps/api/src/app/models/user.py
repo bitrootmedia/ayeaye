@@ -67,6 +67,14 @@ class User(Base):
     # schedulers racing sends one digest, not two.
     last_daily_summary_sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # Set true for every account that existed when email verification was
+    # introduced, and cleared by the one-off pass in
+    # `services/verification.py`. False for everything created since, which
+    # is what stops it grandfathering people who should verify normally.
+    grandfather_verification: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

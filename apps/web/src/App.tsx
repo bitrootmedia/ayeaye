@@ -7,6 +7,7 @@ import { BellIcon, PlusIcon } from "lucide-react";
 import { ApiError, api } from "@/api";
 import { AppSidebar } from "@/components/app-sidebar";
 import { MfaGate } from "@/components/mfa-gate";
+import { VerifyEmailGate } from "@/components/verify-email-gate";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { TimerBar } from "@/components/timer-bar";
 import {
@@ -91,12 +92,29 @@ export type Shell = {
   openCreateOrg: () => void;
 };
 
-type Gate = "loading" | "ok" | "error" | "mfa";
+type Gate = "loading" | "ok" | "error" | "mfa" | "verify-email";
 
 /** Is this the specific 403 SuperTokens sends when a session's claim isn't
  *  satisfied — `security/authn.py`'s `MfaSatisfiedClaim` — rather than some
  *  other failure `GET /me` could hit? Checked by shape, not status code
  *  alone, so an unrelated 403 doesn't get misread as "needs 2FA". */
+/**
+ * The same shape as `isMfaClaimError`, for the claim SuperTokens' email
+ * verification recipe adds. Matching on the claim id rather than on the
+ * status alone matters for the same reason it does there: an unrelated 403
+ * must not be mistaken for "you need to confirm your address", which would
+ * replace the whole app with a screen about the wrong problem.
+ */
+function isEmailVerificationError(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 403) return false;
+  try {
+    const body = JSON.parse(err.body) as { claimValidationErrors?: { id?: string }[] };
+    return (body.claimValidationErrors ?? []).some((c) => c.id === "st-ev");
+  } catch {
+    return false;
+  }
+}
+
 function isMfaClaimError(err: unknown): boolean {
   if (!(err instanceof ApiError) || err.status !== 403) return false;
   try {
@@ -146,6 +164,10 @@ function Shell() {
   const [remindersDue, setRemindersDue] = useState(0);
   const [timer, setTimer] = useState<Timer>({ entry: null, organisation_id: null });
   const [gate, setGate] = useState<Gate>("loading");
+  // Only ever set alongside the verify-email gate, and read from the session
+  // rather than from `/me` — that request is the one being refused, so there
+  // is no user row to read an address off yet.
+  const [verifyEmail, setVerifyEmail] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [searching, setSearching] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
@@ -197,7 +219,20 @@ function Shell() {
         await reload();
         setGate("ok");
       })
-      .catch((err) => setGate(isMfaClaimError(err) ? "mfa" : "error"));
+      .catch((err) => {
+        if (isMfaClaimError(err)) return setGate("mfa");
+        if (isEmailVerificationError(err)) {
+          // The address, from the one endpoint a blocked session may call.
+          // Best-effort: the screen reads fine without it, and failing to
+          // fetch a label is no reason to show an error page instead of the
+          // gate that explains what is wrong.
+          void api<{ email: string | null }>("/me/pending-identity")
+            .then((d) => setVerifyEmail(d.email))
+            .catch(() => undefined);
+          return setGate("verify-email");
+        }
+        setGate("error");
+      });
   }, [reload]);
 
   useEffect(() => {
@@ -269,6 +304,23 @@ function Shell() {
         <Spinner />
         <span className="sr-only">Loading</span>
       </div>
+    );
+  }
+
+  if (gate === "verify-email") {
+    return (
+      <VerifyEmailGate
+        // `me` is null here by construction — the request that would have
+        // populated it is the one that was refused — so the address comes
+        // from SuperTokens' own session claim, which is where it lives
+        // before this app has ever seen the account.
+        email={verifyEmail}
+        onVerified={() => {
+          setGate("loading");
+          bootstrap();
+        }}
+        onSignOut={signOutTo}
+      />
     );
   }
 
