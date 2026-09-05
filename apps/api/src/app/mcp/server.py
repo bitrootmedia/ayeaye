@@ -228,7 +228,12 @@ async def list_tasks(
             include_closed=include_closed,
             status=status,
             priority=priority,
-            owner_user_id=user.id if mine_only else None,
+            # ORs owner against action-required, which is what this tool has
+            # always claimed to do — it used to pass `owner_user_id` alone,
+            # so a task somebody had asked you to act on was excluded from
+            # "only tasks you own or have been asked to act on". Same
+            # question the dashboard's Critical and Urgent cards ask.
+            mine_user_id=user.id if mine_only else None,
             sort="updated_at",
             descending=True,
         )
@@ -337,7 +342,9 @@ async def activity(
     ctx: Context,
     organisation_id: str,
     days: Annotated[int, Field(ge=1, le=90, description="How far back to look.")] = 7,
-    mine_only: bool = False,
+    mine_only: Annotated[
+        bool, Field(description="Only tasks you own or have been asked to act on.")
+    ] = False,
 ) -> str:
     """What changed recently — the tool for 'what did we get done last week'.
 
@@ -355,7 +362,10 @@ async def activity(
             limit=200,
             offset=0,
             include_closed=True,
-            owner_user_id=user.id if mine_only else None,
+            # Same OR as `list_tasks` above, and worded the same way — two
+            # tools with one parameter name meaning two different things is
+            # the kind of difference nobody discovers deliberately.
+            mine_user_id=user.id if mine_only else None,
             sort="updated_at",
             descending=True,
         )

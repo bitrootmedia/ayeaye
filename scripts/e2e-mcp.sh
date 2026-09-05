@@ -128,6 +128,33 @@ ok "an org admin's token can't see it" "$(tool "$ADMTOK" list_tasks "{\"organisa
 ok "…while the owner's still can"      "$(tool "$WRITE" list_tasks "{\"organisation_id\":\"$OID\"}" | text | grep -c "Replace the anode")" "1"
 curl -s -o /dev/null -b /tmp/ma.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$TID/hidden -d '{"hidden":false}'
 
+echo "== mine_only means owned OR asked to act, not just owned"
+# It used to pass owner_user_id alone, so a task somebody had asked you to
+# act on was missing from "only tasks you own or have been asked to act on"
+# — which is most of the point of being asked. The admin account is the
+# handy second person here: they own nothing in this organisation.
+#
+# Every multi-key body below is built into a variable first, never written
+# as a literal inside the `$(...)` capture. A `{...}` containing a comma,
+# nested two quote-levels deep, is silently torn in two by brace expansion
+# — the call then fails, `grep -c` answers 0, and an assertion expecting 0
+# passes for entirely the wrong reason. Which is exactly what the first
+# version of this block did.
+ADMIN_ID=$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/members | j "[m['user_id'] for m in d if m['email']=='$ADMIN'][0]")
+ASKED_BODY="{\"title\":\"Waiting on the admin\",\"action_required_user_id\":\"$ADMIN_ID\"}"
+post /tmp/ma.jar $B/api/organisations/$OID/tasks "$ASKED_BODY" >/dev/null
+MINE="{\"organisation_id\":\"$OID\",\"mine_only\":true}"
+ADMIN_MINE=$(tool "$ADMTOK" list_tasks "$MINE" | text)
+# Either answer proves the tool ran; only a torn-in-two request gives
+# neither. Deliberately not "did it list something", which would conflate
+# a mangled call with a filter that is simply wrong — and the point of
+# this guard is to tell those two apart.
+ok "the call itself worked"           "$(echo "$ADMIN_MINE" | grep -cE "task\(s\):|Nothing matches")" "1"
+ok "they own nothing here"            "$(echo "$ADMIN_MINE" | grep -c "Replace the anode")" "0"
+ok "…but being asked to act counts"   "$(echo "$ADMIN_MINE" | grep -c "Waiting on the admin")" "1"
+OWNER_MINE=$(tool "$WRITE" list_tasks "$MINE" | text)
+ok "and the owner sees it as theirs"  "$(echo "$OWNER_MINE" | grep -c "Waiting on the admin")" "1"
+
 echo "== read-only means read only"
 ok "a read token lists"         "$(tool "$READ" list_tasks "{\"organisation_id\":\"$OID\"}" | text | grep -c "Replace the anode")" "1"
 ok "…and cannot create"         "$(tool "$READ" create_task "{\"organisation_id\":\"$OID\",\"title\":\"nope\"}" | text | grep -ci "read-only")" "1"

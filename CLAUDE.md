@@ -1478,6 +1478,19 @@ tools rather than a `closed: bool` parameter on `update_task`, matching
 this file's own `tag_task`/`untag_task` precedent for a boolean-shaped
 action written as two verbs instead of one flag.
 
+**`mine_only` on `list_tasks` and `activity` said "tasks you own **or have
+been asked to act on**" and passed only `owner_user_id`** — so being asked
+to act on something was not enough for it to appear in "what needs doing",
+which is most of the point of being asked. Fixed with a third person filter
+on `access.visible_tasks_stmt`: `mine_user_id`, which **ORs** owner against
+action-required where the existing `owner_user_id`/`action_required_user_id`
+each narrow to one route and AND together. Both shapes are wanted — the task
+list's two separate Owner and Action-required filters are the AND ones, and
+this is the same OR `my_priority_tasks_stmt` already writes out for the
+dashboard's escalation cards. There is deliberately no equivalent in the web
+task list: "mine, either way" is a dashboard question, and the list offers
+the two filters separately instead.
+
 **Reminders and time tracking were read-only or entirely absent.**
 `create_reminder` covers both of `services/reminders.py`'s two create
 paths — task-anchored (`task_id` given) or standalone (`title` given

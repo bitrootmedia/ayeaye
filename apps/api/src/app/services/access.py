@@ -515,6 +515,7 @@ def visible_tasks_stmt(
     priority: str | None = None,
     owner_user_id: uuid.UUID | None = None,
     action_required_user_id: uuid.UUID | None = None,
+    mine_user_id: uuid.UUID | None = None,
     due_after: date | None = None,
     due_before: date | None = None,
     sort: str | None = None,
@@ -532,6 +533,17 @@ def visible_tasks_stmt(
     tagged "Knowledge base" is perfectly visible; it is just not queueing for
     attention, so it stays off the board unless you asked for that tag by
     name. Filtering by a tag implies you did, so it overrides.
+
+    **`mine_user_id` is the odd one of the three person filters: it ORs.**
+    `owner_user_id` and `action_required_user_id` each narrow to one route
+    and AND together, which is what the task list's two separate Owner and
+    Action-required filters want. `mine_user_id` asks the different question
+    the dashboard's escalation cards ask — "work that's mine, either way" —
+    and is the same OR `my_priority_tasks_stmt` writes out for itself. It
+    lives here rather than being a second builder because every other filter
+    a caller might want to combine it with is already here; passing all three
+    at once is legal and means what it says (mine, AND owned by X, AND...),
+    though nothing does that today.
     """
     level = task_level_expression(user_id, org_role)
     stmt = (
@@ -557,6 +569,13 @@ def visible_tasks_stmt(
         stmt = stmt.where(Task.owner_user_id == owner_user_id)
     if action_required_user_id is not None:
         stmt = stmt.where(Task.action_required_user_id == action_required_user_id)
+    if mine_user_id is not None:
+        stmt = stmt.where(
+            or_(
+                Task.owner_user_id == mine_user_id,
+                Task.action_required_user_id == mine_user_id,
+            )
+        )
     if due_after is not None:
         stmt = stmt.where(Task.due_on >= due_after)
     if due_before is not None:
