@@ -132,6 +132,13 @@ async def for_user(db: AsyncSession, user_id: uuid.UUID, *, tz_name: str) -> lis
     for org_id, org_name, role in memberships:
         visible = access.visible_task_ids_stmt(user_id=user_id, org_id=org_id, org_role=role)
 
+        # Open only. A task you planned for today and have already closed
+        # stays in the Planner's own Today column on purpose — `planner.
+        # buckets_stmt` doesn't filter it, so you can see what you finished
+        # without it vanishing under you mid-day. A digest is the other
+        # question: it's what's ahead of you this morning, and one closed
+        # yesterday would arrive here *and* under "Done yesterday" in the
+        # same message.
         planned = (
             (
                 await db.execute(
@@ -140,6 +147,7 @@ async def for_user(db: AsyncSession, user_id: uuid.UUID, *, tz_name: str) -> lis
                     .where(
                         PlannerEntry.user_id == user_id,
                         PlannerEntry.bucket == BUCKET_TODAY,
+                        Task.closed_at.is_(None),
                         Task.id.in_(visible),
                     )
                     .order_by(PlannerEntry.position, PlannerEntry.id)

@@ -860,9 +860,16 @@ clears the claim whenever `due_on` changes, for the identical reason
 rescheduling a task leaves it permanently silent about its new date.
 
 **The daily digest** (`services/daily_summary.py`, `tasks/daily_summary.py`)
-sends what's planned for today (the Planner's Today bucket) and what closed
-yesterday (tasks the person owns, closed in their local yesterday), once per
-organisation with something to report, around each person's local 7am.
+sends what's planned for today (the Planner's Today bucket, **open tasks
+only**) and what closed yesterday (tasks the person owns, closed in their
+local yesterday), once per organisation with something to report, around each
+person's local 7am. The open-only filter is deliberately *not* mirrored in
+`planner.buckets_stmt`: a task you planned and then closed stays in the
+Planner's own Today column, so you can see what you finished rather than
+watching it vanish mid-day. A digest asks the other question — what's ahead
+of you this morning — and without the filter a task closed yesterday arrived
+under both headings of the same message. Reported after it shipped, from a
+real digest.
 **Opt-out, default on** (`users.daily_summary_enabled`) — the point of a
 digest nobody has to remember to check is defeated by a setting defaulting to
 off that almost nobody would ever find. The claim
