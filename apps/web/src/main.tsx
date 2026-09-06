@@ -43,6 +43,7 @@ import TaskDetail from "@/views/TaskDetail";
 import Tasks from "@/views/Tasks";
 import Teams from "@/views/Teams";
 import Time from "@/views/Time";
+import Triage from "@/views/Triage";
 
 // Design tokens. Imported here, once, for the whole app.
 import "@/index.css";
@@ -310,6 +311,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={<Keyed param="projectId" element={<ProjectDetail />} />}
                 />
                 <Route path="orgs/:orgId/tasks" element={<Tasks />} />
+                <Route path="orgs/:orgId/triage" element={<Triage />} />
                 <Route
                   path="orgs/:orgId/tasks/:taskId"
                   element={<Keyed param="taskId" element={<TaskDetail />} />}

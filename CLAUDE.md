@@ -561,6 +561,46 @@ already owns the only red and the only amber, and a second colour scale per
 card would stop red meaning "this needs you". Every glyph carries a `title`
 and an `aria-label`, so the level is never conveyed by colour alone.
 
+## Triage
+
+`views/Triage.tsx`, at `/orgs/{id}/triage`, its own rail item directly under
+Tasks. Open tasks with **nobody action-required** — the queue for work that
+has fallen between "what's mine" (the dashboard's escalation cards, the
+Planner) and "what's everything" (the list, the board), because nobody has
+picked it up.
+
+**One filter, not a second list endpoint.** `access.visible_tasks_stmt` grew
+`action_required_unset: bool`, the same shape `loose_only` already has beside
+`project_id`: where `action_required_user_id` narrows to one person, this
+narrows to the tasks asking nothing of anybody. A flag rather than a magic
+value on the existing filter, because "unset" is a different question from
+"this person", not a special case of it — and it composes with every other
+filter for free, which is how `include_closed=true` widens the queue without
+either filter knowing about the other.
+
+**Everything you can see, not just what you own** — settled deliberately when
+the screen was asked for. A triage queue scoped to your own tasks is a
+personal follow-up list; the work most likely to be forgotten is the work
+nobody has claimed. Access still decides the rest: it's `visible_tasks_stmt`,
+so a plain member's queue holds none of the owner's loose tasks, and an org
+admin's holds the organisation's whole unassigned pile — the same escape
+hatch admin rank is everywhere else. `scripts/e2e-triage.sh` pins both ends
+of that.
+
+**A row leaves the moment you assign it**, removed locally rather than by
+refetching. The list is *defined* by action-required being unset, so a task
+that now has one is no longer a member of it — and keeping your place in a
+long queue is the difference between working through one and starting it
+again on every save. The picker is an ordinary `EntityPicker` (`placeholder`
+**and** nothing else — there is no clearing row, because clearing is what
+every row here already is), absent rather than disabled for a read-only
+viewer, the same "don't show a control that 403s" rule as `can_close`.
+
+**Assigning notifies exactly as it does from the task screen**, because it's
+the same `PATCH /tasks/{id}` — `should_notify_action_required` is not
+reimplemented here, and a Triage assignment writes the identical
+`task_events` row.
+
 ## Tags, notes, reminders and pins
 
 Four small subsystems on the task, and each has exactly one rule worth
@@ -3763,6 +3803,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-organisations.sh          # needs the stack up
 ./scripts/e2e-projects.sh               # the access model, against real SQL
 ./scripts/e2e-tasks.sh                  # workflow, task access, the inbox
+./scripts/e2e-triage.sh                 # the unassigned queue, and it stays access-scoped
 ./scripts/e2e-search.sh                 # fuzziness, ranking, and permissions
 ./scripts/e2e-time.sh                   # timers, corrections, rollups
 ./scripts/e2e-comments.sh               # threads, debouncing, the socket

@@ -134,6 +134,9 @@ test("photograph the product", async ({ page }) => {
   await page.goto(`/orgs/${orgId}/tasks?view=list`);
   await shot(page, "08-task-list");
 
+  await page.goto(`/orgs/${orgId}/triage`);
+  await shot(page, "08b-triage");
+
   await page.goto(`/orgs/${orgId}/tasks`);
   await page.getByRole("link", { name: /Strip the old antifoul/ }).click();
   await page.waitForURL(/\/tasks\/[0-9a-f-]+$/);
@@ -252,6 +255,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/settings`);
   await shot(page, "17-organisation-settings-dark");
+
+  await page.goto(`/orgs/${orgId}/triage`);
+  await shot(page, "17b-triage-dark");
 
   // The task screen carries three native `type="date"` inputs (Due, Est.
   // start) — the one place a browser-drawn control (the calendar picker

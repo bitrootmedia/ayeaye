@@ -515,6 +515,7 @@ def visible_tasks_stmt(
     priority: str | None = None,
     owner_user_id: uuid.UUID | None = None,
     action_required_user_id: uuid.UUID | None = None,
+    action_required_unset: bool = False,
     mine_user_id: uuid.UUID | None = None,
     due_after: date | None = None,
     due_before: date | None = None,
@@ -524,8 +525,11 @@ def visible_tasks_stmt(
     """Every task the user can see, with their level. Rule 4: one statement.
 
     `project_id` narrows to one project; `loose_only` narrows to tasks with no
-    project at all. Neither widens access — the level expression is the same
-    either way, and so are the two tag filters. `due_after`/`due_before` are
+    project at all. `action_required_unset` is the same shape one step over —
+    where `action_required_user_id` narrows to one person, this narrows to
+    the tasks asking nothing of anybody, which is the Triage queue. Neither
+    widens access — the level expression is the same either way, and so are
+    the two tag filters. `due_after`/`due_before` are
     both inclusive, for the calendar — a task due on the last visible day of
     a month must still appear in that month.
 
@@ -569,6 +573,8 @@ def visible_tasks_stmt(
         stmt = stmt.where(Task.owner_user_id == owner_user_id)
     if action_required_user_id is not None:
         stmt = stmt.where(Task.action_required_user_id == action_required_user_id)
+    if action_required_unset:
+        stmt = stmt.where(Task.action_required_user_id.is_(None))
     if mine_user_id is not None:
         stmt = stmt.where(
             or_(

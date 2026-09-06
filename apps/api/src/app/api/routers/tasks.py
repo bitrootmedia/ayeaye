@@ -340,6 +340,7 @@ async def list_tasks(
     priority: str | None = None,
     owner_user_id: uuid.UUID | None = None,
     action_required_user_id: uuid.UUID | None = None,
+    action_required_unset: bool = False,
     sort: str | None = None,
     dir: str = "asc",
     limit: int | None = None,
@@ -368,6 +369,11 @@ async def list_tasks(
         "priority": priority,
         "owner_user_id": owner_user_id,
         "action_required_user_id": action_required_user_id,
+        # The Triage queue: tasks asking nothing of anybody. A separate flag
+        # rather than a magic value on the filter above, the same way
+        # `loose` is a flag beside `project_id` — "unset" is a different
+        # question from "this person", not a special case of it.
+        "action_required_unset": action_required_unset,
         # An unknown sort key is ignored rather than rejected: the value comes
         # from a URL people share and edit, and a link naming a column that no
         # longer exists should show the default order, not an error page.

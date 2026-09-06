@@ -7,6 +7,7 @@ import {
   CommandIcon,
   CompassIcon,
   FolderKanbanIcon,
+  InboxIcon,
   KeyRoundIcon,
   NotebookIcon,
   PackageIcon,
@@ -32,6 +33,7 @@ const SECTIONS: Section[] = [
   { id: "organisations", title: "Organisations & people", icon: UsersIcon },
   { id: "projects", title: "Projects & sharing", icon: FolderKanbanIcon },
   { id: "tasks", title: "Tasks", icon: CircleDotIcon },
+  { id: "triage", title: "Triage", icon: InboxIcon },
   { id: "search", title: "Search", icon: SearchIcon },
   { id: "time", title: "Time tracking", icon: ClockIcon },
   { id: "planner", title: "Planner", icon: CalendarDaysIcon },
@@ -187,6 +189,25 @@ export default function Help() {
               than given: only the actual owner can do it, and while hidden, nobody else can
               see it — not even an organisation admin. Un-hiding restores exactly who could
               see it before.
+            </p>
+          </Section>
+
+          <Section id="triage" title="Triage">
+            <p>
+              <strong>Triage</strong> lists every open task you can see that has{" "}
+              <em>nobody</em> set as action-required — the work that hasn&rsquo;t been picked
+              up. Most screens answer &ldquo;what&rsquo;s mine&rdquo; or &ldquo;what&rsquo;s
+              everything&rdquo;; this one answers the question in between.
+            </p>
+            <p>
+              Pick a person straight from the row and the task leaves the queue, because it
+              now has somebody on it. They&rsquo;re notified the same way they would be if
+              you&rsquo;d set it from the task itself. If you only have read access to a
+              task, you&rsquo;ll see it here but won&rsquo;t be offered the picker.
+            </p>
+            <p>
+              An empty Triage screen is good news, not a broken one — it means nothing you
+              can see is waiting for someone to claim it.
             </p>
           </Section>
 

@@ -18,6 +18,7 @@ import {
   ClockIcon,
   BookOpenIcon,
   FolderKanbanIcon,
+  InboxIcon,
   LogOutIcon,
   MailIcon,
   MoonIcon,
@@ -105,6 +106,11 @@ export function AppSidebar({
                     to: `/orgs/${currentOrg.id}/tasks`,
                     label: "Tasks",
                     icon: CircleDotIcon,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/triage`,
+                    label: "Triage",
+                    icon: InboxIcon,
                   },
                   {
                     to: `/orgs/${currentOrg.id}/planner`,
