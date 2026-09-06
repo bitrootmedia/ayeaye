@@ -95,18 +95,36 @@ def pool_stmt(*, target_user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) ->
 
 
 def buckets_stmt(*, target_user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:
-    """Every planned task of the target's, in every bucket, in manual order.
+    """Every planned *open* task of the target's, in every bucket, in manual
+    order.
 
     One statement for all five buckets — sorting the rows into columns
     happens in the router, in Python, which is fine here and would not be
     for the board: this is one person's list, never paginated, never large
     enough to need `board_stmt`'s windowed bounding.
+
+    **Closed tasks drop out**, exactly as they drop out of the pool — which
+    is `visible_tasks_stmt` and has always been open-only. A plan is what is
+    still to do; work you have finished is what the board, the list and the
+    daily digest's "done yesterday" are for, and a bucket that silently
+    accumulates everything ever completed stops being a plan.
+
+    **Filtered on read, not deleted on close.** The `planner_entries` row
+    stays exactly where it was, so reopening a task puts it back in its own
+    bucket at its own position rather than losing the placement — the same
+    non-destructive treatment a revoked grant already gets here (the row
+    outlives the access, and this read re-checks rather than the write
+    cleaning up after every way a task can leave the list).
     """
     visible = access.visible_task_ids_stmt(user_id=target_user_id, org_id=org_id, org_role=org_role)
     return (
         select(PlannerEntry, Task)
         .join(Task, Task.id == PlannerEntry.task_id)
-        .where(PlannerEntry.user_id == target_user_id, Task.id.in_(visible))
+        .where(
+            PlannerEntry.user_id == target_user_id,
+            Task.closed_at.is_(None),
+            Task.id.in_(visible),
+        )
         .order_by(PlannerEntry.bucket, PlannerEntry.position, PlannerEntry.id)
     )
 

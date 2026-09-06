@@ -129,6 +129,23 @@ ok "…and from Bob's view of HER planner, though Bob could see it himself" \
 post /tmp/pd.jar $B/api/organisations/$OID/tasks/$SHARED/hidden '{"hidden":false}' >/dev/null
 ok "un-hiding restores it for both"   "$(in_bucket /tmp/pc.jar "" "someday" "$SHARED")" "1"
 
+echo "== closing a task takes it out of the plan, and reopening puts it back"
+# A plan is what's still to do. Filtered on read rather than deleted on
+# close, which is what makes the placement survive: the entry comes back to
+# the same bucket, not to the pool.
+DONE=$(post /tmp/pc.jar $B/api/organisations/$OID/tasks "{\"title\":\"Carol closes this $S\"}" | j "d['id']")
+put /tmp/pc.jar $B/api/organisations/$OID/planner/$DONE '{"bucket":"today","position":1000}' >/dev/null
+ok "planned for today"                "$(in_bucket /tmp/pc.jar "" "today" "$DONE")" "1"
+post /tmp/pc.jar $B/api/organisations/$OID/tasks/$DONE/closed '{"closed":true}' >/dev/null
+ok "closed, so out of the bucket"     "$(in_bucket /tmp/pc.jar "" "today" "$DONE")" "0"
+ok "…and out of an admin's view of it" \
+  "$(in_bucket /tmp/pb.jar "?user_id=$CAROL_ID" "today" "$DONE")" "0"
+# It must not reappear in the pool either — the pool is open AND unplanned,
+# and the entry still exists.
+ok "not back in the pool either"      "$(curl -s -b /tmp/pc.jar $B/api/organisations/$OID/planner | j "sum(1 for t in d['pool'] if t['id']=='$DONE')")" "0"
+post /tmp/pc.jar $B/api/organisations/$OID/tasks/$DONE/closed '{"closed":false}' >/dev/null
+ok "reopening restores its placement" "$(in_bucket /tmp/pc.jar "" "today" "$DONE")" "1"
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]
