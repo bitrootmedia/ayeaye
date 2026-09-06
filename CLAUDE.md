@@ -587,6 +587,18 @@ admin's holds the organisation's whole unassigned pile — the same escape
 hatch admin rank is everywhere else. `scripts/e2e-triage.sh` pins both ends
 of that.
 
+**Both halves of a triage decision are on the row — how urgent, and who
+takes it.** Priority is an `EntityPicker` beside the people one, not a
+`Select`, for the reason CLAUDE.md's own field rule gives: a row where one
+control opens differently from the one next to it reads as a bug. Only
+assigning empties the queue, though — re-prioritising patches the row in
+place and leaves it there, because the task still has nobody on it, which is
+the only thing this list is about. It also deliberately doesn't jump to its
+new position in the priority-first order: re-sorting under the pointer moves
+the next row you were reaching for. Assigning gets a toast and
+re-prioritising doesn't, for the same reason — the glyph changes where
+you're already looking, whereas a vanishing row needs explaining.
+
 **A row leaves the moment you assign it**, removed locally rather than by
 refetching. The list is *defined* by action-required being unset, so a task
 that now has one is no longer a member of it — and keeping your place in a

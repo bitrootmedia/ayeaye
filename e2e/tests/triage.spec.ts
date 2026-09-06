@@ -61,6 +61,33 @@ test.describe("Triage", () => {
     await expect(page.getByRole("link", { name: "Order new warps" })).toHaveCount(0);
   });
 
+  test("priority can be set from the row, and the task stays in the queue", async ({ page }) => {
+    await signUp(page, uniqueEmail("triage-prio"));
+    const orgId = await createOrg(page, `Boatyard ${Date.now()}`);
+    await createTask(page, orgId, "Chase the surveyor");
+
+    await page.goto(`/orgs/${orgId}/triage`);
+    // New tasks start at Normal, the middle of the range.
+    await expect(page.getByRole("button", { name: "Priority for Chase the surveyor" })).toHaveText(
+      /Normal/,
+    );
+
+    await page.getByRole("button", { name: "Priority for Chase the surveyor" }).click();
+    await page.getByRole("option", { name: "Critical" }).click();
+
+    // Still here — re-prioritising isn't triaging it away, unlike assigning.
+    await expect(page.getByRole("link", { name: "Chase the surveyor" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Priority for Chase the surveyor" })).toHaveText(
+      /Critical/,
+    );
+
+    // And it really saved, rather than only moving in the local list.
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Priority for Chase the surveyor" })).toHaveText(
+      /Critical/,
+    );
+  });
+
   test("an empty queue says so rather than looking broken", async ({ page }) => {
     await signUp(page, uniqueEmail("triage-empty"));
     const orgId = await createOrg(page, `Slipway ${Date.now()}`);

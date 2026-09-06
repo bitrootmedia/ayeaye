@@ -21,7 +21,15 @@ import {
 } from "@/components/ui/table";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import { canEdit, personName, type Member, type Task } from "@/lib/types";
+import {
+  PRIORITY_LABEL,
+  TASK_PRIORITIES,
+  canEdit,
+  personName,
+  type Member,
+  type Task,
+  type TaskPriority,
+} from "@/lib/types";
 
 /** Rows per page, and how much "Show more" adds — the task list's own PAGE. */
 const PAGE = 100;
@@ -95,6 +103,46 @@ export default function Triage() {
     [members],
   );
 
+  /**
+   * Unlike assigning, re-prioritising does **not** take the row out of the
+   * queue — the task still has nobody on it, which is the only thing this
+   * list is about. So the row is patched in place rather than removed, and
+   * triage stays a two-part judgement: how urgent is this, and who takes it.
+   *
+   * **The row doesn't jump to its new place in the order, either**, even
+   * though the queue is sorted priority-first and it now belongs elsewhere.
+   * Re-sorting under the pointer moves the next row you were about to reach
+   * for, which is the same "never yank something out from under the person
+   * mid-click" rule the task screen's own panels follow. The order is right
+   * again on the next load, and nothing downstream reads it.
+   *
+   * No toast, unlike assigning: the glyph changes where you're already
+   * looking, so saying so as well is noise. Assigning earns one because the
+   * row vanishes and that needs explaining.
+   */
+  async function reprioritise(task: Task, priority: string | null) {
+    if (!orgId || !priority || priority === task.priority) return;
+    setSaving(task.id);
+    try {
+      await api(`/organisations/${orgId}/tasks/${task.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ priority }),
+      });
+      setTasks((current) =>
+        (current ?? []).map((t) =>
+          t.id === task.id ? { ...t, priority: priority as TaskPriority } : t,
+        ),
+      );
+    } catch {
+      toast.add({
+        title: "Couldn't change that priority",
+        description: "Try again in a moment.",
+      });
+    } finally {
+      setSaving(null);
+    }
+  }
+
   async function assign(task: Task, userId: string | null) {
     if (!orgId || !userId) return;
     setSaving(task.id);
@@ -125,7 +173,8 @@ export default function Triage() {
       <PageHeader
         crumbs={[{ label: org.name, to: `/orgs/${org.id}` }]}
         title="Triage"
-        description="Open tasks nobody has been asked to act on. Pick who should, and the task leaves the queue."
+        description="Open tasks nobody has been asked to act on. Set how urgent each one is, and
+          pick who should — naming somebody takes it out of the queue."
       />
 
       {tasks === null ? (
@@ -171,8 +220,27 @@ export default function Triage() {
                     <TableCell>
                       <StatusBadge status={task.status} />
                     </TableCell>
-                    <TableCell>
-                      <PriorityGlyph priority={task.priority} withLabel />
+                    <TableCell className="w-44">
+                      {/* An EntityPicker rather than a Select, matching the
+                          people picker beside it — a row where one control
+                          opens differently from the one next to it reads as
+                          a bug. Read-only viewers keep the plain glyph. */}
+                      {canEdit(task.access) ? (
+                        <EntityPicker
+                          ariaLabel={`Priority for ${task.title}`}
+                          items={TASK_PRIORITIES.map((p) => ({
+                            value: p,
+                            label: PRIORITY_LABEL[p],
+                            icon: <PriorityGlyph priority={p} />,
+                          }))}
+                          value={task.priority}
+                          searchPlaceholder="Filter…"
+                          disabled={saving === task.id}
+                          onChange={(v) => void reprioritise(task, v)}
+                        />
+                      ) : (
+                        <PriorityGlyph priority={task.priority} withLabel />
+                      )}
                     </TableCell>
                     <TableCell className="max-w-40 truncate">
                       {task.owner ? personName(task.owner) : "—"}

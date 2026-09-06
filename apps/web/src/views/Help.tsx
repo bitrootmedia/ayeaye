@@ -200,10 +200,15 @@ export default function Help() {
               everything&rdquo;; this one answers the question in between.
             </p>
             <p>
-              Pick a person straight from the row and the task leaves the queue, because it
-              now has somebody on it. They&rsquo;re notified the same way they would be if
-              you&rsquo;d set it from the task itself. If you only have read access to a
-              task, you&rsquo;ll see it here but won&rsquo;t be offered the picker.
+              Each row lets you do the two things triage is: set <strong>how urgent</strong>{" "}
+              it is, and pick <strong>who should act</strong>. Naming somebody takes the task
+              out of the queue, because it now has somebody on it — they&rsquo;re notified
+              exactly as they would be if you&rsquo;d set it from the task itself. Changing a
+              priority leaves the task right where it is; it still needs a person.
+            </p>
+            <p>
+              If you only have read access to a task, you&rsquo;ll see it here but won&rsquo;t
+              be offered either control.
             </p>
             <p>
               An empty Triage screen is good news, not a broken one — it means nothing you
