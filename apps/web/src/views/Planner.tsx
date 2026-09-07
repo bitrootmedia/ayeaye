@@ -257,11 +257,29 @@ export default function Planner() {
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
         >
-          <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+          {/* The pool is a tray, not a column of the board: it stays put on
+              the left where you drag *from*, and only stacks above the
+              buckets once there isn't room beside them.
+
+              The buckets are one horizontally-scrolling row at every width,
+              never a wrapping grid. Five fixed columns used to be forced
+              into whatever space was left at `xl`, which at 1280 with the
+              rail open is about 670px — enough to truncate every task title
+              to a single letter and clip Someday off the edge entirely.
+              `shrink-0 basis-56` is the floor that stops that; `grow`
+              still lets them share the extra on a wide screen, so nothing
+              scrolls until it actually has to. Wrapping to two columns was the
+              alternative and reads worse on a board: the whole point of
+              these five is that they're one line in decreasing urgency. */}
+          <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
             <Pool tasks={board.pool} />
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {/* `pb-2` leaves the scrollbar somewhere to sit that isn't on
+                top of the last row of cards. */}
+            <div className="flex gap-4 overflow-x-auto pb-2">
               {PLANNER_BUCKETS.map((bucket) => (
-                <Bucket key={bucket} bucket={bucket} entries={board.buckets[bucket]} />
+                <div key={bucket} className="w-56 shrink-0 grow basis-56">
+                  <Bucket bucket={bucket} entries={board.buckets[bucket]} />
+                </div>
               ))}
             </div>
           </div>
@@ -307,7 +325,10 @@ function Pool({ tasks }: { tasks: PlannerTask[] }) {
 function Bucket({ bucket, entries }: { bucket: PlannerBucket; entries: PlannerEntry[] }) {
   const { setNodeRef, isOver } = useDroppable({ id: bucket });
   return (
-    <Card role="region" aria-label={PLANNER_BUCKET_LABEL[bucket]}>
+    // `h-full` so every column in the row is the same height regardless of
+    // how many cards it holds — a ragged row of drop targets is harder to
+    // aim at, and the empty ones are exactly the ones you're dragging to.
+    <Card className="h-full" role="region" aria-label={PLANNER_BUCKET_LABEL[bucket]}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
           <CalendarDaysIcon className="size-4" />

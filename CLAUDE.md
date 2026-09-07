@@ -2920,6 +2920,25 @@ and clearing the field silently reverts the button to the picker's own
 generic "Choose…" instead of "Not planned," found live testing this exact
 field, not by reading the component's source first.
 
+**The five buckets are one horizontally-scrolling row, never a wrapping
+grid.** They used to be `sm:grid-cols-2 xl:grid-cols-5`, which at `xl` forced
+five fixed columns into whatever the pool left over — about 670px at 1280
+with the rail open. That truncated every task title to a single letter and
+clipped Someday off the edge entirely, and the screen was *more* readable at
+1024 (two columns) than at 1280, which is how it was found. Each column now
+has a `basis-56` floor and still `grow`s, so nothing scrolls until it
+actually has to. Wrapping to two columns was the alternative and reads worse
+on a board: the whole point of these five is that they're one line in
+decreasing urgency, and a 2×3 wrap says something different about the
+ordering. The pool stays a tray on the left rather than becoming a sixth
+column — it's what you drag *from* — and only stacks above once there's no
+room beside. dnd-kit needed no change: its auto-scroll already handles a
+scrollable ancestor, and the keyboard sensor still reaches the columns past
+the edge. Pinned by "the buckets stay readable when there isn't room for
+five columns", which asserts on **geometry, not `toBeVisible`** — every one
+of those elements was perfectly "visible" the whole time it was unreadable —
+and which fails if the grid is put back.
+
 The frontend's drag-and-drop is `@dnd-kit` — the first dependency of its kind
 in this codebase, chosen for a first-class keyboard sensor. That sensor isn't
 a nicety: `e2e/tests/planner.spec.ts` drives the actual reorder through

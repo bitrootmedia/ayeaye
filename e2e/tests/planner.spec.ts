@@ -91,6 +91,43 @@ test.describe("the planner", () => {
     ).toBeVisible();
   });
 
+  test("the buckets stay readable when there isn't room for five columns", async ({ page }) => {
+    // 1280 with the rail open leaves the buckets about 670px. As a
+    // five-column grid that truncated every task title to a single letter
+    // and clipped the last bucket off the edge; as a scrolling row it
+    // doesn't. Asserted on geometry, because every one of those elements
+    // was still "visible" the whole time it was unreadable.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await signUp(page, uniqueEmail("plnarrow"));
+    const orgId = await createOrg(page, `Narrow ${Date.now()}`);
+    await createTask(page, orgId, "Chase the surveyor about the hull survey");
+
+    await page.goto(`/orgs/${orgId}/planner`);
+    await expect(page.getByRole("region", { name: "Today" })).toBeVisible();
+
+    const geometry = await page.evaluate(() => {
+      const scroller = document.querySelector("main .overflow-x-auto") as HTMLElement;
+      return {
+        scrolls: scroller.scrollWidth > scroller.clientWidth,
+        narrowest: Math.min(
+          ...[...scroller.children].map((c) => c.getBoundingClientRect().width),
+        ),
+        // The row scrolls; the page must not.
+        pageScrollsSideways: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+
+    expect(geometry.scrolls).toBe(true);
+    expect(geometry.pageScrollsSideways).toBe(false);
+    // Wide enough for a title rather than an initial and an ellipsis.
+    expect(geometry.narrowest).toBeGreaterThanOrEqual(200);
+
+    // Every bucket is still reachable, including the one past the edge.
+    for (const label of ["Today", "Tomorrow", "This week", "Next week", "Someday"]) {
+      await expect(page.getByRole("region", { name: label })).toBeAttached();
+    }
+  });
+
   test("the \"planning for\" picker: an admin gets it, a plain member never does", async ({
     page,
     browser,
