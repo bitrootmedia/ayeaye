@@ -375,6 +375,25 @@ export default function Help() {
               else can skip this section.
             </p>
             <p>
+              There is no admin screen for the installation as a whole, on purpose: this
+              product has no staff account that can see across organisations, so there is
+              nothing to log in to. Whoever runs the server does it from a shell instead:
+            </p>
+            <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs">
+              {`./scripts/instance.sh stats      # totals for the whole installation
+./scripts/instance.sh users      # accounts, newest first
+./scripts/instance.sh orgs       # organisations, with member and task counts
+./scripts/instance.sh suspend someone@example.com --reason "why"
+./scripts/instance.sh restore someone@example.com`}
+            </pre>
+            <p>
+              Suspending blocks sign-in and ends any session already open. It doesn&rsquo;t
+              touch their data and <strong>restore</strong> puts them straight back. The
+              listings show counts and dates only — never anyone&rsquo;s tasks, comments,
+              notes or files, which stay as private from the server&rsquo;s operator as the
+              rest of the product promises.
+            </p>
+            <p>
               Email and Telegram are both optional infrastructure: leave them unconfigured and
               the product still works, with an honest message instead of a dead link wherever
               they&rsquo;d otherwise be used. To turn Telegram on:

@@ -17,6 +17,7 @@ from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConf
 from supertokens_python.recipe import emailpassword, emailverification, session
 from supertokens_python.recipe.emailpassword import InputFormField, InputSignUpFeature
 from supertokens_python.recipe.emailpassword.constants import FORM_FIELD_PASSWORD_ID
+from supertokens_python.recipe.emailpassword.interfaces import SignInPostNotAllowedResponse
 from supertokens_python.recipe.session import SessionContainer
 from supertokens_python.recipe.session.claim_base_classes.boolean_claim import BooleanClaim
 from supertokens_python.recipe.session.framework.fastapi import verify_session
@@ -227,8 +228,91 @@ def _override_emailpassword_apis(original):
             )
         return response
 
+    original_sign_in_post = original.sign_in_post
+
+    async def sign_in_post(
+        form_fields,
+        tenant_id,
+        session,
+        should_try_linking_with_session_user,
+        api_options,
+        user_context,
+    ):
+        """Refuse a suspended account before a session is ever minted.
+
+        `users.disabled_at` is set by an operator from the shell — see
+        `services/instance.py` for why that is not a staff role. Checked
+        *before* the password is verified rather than after, so a suspended
+        account cannot be used as an oracle for whether a password is
+        right; the answer is the same either way.
+
+        `SIGN_IN_NOT_ALLOWED` rather than the ordinary wrong-credentials
+        refusal, because it is true and the difference matters to the
+        person: someone told their password is wrong will reset it, fail
+        again, and eventually email you about a bug. The reason string is
+        deliberately generic — the operator's own note ("400 orgs in an
+        hour") is for whoever reviews the list later, never for the account
+        holder.
+
+        Emailpassword only, unlike `create_new_session`'s login-history
+        hook, which was chosen precisely because it catches every recipe.
+        The trade is the opposite here: this needs to *refuse*, and refusing
+        inside session creation means the credentials already checked out,
+        with no typed response shape to say so cleanly. A second recipe
+        (Google, say) would need its own equivalent — the suspension itself
+        still holds, because `set_disabled`'s caller revokes every live
+        session and `CurrentUser` re-checks the flag on every request.
+        """
+        email = next((f.value for f in form_fields if f.id == "email"), None)
+        if email and await _account_is_suspended(email):
+            return SignInPostNotAllowedResponse(
+                reason=(
+                    "This account has been suspended. "
+                    "Contact the administrator of this installation."
+                )
+            )
+        return await original_sign_in_post(
+            form_fields,
+            tenant_id,
+            session,
+            should_try_linking_with_session_user,
+            api_options,
+            user_context,
+        )
+
     original.sign_up_post = sign_up_post
+    original.sign_in_post = sign_in_post
     return original
+
+
+async def _account_is_suspended(email: str) -> bool:
+    """One boolean, its own short-lived session.
+
+    Imported inside the function, not at module scope: `app.db` pulls in the
+    engine, and `security/authn.py` is imported by `main.py` while the app
+    is still being assembled. Never raises — a database hiccup here must not
+    turn every sign-in on the instance into a 500, and the safe direction is
+    to let the ordinary password check proceed rather than lock everybody
+    out. A suspended account that slips through on that path still has no
+    live session and is refused by `CurrentUser` on its first real request.
+    """
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import User
+
+    try:
+        async with SessionLocal() as db:
+            return bool(
+                (
+                    await db.execute(
+                        select(User.disabled_at).where(User.email == email.strip().lower())
+                    )
+                ).scalar_one_or_none()
+            )
+    except Exception:
+        logger.warning("could not check account suspension for a sign-in", exc_info=True)
+        return False
 
 
 async def _send_verification_email(tenant_id, user_id, recipe_user_id, email) -> None:

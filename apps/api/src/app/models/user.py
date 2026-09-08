@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, String, func, text
+from sqlalchemy import Boolean, Date, DateTime, Index, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -73,6 +73,31 @@ class User(Base):
     # is what stops it grandfathering people who should verify normally.
     grandfather_verification: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("false")
+    )
+
+    # Account suspension, set only by an operator from the shell (see
+    # `scripts/instance.sh` and `services/instance.py`). NULL is the normal
+    # state; a timestamp means sign-in is refused and every session was
+    # revoked at that moment.
+    #
+    # **This is deliberately not the `role`/`is_staff` column the invariant
+    # test forbids, and the distinction is the whole point.** That test
+    # exists because what a person may do *inside* an organisation must come
+    # from their membership and grants and nowhere else. This says nothing
+    # about that: it is upstream of the whole access model, the account-level
+    # twin of `organisation_members.status = 'disabled'` — either the account
+    # works or it doesn't, and if it does, authorization is unchanged. No
+    # branch anywhere in `services/access.py` reads it.
+    disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Why, in the operator's own words — "signed up 400 orgs in an hour".
+    # For the person reviewing the list in a month, not for the account
+    # holder, who never sees it.
+    disabled_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    __table_args__ = (
+        Index("ix_users_disabled", "disabled_at", postgresql_where=text("disabled_at IS NOT NULL")),
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -4,8 +4,11 @@ No database: these read the SQLAlchemy metadata, so they run in milliseconds
 and catch the mistake at the point it's written rather than on deploy.
 """
 
+from pathlib import Path
+
 from app.db.base import Base
 from app.models import User
+from app.services import access
 
 
 def test_every_table_has_a_uuidv7_primary_key():
@@ -38,3 +41,25 @@ def test_a_user_has_no_role_or_kind_column():
     A `role` here would be a second place to look when something is denied."""
     columns = set(User.__table__.c.keys())
     assert not columns & {"role", "roles", "kind", "is_admin", "is_staff"}
+
+
+def test_account_suspension_is_not_a_role():
+    """`users.disabled_at` is allowed where `is_staff` is not, and the line
+    between them is worth stating rather than rediscovering.
+
+    A role says what someone may do *inside* an organisation, which is what
+    membership and grants already answer — a second answer is the thing the
+    test above exists to prevent. Suspension says whether the account works
+    at all, upstream of the entire access model: the account-level twin of
+    `organisation_members.status = 'disabled'`. If the account works,
+    authorization is exactly what it was.
+
+    The property that keeps that true is that `services/access.py` never
+    reads it — asserted here rather than trusted, because a `disabled_at`
+    that crept into a visibility expression would quietly be the staff tier
+    this product doesn't have.
+    """
+    assert "disabled_at" in User.__table__.c.keys()
+
+    source = (Path(access.__file__)).read_text()
+    assert "disabled_at" not in source

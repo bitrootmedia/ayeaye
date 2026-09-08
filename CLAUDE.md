@@ -1748,6 +1748,90 @@ different list from Access Tokens on purpose: a personal access token is
 something *you* minted; a connected app is a client that registered
 itself and went through consent.
 
+## Instance administration
+
+Read `services/instance.py`. Who is on this installation, and stopping
+abuse — reached only through `scripts/instance.sh`, never over HTTP.
+
+**It is an operator capability, not an in-app role, and that is the whole
+design.** There is no staff tier: `users` has no `role`, `kind` or
+`is_staff` column and `test_a_user_has_no_role_or_kind_column` fails the
+build if one appears. So this is a shell tool, the same shape
+`scripts/reset-mfa.sh` already established. Shell access *is* the
+credential and a better one than a login would be — whoever has it already
+has Postgres and `.env`, so the tool grants no new power, it only makes
+power they already hold ergonomic. A web backoffice would instead be the
+single highest-value account on the instance, phishable and
+brute-forceable, guarding data organisation admins deliberately cannot
+reach.
+
+**Metadata only. Nothing here reads anybody's content** — counts, dates and
+names, never a task title, a comment, a private note or a file. Not
+squeamishness: this product makes hard promises a browsing backoffice would
+quietly void (a hidden task is invisible to org admins, `services/notes.py`
+has no override branch at all, an export is the requester's "not even an
+admin's"). Spam triage needs volume and timing, not prose. An
+organisation's *name* is the one judgement call, included because a name is
+what a spam organisation is recognised by.
+
+**`users.disabled_at` is allowed where `is_staff` is not, and the line
+between them is the point.** A role says what someone may do *inside* an
+organisation, which membership and grants already answer — a second answer
+is what that invariant test exists to prevent. Suspension says whether the
+account works at all, upstream of the whole access model: the account-level
+twin of `organisation_members.status = 'disabled'`. If the account works,
+authorization is exactly what it was.
+`test_account_suspension_is_not_a_role` asserts `services/access.py` never
+reads the column, because a `disabled_at` that crept into a visibility
+expression would quietly be the staff tier this product doesn't have.
+
+**Suspension is two mechanisms, and a test that checked one would pass
+while the other let somebody carry on working.**
+
+- **The front door** — `sign_in_post` is overridden in `security/authn.py`
+  to answer `SIGN_IN_NOT_ALLOWED`. Checked *before* the password is
+  verified, so a suspended account can't be used as an oracle for whether a
+  password is right. Emailpassword only, unlike `create_new_session`'s
+  login-history hook (chosen precisely because it catches every recipe) —
+  the trade is opposite here: this needs to *refuse*, and refusing inside
+  session creation means the credentials already checked out with no typed
+  response shape to say so cleanly.
+- **The open tab** — `set_disabled`'s caller revokes every live session
+  through SuperTokens, which owns them. In practice that is what fires, and
+  the suite asserts **401**, not 403: the session is gone, so the request
+  never reaches a route. `deps.py`'s own 403 is defence in depth behind it,
+  for a deployment where an access token outlives its revocation. Asserting
+  403 there would have been asserting the weaker path and calling the real
+  one a failure — which is exactly how the first version of the test read.
+
+**The local `users` row is created lazily, and for this tool that is the
+target population rather than an edge case.** It appears on somebody's
+first authenticated request, so an account that signed up and walked away
+has no row at all — precisely what a registration script produces.
+`suspend` therefore falls back to asking SuperTokens (which knew about them
+at signup) and materialises the row through `users_service.get_or_create`,
+so there is somewhere to record the suspension. Deliberately **not** done
+for `users`/`orgs`: inventing rows as a side effect of *listing* would make
+the totals disagree with themselves between runs.
+
+**Ordering matters in `suspend`.** The flag is committed before sessions
+are revoked — the other way round, a revoked session just sends them to the
+sign-in screen and straight back in.
+
+**Prevention beats cleanup, and the tool says so.** `stats` flags a signup
+rate well ahead of the organisations-created rate, because that gap is the
+shape spam takes here: accounts are cheap to make, and creating an
+organisation is the first thing a real person does next. If that reading is
+routine, the gate is open too wide — closing signup or enforcing
+`EMAIL_VERIFICATION` is the cheaper fix than suspending people weekly.
+
+**A trap worth not repeating.** `AccountInfoInput` is in
+`supertokens_python.types.base`, not `supertokens_python.types` — guessed
+wrong first, and the failure was swallowed by the broad `except` that keeps
+an unreachable core from being fatal, so it reported "no account matching"
+rather than an import error. Confirm an SDK symbol against the installed
+package, the same rule the MCP section already states.
+
 ## Self-hosting
 
 The bar from PLAN.md §8 — `setup.sh`/`diagnose.sh` reasoning, bringing your
@@ -3852,6 +3936,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose
+./scripts/e2e-instance.sh               # suspension: sign-in blocked, sessions revoked, data kept
 ./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
 ./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced

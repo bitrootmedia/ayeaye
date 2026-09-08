@@ -7,7 +7,7 @@ The `Annotated` aliases below keep router signatures short and consistent —
 import uuid
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
@@ -32,8 +32,28 @@ CurrentUserId = Annotated[str, Depends(get_current_user_id)]
 
 
 async def get_current_user(user_id: CurrentUserId, db: DbSession) -> User:
-    """The local user row, created on first sight."""
-    return await users_service.get_or_create(db, supertokens_user_id=user_id)
+    """The local user row, created on first sight.
+
+    **A suspended account is turned away here**, which is the belt to
+    `_account_is_suspended`'s braces in `security/authn.py`. Suspending
+    revokes every live session, but an access token already issued stays
+    valid until it expires — so without this check there is a window in
+    which somebody who can no longer sign in can still use the tab they
+    already had open. This closes it on their very next request, and it
+    costs nothing: the row is loaded here regardless.
+
+    **403, not 404.** The account exists and they are who they say; they are
+    just not welcome. Pretending otherwise would be the wrong lie, and it is
+    the same reasoning that makes a non-owner's failed close a 403 rather
+    than a 404.
+    """
+    user = await users_service.get_or_create(db, supertokens_user_id=user_id)
+    if user.disabled_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="this account has been suspended",
+        )
+    return user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
