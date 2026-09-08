@@ -81,8 +81,8 @@ reminders with a scheduler, the account screen, and an organisation dashboard.
 Six features, in dependency order rather than the order they were asked for:
 hiding rewrites the access expression everything else composes.
 
-Verified by 303 infra-free unit tests, 555 end-to-end checks over HTTP
-(`./scripts/e2e-*.sh`) and 130 browser tests in a real Chromium
+Verified by 345 infra-free unit tests, 599 end-to-end checks over HTTP
+(`./scripts/e2e-*.sh`) and 143 browser tests in a real Chromium
 (`./scripts/e2e-browser.sh`), which also photograph every screen in both
 themes into `e2e/artifacts/shots/`.
 
@@ -182,6 +182,9 @@ ayeayecaptain/
     │       │                #   task (+ grants, events), tag (+ task_tags),
     │       │                #   checklist (+ items), sheet (+ rows/columns/cells),
     │       │                #   note (private, per person), personal_note (the notepad),
+    │       │                #   bookmark (the org's shared shelf of links —
+    │       │                #     ordered, one description each, and
+    │       │                #     pinned by an owner alone),
     │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
     │       │                #   export (a ZIP build, requester-only, autodeletes),
     │       │                #   reminder,
@@ -206,6 +209,7 @@ ayeayecaptain/
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
+    │       │                #   bookmarks.py — shared, ordered, owner-pinned
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
     │       │                #   reminders.py presence.py working_hours.py sparks.py
@@ -1909,7 +1913,7 @@ unobtrusive**, the exact placement asked for, because it's a reference
 screen you reach for on purpose, the identical reasoning the People roster's
 own move off the dashboard already established for this codebase.
 
-**One page, not a multi-page docs site.** Fifteen sections, a sticky anchor
+**One page, not a multi-page docs site.** Eighteen sections, a sticky anchor
 table of contents down the left on `lg` and up (`<nav>` of plain `<a
 href="#id">` links, no scroll-spy JS — a reader either arrives from the TOC
 or scrolls, and both already work with nothing fancier than
@@ -3232,6 +3236,140 @@ mid-typing" reasoning the notepad's own editor documents for its `note.id`
 dependency, just keyed on the value here since there's no id-per-dialog
 instance to key on instead.
 
+## Bookmarks
+
+Read `services/bookmarks.py`. The organisation's own shelf of links — the
+staging URL, the shared drive, the supplier's portal — with a description, an
+order, and a pin. `/orgs/{id}/bookmarks`, its own rail item under Knowledge
+base, because both are reference material you go to on purpose.
+
+**Shared, which is the one thing here unlike everything in the two sections
+above it.** Sparks and the notepad are lists only their author ever reads;
+this is a list every member reads, in the same order. That is also what makes
+`position` worth storing at all: an order nobody else sees is a preference,
+not a shelf.
+
+**Three bars, deliberately different from each other, and that is why
+`scripts/e2e-bookmarks.sh` needs four accounts.**
+
+- **Reading and adding is ordinary membership.** No grants, no per-row
+  visibility — `CurrentOrg` is the whole check, and `list_stmt` is one
+  statement with no access expression in it. This is the only
+  organisation-scoped resource in the product with nothing finer than
+  membership to resolve, which is why that builder looks too simple next to
+  `access.visible_tasks_stmt` and is nonetheless right. A shelf only an
+  admin may add to is a shelf that stays empty.
+- **Editing and deleting is whoever added it, or an org admin.** The
+  ordinary shape everywhere else — your own thing, plus the escape hatch.
+  Only testable between two *plain members*: a member must not be able to
+  rewrite a colleague's link, and a single-account test reports that as
+  working.
+- **Pinning is the organisation's `owner`, and not even an admin.** A pinned
+  link is what the whole organisation sees first, and that was asked for as
+  an owner's call. Note the direction — this is **narrower** than admin, not
+  wider, so it cannot be expressed by reusing `can_manage_members`;
+  `organisations.can_delete_organisation` is the existing precedent for an
+  owner-only capability and `can_pin` is its sibling, kept in
+  `services/bookmarks.py` rather than beside it because it is a rule about
+  bookmarks, not about membership. It is the second owner-only thing in the
+  product, and the only one that isn't destructive.
+
+**Reordering is member-level, unlike editing the same row.** Moving somebody
+else's bookmark up the list is what tidying a shared list means, and it
+changes nothing about the bookmark itself. Pinning is untouched by it: a
+pinned row sorts ahead of every unpinned one whatever its position, so no
+member can drag a link past a pinned one — asserted in the e2e suite rather
+than left to reasoning, because it is the one place the two rules meet.
+
+**Pinning and editing each get their own route, for opposite reasons.**
+`POST .../pinned` exists because it is a *higher* bar than the `PATCH` (the
+same reason `POST /tasks/{id}/closed` is its own route when only the owner
+may close) — a `pinned` field on `BookmarkUpdate` would mean one endpoint
+answering 403 for one field and 200 for another in the same request.
+`POST .../position` exists because it is a *lower* one: folding it into the
+`PATCH` would either lock members out of tidying the list or let them
+rewrite a colleague's URL.
+
+**`created_by_user_id` is `SET NULL`, which is why
+`organisations._reassign_everything_owned_by` needed no bookmark branch.**
+`projects.owner_user_id` and `tasks.owner_user_id` are RESTRICT because a
+thing with no owner is a thing nobody can administer, so that function has
+to find a departing colleague's work a new home. A bookmark has no owner —
+only somebody who happened to type it in — and stays administrable by the
+organisation's admins regardless, so removing them succeeds and the link
+stays on the shelf, still saying who added it. `scripts/e2e-bookmarks.sh`
+asserts exactly that rather than leaving it to reasoning.
+
+The NULL itself only arrives when the *account* goes, not when somebody
+leaves an organisation — and the consequence is worth knowing: an orphaned
+bookmark is editable by admins alone, so `can_edit` must never let a NULL
+author compare equal to the caller. `tests/test_bookmark_rules.py` pins that
+specifically.
+
+**The `User` join in `list_stmt` is an OUTER join and has to stay one**, for
+the same reason: an inner join silently drops every orphaned row out of the
+organisation's list.
+
+**A URL is normalised before it is stored, and that is a security boundary
+rather than tidiness.** Every row renders as a real `<a href>`, so a stored
+`javascript:` URL is stored XSS waiting for the next colleague to click it.
+`normalise_url` is an allow-list of exactly `http` and `https` — the same
+allow-list-not-block-list reasoning `services/richtext.py` applies to
+markup — and it supplies `https://` when somebody types a bare hostname,
+because without a scheme that href is *relative* and navigates inside the
+app instead of out to the site. Two things about it are non-obvious:
+
+- **A naive `^\w+:` scheme pattern is wrong on real input.** RFC 3986 allows
+  dots and digits in a scheme, so `example.com:8080/admin` parses as the
+  scheme "example.com" and `localhost:3000` as "localhost" — both then get
+  refused as "not http", and both are ordinary things to paste in.
+  `_scheme_of` requires *no dot in the candidate* **and** *no port number
+  after the colon* before it believes it has found a scheme. Found by a unit
+  test, not by a person.
+- **A URL that is too long is refused, not truncated.** Truncating one
+  produces a link that goes somewhere else, which is worse than saying no.
+
+**`description` is the row's label, and there is deliberately no second
+`title` field.** The list renders the description as the link text and falls
+back to the URL when it is blank, so there is nothing to keep in step with
+anything. Blank and absent are one state (`server_default=""`), the same call
+`services/notification_channels.py` makes for a blank email override.
+
+Two things on the frontend are worth knowing before touching it:
+
+- **Pinned rows are their own list, not a flag on one long one, and that is
+  a correctness point rather than a layout preference.** The server sorts
+  every pinned row ahead of every unpinned one whatever its position, so a
+  single sortable list would let somebody drop an unpinned row above a
+  pinned one and watch it snap straight back on the next load. Two
+  `SortableContext`s, and dragging never crosses them — the way a row
+  changes group is the pin button. The Pinned heading only exists when
+  something is in it, which is also how a non-owner (who gets no pin button
+  at all, the usual "don't show a control that 403s" rule) can still see
+  *which* links are pinned.
+- **The delete button says "Delete X", not "Remove X", and that is a test
+  fix living in the product's copy.** Playwright's `getByRole` name matching
+  is case-insensitive **substring** by default, and "Remove X" literally
+  contains "move X" — so it resolved to the same locator as the drag
+  handle's own "Move X" and every reorder test failed on strict mode. Same
+  family as the "Priority: Normal" trap below, and cheaper to fix in one
+  label than in every test that reaches for a grip handle. "Delete" is the
+  word the notepad and Sparks already use for this anyway.
+
+Reordering is drag-and-drop through `@dnd-kit`, the Planner's own dependency
+and its own grip-handle split (only the grip carries the listeners, so
+following a link and moving a row never fight over the same click).
+`bookmarks.spec.ts` drives it through the **keyboard** sensor for the reason
+`planner.spec.ts` documents — dnd-kit's pointer sensor is genuinely flaky to
+script, and its collision state lands on the next animation frame rather
+than synchronously with the keydown, so each key needs a short pause after
+it.
+
+**Not searchable from ⌘K, and no MCP tool — neither was asked for.** Adding
+either is one more `*_stmt` in `services/search.py` or one more tool in
+`app/mcp/server.py` respectively; both would be additive, and neither is
+pretended at anywhere in the code.
+
 ## The knowledge base
 
 Read `services/books.py` and `services/articles.py`. Book → article, with
@@ -3929,6 +4067,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-sheets.sh                 # a cell's existence IS the check, idempotent, who/when recorded
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
 ./scripts/e2e-notepad.sh                # the notepad: same rule, a list this time, org-scoped
+./scripts/e2e-bookmarks.sh              # the shared shelf: three different bars, and only an owner pins
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
@@ -4005,6 +4144,11 @@ Writing browser tests here, three things bite every time:
 - **A toast title and a history line often say the same thing.** "Moved" is
   both a toast and part of "… moved it to another project". Use
   `getByRole("heading", { name, exact: true })` for the toast.
+- **A label can contain another label.** `getByRole`'s name matching is
+  case-insensitive *substring* by default, so "Move X" also matches
+  "**Re**move X" — which is why the bookmarks list's delete button says
+  "Delete X". Check a new `aria-label` against the others on the same row
+  before adding it, or reach for `{ exact: true }`.
 - **`PriorityGlyph` is labelled "Priority: Normal"**, which a substring match
   on "Priority" also hits. `{ exact: true }` on the control's name.
 - **`CardTitle` renders a `div`, not a heading.** `getByRole("heading")` finds

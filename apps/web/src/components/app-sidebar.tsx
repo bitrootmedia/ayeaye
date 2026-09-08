@@ -9,6 +9,7 @@
 import {
   BellIcon,
   BellRingIcon,
+  BookmarkIcon,
   LayoutDashboardIcon,
   BuildingIcon,
   CalendarDaysIcon,
@@ -136,6 +137,11 @@ export function AppSidebar({
                     to: `/orgs/${currentOrg.id}/kb`,
                     label: "Knowledge base",
                     icon: BookOpenIcon,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/bookmarks`,
+                    label: "Bookmarks",
+                    icon: BookmarkIcon,
                   },
                   { to: `/orgs/${currentOrg.id}/time`, label: "Time", icon: ClockIcon },
                   { to: `/orgs/${currentOrg.id}/people`, label: "People", icon: UsersIcon },

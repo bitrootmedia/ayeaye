@@ -178,6 +178,25 @@ test("photograph the product", async ({ page }) => {
   await page.goto(`/orgs/${orgId}/projects`);
   await shot(page, "10-projects");
 
+  // The organisation's shared shelf of links, with one pinned — the pinned
+  // group only exists when something is in it, so photographing an empty
+  // shelf would miss half the screen.
+  await page.goto(`/orgs/${orgId}/bookmarks`);
+  await page.getByRole("button", { name: "Add bookmark" }).click();
+  const bookmarkDialog = page.locator('[data-slot="dialog-content"]');
+  await bookmarkDialog.getByRole("textbox", { name: "Link" }).fill("example.com/chandlery");
+  await bookmarkDialog
+    .getByRole("textbox", { name: "Description" })
+    .fill("Chandlery trade account");
+  await bookmarkDialog.getByRole("button", { name: "Add bookmark" }).click();
+  await page.getByRole("button", { name: "Add bookmark" }).first().click();
+  await bookmarkDialog.getByRole("textbox", { name: "Link" }).fill("example.com/tide-tables");
+  await bookmarkDialog.getByRole("textbox", { name: "Description" }).fill("Tide tables");
+  await bookmarkDialog.getByRole("button", { name: "Add bookmark" }).click();
+  await page.getByRole("button", { name: "Pin Tide tables" }).click();
+  await expect(page.getByRole("heading", { name: "Pinned", exact: true })).toBeVisible();
+  await shot(page, "10b-bookmarks");
+
   // The search palette, mid-query.
   await page.goto(`/orgs/${orgId}/tasks`);
   await page.getByRole("button", { name: "Search" }).click();
@@ -258,6 +277,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/triage`);
   await shot(page, "17b-triage-dark");
+
+  await page.goto(`/orgs/${orgId}/bookmarks`);
+  await shot(page, "17c-bookmarks-dark");
 
   // The task screen carries three native `type="date"` inputs (Due, Est.
   // start) — the one place a browser-drawn control (the calendar picker

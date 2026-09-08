@@ -8,6 +8,7 @@ means adding a module in routers/ and one include_router line here.
 from fastapi import APIRouter
 
 from app.api.routers import (
+    bookmarks,
     calendar,
     conversations,
     dashboard,
@@ -89,6 +90,12 @@ api_router.include_router(calendar.router)
 # everything above it, has no visibility rule to speak of — only the author
 # ever reads a row, full stop.
 api_router.include_router(personal_notes.router)
+
+# Bookmarks: the organisation's shared shelf of links. The mirror image of
+# the notepad above — no visibility rule either, but because *every* member
+# reads every row rather than because only one does. Pinning is the one
+# owner-only capability in the product outside deleting an organisation.
+api_router.include_router(bookmarks.router)
 
 # Comment threads on tasks and projects. There is no separate comment system —
 # these ARE the conversations, which is what makes attachments, voice notes and

@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  BookmarkIcon,
   CalendarDaysIcon,
   CalendarIcon,
   CircleDotIcon,
@@ -39,6 +40,7 @@ const SECTIONS: Section[] = [
   { id: "planner", title: "Planner", icon: CalendarDaysIcon },
   { id: "calendar", title: "Calendar & reminders", icon: CalendarIcon },
   { id: "notepad", title: "Notepad", icon: NotebookIcon },
+  { id: "bookmarks", title: "Bookmarks", icon: BookmarkIcon },
   { id: "notifications", title: "Notifications", icon: BellIcon },
   { id: "telegram", title: "Telegram", icon: SendIcon },
   { id: "security", title: "Two-factor authentication", icon: ShieldCheckIcon },
@@ -261,6 +263,23 @@ export default function Help() {
               Free-form personal notes, scoped to an organisation and autosaved as you type —
               for the kind of thing that isn&rsquo;t about any one task. Only you ever see
               your own notes here.
+            </p>
+          </Section>
+
+          <Section id="bookmarks" title="Bookmarks">
+            <p>
+              Links the whole organisation shares — the staging site, the shared drive, a
+              supplier&rsquo;s portal. Unlike the notepad above, everyone in the
+              organisation sees the same list: anyone can add a link, give it a short
+              description, and drag the list into whatever order makes sense.
+            </p>
+            <p>
+              A link can be edited or removed by whoever added it, or by an organisation
+              admin. <strong>Pinning is the organisation&rsquo;s owner alone</strong> — a
+              pinned link sits at the top of the list for everybody, so it&rsquo;s the one
+              thing here an admin can&rsquo;t do. If you don&rsquo;t see a pin button, that
+              isn&rsquo;t a fault: you&rsquo;ll still see which links are pinned, under
+              their own heading.
             </p>
           </Section>
 

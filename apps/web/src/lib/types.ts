@@ -624,6 +624,12 @@ export type Export = {
 export const canManageMembers = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 export const canRename = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 export const canDeleteOrg = (role: Role) => role === "owner";
+/** Pinning a bookmark. **Owners only, and not admins** — the one capability
+ *  in the product outside deleting an organisation that an admin doesn't
+ *  have. A pinned link is what the whole organisation sees first; see
+ *  `services/bookmarks.py`. The server refuses regardless — this is only
+ *  what stops the UI offering a button that 403s. */
+export const canPinBookmark = (role: Role) => role === "owner";
 export const canRequireMfa = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 
 /** You cannot appoint someone above yourself. */
@@ -869,4 +875,31 @@ export type ArticleRevision = {
   /** Whether this is the mutable "current" revision — the one an autosave
    *  can still land on. Every older row is history, read-only. */
   is_current: boolean;
+};
+
+/** One link on the organisation's shared shelf.
+ *
+ *  Shared, unlike a spark or a notepad entry: every member reads the same
+ *  rows in the same order, which is what makes `position` worth storing.
+ *
+ *  `description` is the row's label — the list renders it as the link text
+ *  and falls back to the URL when it's blank, so there is no second "title"
+ *  field to keep in step with it. `added_by` is NULL once that person has
+ *  been removed from the installation, which is a fact about the past rather
+ *  than a claim on the row. */
+export type Bookmark = {
+  id: string;
+  url: string;
+  description: string;
+  /** Sorts ahead of every unpinned row, for everybody. Only an organisation
+   *  owner can set it. */
+  pinned: boolean;
+  position: number;
+  added_by: Person | null;
+  created_at: string;
+  updated_at: string;
+  /** Whoever added it, or an org admin — resolved server-side so the UI can
+   *  omit the control rather than show one that 403s, the same reasoning
+   *  `can_close` on a task follows. */
+  can_edit: boolean;
 };
