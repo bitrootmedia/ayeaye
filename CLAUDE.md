@@ -1577,6 +1577,32 @@ those service functions already resolve the task through
 `_readable_task()` internally, the identical reason `set_open` needed no
 separate `context_for` call either.
 
+**`list_projects`, `list_members`, and `planner_bucket` on `create_task`
+exist for a client that draws a form rather than reads prose.** Every write
+tool here names a project by id and a person by email — right for an
+assistant, which is quoting back an id it was just given or an address
+somebody said out loud, and useless to the menu bar app in the
+`ayeaye-menubar` repo, which has to *offer* the choice and had nowhere to
+get either list. Both are ordinary tools over the ordinary services
+(`projects_service.list_visible`, `organisations_service.list_members`), so
+the access rules come free: a project stays private to its owner until
+shared, and an organisation admin sees every one, exactly as everywhere
+else.
+
+`list_members` returns only people who have **actually joined**. An
+outstanding invitation is somebody `_member_by_email` will refuse with "not
+a member", so listing them would offer a choice every write tool then
+turns down.
+
+`planner_bucket` is **the caller's board, never the owner's**, even when
+creating a task for somebody else. A planner is one person's plan for their
+own week (see `models/planner.py`) — putting work on a colleague's board
+because you filed a ticket for them is not a thing to do quietly, and the
+REST API has no route that does it either without `?user_id=` and an admin
+check. It places with `position=None`, appending: the same trade the task
+screen's own bucket picker makes, since fetching a whole board to compute a
+midpoint for a task nobody has looked at yet would be a strange one.
+
 **`task_versions` is read-only, and restoring is deliberately not a tool.**
 It reports the earlier versions of a task's title and description (see the
 Task versions section above), stripped to prose with `richtext.to_plain_text`
@@ -1624,23 +1650,33 @@ Four things cost real time here, all of them non-obvious:
   Dynamic Client Registration (see the section below), because ChatGPT's
   connector has no bearer-token fallback at all and mandates it — the Caddy
   fix alone was necessary but not sufficient for that client.
-- **A `Denied` refusal's own message doesn't reach the client — found adding
-  the knowledge-base tools, not caused by them.** `_handle_call_tool` in the
-  installed SDK wraps any exception as `ToolError(f"Error executing tool
-  {name}: {e}")`, which *should* carry `str(e)` — but the live server
-  answers a read-only-token refusal with the bare `"Error executing tool
-  create_task"`, no colon, no message, confirmed identically for a
-  pre-existing tool (`create_task`) and a new one (`create_book`) via a raw
-  `curl` with `Content-Length` checked byte for byte, so it isn't truncation
-  either. `isError: true` still comes through correctly — only the detail
-  is gone. `scripts/e2e-mcp.sh`'s own `grep -ci "read-only"` assertions for
-  this appear to pass, but they're the exact silently-vacuous trap this
-  file already warns about below: the script's shared `/tmp/mcp-req.json`
-  scratch file races between nested `$(...)` substitutions once several
-  tool calls are in flight, and the comparison ends up between two
-  independently-mangled values. Not chased further — it's an installed
-  dependency's behaviour, unrelated to anything built for this feature, and
-  every write refusal still refuses.
+- **A `Denied` refusal's own message didn't reach the client, and the cause
+  was here, not in the SDK.** Every refusal — "no such organisation", "not a
+  member", "this credential is read-only" — arrived as the bare string
+  `Error executing tool <name>`, with the one sentence saying what to do
+  about it dropped. This was written up here as an installed dependency's
+  behaviour and left; it wasn't. The SDK draws a deliberate line between a
+  failure a tool *anticipated* and a crash: raise `ToolError` and your
+  message reaches the model in the `is_error` result, raise anything else
+  and it is treated as an unhandled exception, whose text is kept on the
+  server precisely so a crash cannot leak internals. `Denied` subclassed
+  plain `Exception`, so every refusal in this module took the crash path and
+  got the generic string it is designed to produce. **`class Denied(ToolError)`
+  is the whole fix**, and the assertions in `scripts/e2e-mcp.sh` that grep
+  for refusal wording pass on their own terms now.
+
+  The two things that hid it are both worth keeping: the client this most
+  affected — the menu bar app in the `ayeaye-menubar` repo — had already
+  worked around it by *substituting a guess* ("if your token is read-only,
+  make a write one") whenever the text began `Error executing tool`, which
+  is a plausible sentence in front of somebody at the cost of never showing
+  the real one. And `e2e-mcp.sh`'s own assertions for it were reading as
+  passes: **bash 3.2, which is what macOS ships, mis-parses a `\"` inside a
+  `$(...)` inside a double-quoted string** and splits the result into two
+  words, so `ok` compared its own `$2` against a `$3` that was never the
+  expected value. Any new assertion in that file builds its argument object
+  into a variable first (`args key=value …`) — see the note on this at the
+  top of the "lists a client needs" section there.
 
 **A warning about testing it from a shell.** `e2e-mcp.sh` builds every payload
 with `python3 -c json.dumps`, never with escaped quotes inside a shell string.

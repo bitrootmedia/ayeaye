@@ -54,17 +54,21 @@ from mcp.server.mcpserver import MCPServer
 # registration with a Pydantic schema error about IsInstanceSchema, which says
 # nothing at all about the actual mistake.
 from mcp.server.mcpserver.context import Context
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import AnyHttpUrl, Field
 
 from app.core.config import settings
 from app.db import SessionLocal
 from app.models import Book, User
+from app.models.organisation import STATUS_ACTIVE as MEMBER_STATUS_ACTIVE
+from app.models.planner import BUCKETS as PLANNER_BUCKETS
 from app.models.task import PRIORITIES, STATUSES
 from app.models.token import SCOPE_READ, SCOPE_WRITE
 from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
 from app.services import organisations as organisations_service
+from app.services import planner as planner_service
 from app.services import projects as projects_service
 from app.services import reminders as reminders_service
 from app.services import richtext, time_tracking
@@ -109,8 +113,22 @@ mcp = MCPServer(
 )
 
 
-class Denied(Exception):
-    """Turned into a tool error rather than a 500."""
+class Denied(ToolError):
+    """A refusal the caller should read: "no such organisation", "not a member",
+    "this credential is read-only".
+
+    **`ToolError`, not `Exception`.** The SDK draws exactly this line: a
+    `ToolError` is a failure the tool saw coming, and its message reaches the
+    client in the `is_error` result; anything else is a crash, and the model
+    gets the bare string `Error executing tool <name>` with the real text kept
+    on the server — deliberately, so an unhandled exception cannot leak
+    internals. Every refusal here is the former, and while `Denied` was a
+    plain `Exception` every one of them arrived as that bare string: a person
+    told only that something failed, with the one sentence saying what to do
+    about it discarded on the way out. It read like an SDK fault and was
+    written up as one in the menu bar client, which substituted a guess
+    ("your token may be read-only") because it had nothing else to show.
+    """
 
 
 class _Principal:
@@ -196,6 +214,61 @@ async def organisations(ctx: Context) -> str:
     if not rows:
         return "You are not a member of any organisation."
     return "\n".join(f"[{org.id}] {org.name} (you are {role})" for org, role in rows)
+
+
+@mcp.tool()
+async def list_projects(
+    ctx: Context,
+    organisation_id: Annotated[str, Field(description="From `organisations`.")],
+    include_archived: bool = False,
+) -> str:
+    """Projects you can see, with their ids — what `project_id` on
+    `create_task` and `update_task` wants. A project is private to its owner
+    until shared, so this is your list, not the organisation's."""
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        rows = await projects_service.list_visible(
+            db, org, user.id, include_archived=include_archived
+        )
+    if not rows:
+        return "No projects you can see yet."
+    lines = []
+    for project, level in rows:
+        bits = [f"[{project.id}]", project.name, f"access={level}"]
+        if project.archived_at:
+            bits.append("archived")
+        lines.append(" | ".join(bits))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def list_members(
+    ctx: Context,
+    organisation_id: Annotated[str, Field(description="From `organisations`.")],
+) -> str:
+    """Who is in this organisation, by email — which is what `owner_email`
+    and `action_required_email` want.
+
+    Only people who have actually joined. An outstanding invitation is a
+    person who cannot own a task or be asked to act on one yet, so listing
+    them here would only offer a choice every write tool then refuses.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        rows = await organisations_service.list_members(db, org.organisation.id)
+    lines = [
+        " | ".join(
+            [person.email, person.display_name or person.email, f"role={member.role}"]
+            + (["you"] if person.id == user.id else [])
+        )
+        for member, person, _invited_by in rows
+        if member.status == MEMBER_STATUS_ACTIVE and person is not None
+    ]
+    if not lines:
+        return "Nobody has joined this organisation yet."
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -493,12 +566,24 @@ async def create_task(
     ] = None,
     priority: str = "normal",
     due_on: Annotated[str | None, Field(description="YYYY-MM-DD.")] = None,
+    planner_bucket: Annotated[
+        str | None,
+        Field(
+            description="Put it straight on your own planner board. "
+            f"One of: {', '.join(PLANNER_BUCKETS)}."
+        ),
+    ] = None,
 ) -> str:
     """Create a task, optionally for somebody else.
 
     Naming a person by email rather than id, because that is what a person
     says out loud. They must already be a member of the organisation — this
     will not invite anybody.
+
+    `planner_bucket` is **yours**, not the owner's, even when you are
+    creating this for somebody else: a planner is one person's plan for
+    their own week (see models/planner.py), and putting work on a colleague's
+    board because you filed a ticket for them is not a thing to do quietly.
     """
     user, tok = await _caller(ctx)
     _require_write(tok)
@@ -522,6 +607,25 @@ async def create_task(
             action_required_user_id=acting,
             due_on=date.fromisoformat(due_on) if due_on else None,
         )
+        if planner_bucket:
+            if planner_bucket not in PLANNER_BUCKETS:
+                raise Denied(
+                    f"{planner_bucket!r} is not a planner bucket. "
+                    f"One of: {', '.join(PLANNER_BUCKETS)}."
+                )
+            # Appended to the end of the bucket — `position=None`. Same
+            # bargain the task screen's own bucket picker makes: fetching a
+            # whole planner board to work out a midpoint, in order to place
+            # one task somebody has not looked at yet, would be a strange
+            # trade.
+            await planner_service.place(
+                db,
+                target_user_id=user.id,
+                target_org_role=org.role,
+                org_id=org.organisation.id,
+                task_id=created.id,
+                bucket=planner_bucket,
+            )
     return f"Created [{created.id}] {created.title}"
 
 

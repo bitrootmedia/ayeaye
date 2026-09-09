@@ -47,6 +47,11 @@ import json,sys
 print(json.dumps(dict(p.split('=',1) for p in sys.argv[1:])))
 " "$@"; }
 
+planned_in_bucket(){ # $1 cookie-jar  $2 bucket  $3 task-id
+  curl -s -b "$1" $B/api/organisations/$OID/planner \
+    | j "sum(1 for e in d['buckets']['$2'] if e['task']['id']=='$3')"; }
+planned_total(){ curl -s -b "$1" $B/api/organisations/$OID/planner | j "sum(len(v) for v in d['buckets'].values())"; }
+
 tool(){ # $1 token  $2 tool-name  $3 arguments-json
   python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'arguments':json.loads(sys.argv[2])}))" "$2" "$3" > /tmp/mcp-args.json
   rpc "$1" tools/call "$(cat /tmp/mcp-args.json)"
@@ -170,6 +175,72 @@ ok "creating for a stranger is refused" "$(tool "$WRITE" create_task "{\"organis
 CARGS=$(args organisation_id=$OID task_id=$TID "body=Ordered today $S")
 ok "commenting works"           "$(tool "$WRITE" comment "$CARGS" | text | grep -c "Posted")" "1"
 ok "…and it is a real comment"  "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$TID/comments | j "sum(1 for m in d['messages'] if m['body']=='Ordered today $S')")" "1"
+
+echo "== the lists a client needs to offer a choice"
+# `create_task` names a project by id and a person by email, which is fine for
+# an assistant reading prose and useless to anything drawing a dropdown — it
+# has nowhere to get either. These two are what turn "pass an id you already
+# know" into a list somebody can pick from.
+#
+# Every argument object is built into a variable first. Bash 3.2 — which is
+# what macOS ships and what this file is run with — mis-parses a `\"` inside a
+# `$(...)` inside a double-quoted string, and splits the result into two
+# arguments: `ok` then compares its own $2 against a $3 that was never the
+# expected value, and passes for no reason. There are older assertions in this
+# file doing exactly that.
+ORGARGS=$(args organisation_id=$OID)
+PROJ=$(post /tmp/ma.jar $B/api/organisations/$OID/projects '{"name":"Refit"}' | j "d['id']")
+PROJECTS=$(tool "$WRITE" list_projects "$ORGARGS" | text)
+ok "projects list, with their ids"    "$(echo "$PROJECTS" | grep -c "$PROJ")" "1"
+ok "…by name too"                     "$(echo "$PROJECTS" | grep -c "Refit")" "1"
+
+# A plain member, because the access rule is the point of this tool and the
+# admin already in this file is the wrong person to prove it with: an
+# organisation admin sees every project by design. A project is private to its
+# owner until shared, so this is the account that must not see Alice's.
+MEMBER=md$S@example.com; signup /tmp/md.jar $MEMBER
+MT=$(post /tmp/ma.jar $B/api/organisations/$OID/invites "{\"email\":\"$MEMBER\",\"role\":\"member\"}" | j "d['invite_url'].rsplit('/',1)[1]")
+curl -s -o /dev/null -b /tmp/md.jar -X POST $B/api/invites/$MT/accept
+MEMTOK=$(post /tmp/md.jar $B/api/me/tokens '{"name":"Member","scope":"read"}' | j "d['token']")
+MEMBER_SEES=$(tool "$MEMTOK" list_projects "$ORGARGS" | text)
+ok "a project you can't see isn't in it" "$(echo "$MEMBER_SEES" | grep -c "$PROJ")" "0"
+ok "…while an org admin sees it, as everywhere else" \
+  "$(tool "$ADMTOK" list_projects "$ORGARGS" | text | grep -c "$PROJ")" "1"
+STRANGER_PROJECTS=$(tool "$BOBTOK" list_projects "$ORGARGS" | text)
+ok "a stranger is refused by name"    "$(echo "$STRANGER_PROJECTS" | grep -ci "no such organisation")" "1"
+
+MEMBERS=$(tool "$WRITE" list_members "$ORGARGS" | text)
+ok "members list by email"            "$(echo "$MEMBERS" | grep -c "$ALICE")" "1"
+ok "…including everyone who joined"   "$(echo "$MEMBERS" | grep -c "$ADMIN")" "1"
+ok "…with their role"                 "$(echo "$MEMBERS" | grep "$MEMBER" | grep -c "role=member")" "1"
+ok "…and says which one is you"       "$(echo "$MEMBERS" | grep "$ALICE" | grep -c "you")" "1"
+ok "…but not a stranger"              "$(echo "$MEMBERS" | grep -c "$BOB")" "0"
+# An invitation is somebody who cannot own a task or be asked to act on one
+# yet, so offering them would only produce a choice every write tool then
+# refuses with "not a member".
+INVITED=mi$S@example.com
+post /tmp/ma.jar $B/api/organisations/$OID/invites "{\"email\":\"$INVITED\",\"role\":\"member\"}" >/dev/null
+STILL=$(tool "$WRITE" list_members "$ORGARGS" | text)
+ok "an outstanding invitation is not offered" "$(echo "$STILL" | grep -c "$INVITED")" "0"
+
+echo "== filing something straight onto your own planner"
+PLANNED_BODY=$(args organisation_id=$OID "title=Chase the surveyor" planner_bucket=today)
+PLANNED=$(tool "$WRITE" create_task "$PLANNED_BODY" | text)
+PLANNED_ID=$(echo "$PLANNED" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+ok "the task is created"        "$(echo "$PLANNED" | grep -c "Chase the surveyor")" "1"
+ok "…and it is in today"        "$(planned_in_bucket /tmp/ma.jar today "$PLANNED_ID")" "1"
+BADBUCKET=$(args organisation_id=$OID title=x planner_bucket=eventually)
+REFUSED_BUCKET=$(tool "$WRITE" create_task "$BADBUCKET" | text)
+ok "a bucket that isn't one is refused" "$(echo "$REFUSED_BUCKET" | grep -ci "not a planner bucket")" "1"
+# A planner is one person's plan for their own week. Filing work for a
+# colleague must not put it on their board — the caller's is the only board
+# this argument can touch.
+OTHER_BODY=$(args organisation_id=$OID "title=For the admin" owner_email=$ADMIN planner_bucket=today)
+OTHER=$(tool "$WRITE" create_task "$OTHER_BODY" | text)
+OTHER_ID=$(echo "$OTHER" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+ok "creating for somebody else plans it on *your* board" \
+  "$(planned_in_bucket /tmp/ma.jar today "$OTHER_ID")" "1"
+ok "…and not on theirs"         "$(planned_total /tmp/mc.jar)" "0"
 
 echo "== tagging a task"
 # Every step here is its own statement assigned to a plain variable before
