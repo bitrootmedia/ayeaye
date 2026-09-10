@@ -343,4 +343,8 @@ def test_notification_kinds_are_a_closed_set():
         "export_ready",
         # A book was shared with you — the knowledge base's own task_shared.
         "book_shared",
+        # Somebody named you in a comment. Its own kind because it is the one
+        # comment notification that ignores the unread-run debounce — being
+        # named is a direct address. See services/mentions.py.
+        "comment_mention",
     }

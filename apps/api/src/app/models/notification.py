@@ -53,6 +53,12 @@ KIND_EXPORT_READY = "export_ready"
 # privatised: that's the owner's own action on their own thing, the same
 # "no notification on generation" reasoning recurring tasks already document.
 KIND_BOOK_SHARED = "book_shared"
+# Somebody named you in a comment. Its own kind rather than the generic
+# comment nudge (which reuses KIND_TASK_SHARED) because it is the one comment
+# notification that ignores the unread-run debounce: being named is a direct
+# address, and "you already have unread messages in that thread" is exactly
+# the case where the person needs telling anyway. See services/mentions.py.
+KIND_COMMENT_MENTION = "comment_mention"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_ACTION_REQUIRED_CLEARED,
@@ -66,6 +72,7 @@ NOTIFICATION_KINDS = (
     KIND_DAILY_SUMMARY,
     KIND_EXPORT_READY,
     KIND_BOOK_SHARED,
+    KIND_COMMENT_MENTION,
 )
 
 

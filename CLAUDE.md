@@ -208,6 +208,7 @@ ayeayecaptain/
     │       │                #   teams.py projects.py tasks.py
     │       │                #   time_tracking.py search.py
     │       │                #   conversations.py — comments ARE the thread
+    │       │                #   mentions.py      — @naming somebody, and who can be
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   bookmarks.py — shared, ordered, owner-pinned
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
@@ -1636,6 +1637,21 @@ what the web app's own bell polls. A count that disagreed with the bell
 would be a second, quieter answer to the same question. `my_reminders` is
 the existing precedent for a tool with no organisation id.
 
+**`create_spark` takes no organisation at all**, and unlike `stop_timer` or
+`update_reminder` — which merely don't need one to find what they act on —
+it is because the record itself has none, ever. See the Sparks section.
+Added for the menu bar app, whose whole box is one field and a Return, and
+which had a way to file a task and no way to file the thought that isn't
+one yet. One argument, `body`. It refuses an empty one as a
+`Denied` rather than letting `services/sparks.py`'s own 422 through, since
+an `HTTPException` reaches an MCP client as a crash with its text withheld
+— the `class Denied(ToolError)` distinction the gotcha list below records.
+**There is deliberately no read tool to go with it**: a spark list is a
+person's unsorted notebook, `search` doesn't reach it (the ⌘K palette doesn't
+either — see Sparks), and nothing asked for one. `scripts/e2e-mcp.sh`
+proves the isolation through the REST list instead, which is the only
+reader there is.
+
 **`task_versions` is read-only, and restoring is deliberately not a tool.**
 It reports the earlier versions of a task's title and description (see the
 Task versions section above), stripped to prose with `richtext.to_plain_text`
@@ -2671,6 +2687,102 @@ and a back-and-forth is one email per line, too lazy and the notification
 nobody got is the one that mattered — so `scripts/e2e-comments.sh` tests both
 sides of it.
 
+### @mentions — read `services/mentions.py`
+
+Type `@`, choose a name, and that person is notified. Two decisions carry the
+whole feature.
+
+**Who can be named is who can see the task — never the organisation's
+roster.** Offering somebody with no route into a task would either notify them
+about a title they can't open (a task title in an inbox outside the access
+model, the thing `services/notifications.py` exists to avoid) or notify nobody
+at all, which is worse than no picker. The candidate set applies
+`access.effective_task_level` — the **Python** statement of rule 2, the one
+`tests/test_access_matrix.py` proves over the whole grid — to each active
+member, with every input (task grants, project grants, the teams they name)
+fetched once up front. Deliberately **not a third derivation of the rule**:
+the reverse question "who can see this one task" can't reuse
+`task_level_expression`, which takes a `user_id` literal and an `org_role`
+known at build time, and inverting it would mean writing the six routes out in
+SQL a second time. Four queries and a pure-Python fold over the roster is the
+cheaper honesty — and this is one task, not a list, so the "one statement per
+list" rule isn't in play. Teams are expanded to their members, which is the
+reason this is its own route (`GET .../tasks/{id}/mentionable`) rather than a
+field on `/access`: that response says *how* each person got in and shows a
+team grant as the team, which is what the access card renders and the wrong
+answer for a picker.
+
+**The comment body is the only record of a mention.** No `message_mentions`
+table, no marker syntax: the server resolves `@Name` against the candidates at
+post time. One source of truth rather than a body and an id list that can
+disagree — the same reasoning `notifications.organisation_id` gives for being
+a real column rather than a value parsed back out of a display string, pointed
+the other way round, because here the prose *is* the value. Four things follow:
+
+- **Every writer gets mentions**, not just the composer — a comment posted
+  over MCP or curl naming somebody notifies them, because nothing in the
+  resolution depends on the client having a picker.
+- **An edit that adds a name notifies it; one that doesn't, doesn't.**
+  `edit()` resolves the old body as well and tells only the difference.
+  Without it "I forgot to @ them" is a silent no-op; without the diff, fixing
+  a typo is a second nudge.
+- **A rename doesn't rewrite history.** The stored text keeps the name that
+  was typed, so an old comment stops resolving. A mention is a notification,
+  not a link that has to survive forever, and the alternative is markers in
+  the prose that render as noise anywhere they aren't parsed.
+- **`find_mentions` is a pure function with its own unit test**
+  (`tests/test_mention_parsing.py`) — longest candidate wins at each `@` (a
+  Sam and a Samantha is the ordinary case), the `@` must not follow a word
+  character (so `bob@example.com` in a sentence is an address), and the match
+  must end on a word boundary. The access half is proved through Postgres
+  instead, the same split `test_access_matrix.py` documents.
+
+**Rule 5 of `services/conversations.py`: a mention skips the unread-run
+debounce, and replaces the ordinary notification rather than adding to it.**
+Being named is a direct address, and "you already have unread messages in
+that thread" is exactly the case where the person still needs telling — it is
+why the author typed a name instead of just posting. `KIND_COMMENT_MENTION`
+is its own kind for that reason, and the mention loop runs *before* the
+debounced one so it can skip anybody already told the specific way. The
+notification carries no snippet, matching every other comment nudge: the
+title says who wants you and the link says where.
+
+**Adding a notification kind means backfilling `notification_channels.
+enabled_kinds`, and this was already broken once.** That column is an
+explicit array, filled with every kind that existed when the channel row was
+created — so a new kind is *disabled* on every channel that already exists
+and its email silently never sends. `book_shared` (0037, six migrations after
+channels landed in 0031) never had that backfill and had therefore never been
+delivered to anyone whose channel predated it; migration 0045 appends both
+kinds where missing. `book_shared` was also missing from
+`NOTIFICATION_KIND_LABEL`, which is what builds the Account screen's "which
+notification goes where" table — so it had no row and couldn't be configured
+either. Both fixed. **A new kind is four places, not one:** the constant,
+`NOTIFICATION_KINDS`, the CHECK-constraint migration *plus* the
+`enabled_kinds` backfill, and the frontend label map.
+
+**The picker's list renders in flow, below the box — not absolutely
+positioned and not portaled.** `Card` sets `overflow-hidden` unconditionally,
+which is the bug `EntityPicker` had to portal to escape; in a plain flow the
+question doesn't arise. Below rather than above so the caret never moves
+under the pointer mid-word. Two more things in
+`components/mention-textarea.tsx` are load-bearing: **Enter is intercepted
+while the list is open** (the composer sends on Enter, so without it choosing
+a name posts a comment reading "@Sam"), and **an option cancels its own
+`mousedown`** or the click blurs the textarea first and the name lands at the
+wrong offset — the same trap the rich-text toolbar already documents.
+`MentionedText` picks the names out of a posted body for display: cosmetic
+only, a second and deliberately simpler reading of text the server already
+resolved, and safe by construction the way Sparks' own `Linkified` is —
+every segment is a React text node, so there is no markup to sanitise
+because none is ever parsed as markup.
+
+**Project threads have no mentions**, and the affordance is absent rather
+than present and silently doing nothing: no candidate builder, so no picker
+and no resolution. `mentions.for_task` has an obvious sibling the day it's
+wanted (a project has three routes in, not six); nothing pretends otherwise
+in the meantime.
+
 **On a wide screen, Comments gets its own column between Details and the
 sidebar — decided in JS, not with a CSS breakpoint alone.** `TaskDetail.tsx`'s
 content grid was two items (a main column, a sidebar) with an implicit
@@ -3285,6 +3397,13 @@ round trip. This was also the resolved answer to "should search work with
 these": a personal capture list search stays local to its own screen
 rather than joining the org-scoped ⌘K palette, which has no cross-
 organisation case to handle for anything else it searches.
+
+**Capturable over MCP too, and from the menu bar app.** `create_spark`
+(`app/mcp/server.py`) is one argument and no organisation id, the same
+shape as this screen's own dialog — see the MCP section. It exists because
+the `ayeaye-menubar` app is the same idea as ⌘J in a different place: a box
+that appears under a keystroke, and until it had this tool everything typed
+into it had to become a task whether or not there was anything to do yet.
 
 **Bare URLs are linked, not sanitised.** A spark's body is plain text, not
 the sanitised HTML a task description is — there's no rich editor and
@@ -4127,7 +4246,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-triage.sh                 # the unassigned queue, and it stays access-scoped
 ./scripts/e2e-search.sh                 # fuzziness, ranking, and permissions
 ./scripts/e2e-time.sh                   # timers, corrections, rollups
-./scripts/e2e-comments.sh               # threads, debouncing, the socket
+./scripts/e2e-comments.sh               # threads, debouncing, mentions, the socket
 ./scripts/e2e-attachments.sh            # the upload handshake, against real storage
 ./scripts/e2e-task-files.sh             # priority, task files, thumbnails, moving a task
 ./scripts/e2e-hidden.sh                 # the one place access is subtracted

@@ -704,6 +704,12 @@ export const NOTIFICATION_KIND_LABEL: Record<string, string> = {
   task_deadline_tomorrow: "A task is due tomorrow",
   daily_summary: "Daily summary",
   export_ready: "A data export finished",
+  // Both of these were missing their row in the Account screen's "which
+  // notification goes where" table, which is built from this map — so
+  // neither could be turned off, and `book_shared` had been unroutable
+  // since it shipped. See migration 0045 for the other half of that.
+  book_shared: "A book was shared with you",
+  comment_mention: "Mentioned in a comment",
 };
 
 // --- time ------------------------------------------------------------------

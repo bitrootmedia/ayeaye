@@ -12,11 +12,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, api } from "@/api";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
+import {
+  MentionTextarea,
+  MentionedText,
+  type MentionPerson,
+} from "@/components/mention-textarea";
 import { Lightbox } from "@/components/lightbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -116,6 +120,39 @@ export function CommentThread({
   const filePicker = useRef<HTMLInputElement>(null);
 
   const base = `/organisations/${orgId}/${anchor}/${anchorId}/comments`;
+
+  // Who can be named here: everyone who can see the task, teams expanded —
+  // deliberately not the organisation's roster, because mentioning somebody
+  // who can't open the task would notify nobody. Fetched here rather than
+  // passed in, since this component already knows its own anchor; project
+  // threads have no such list (see `services/mentions.py`) and simply never
+  // offer the picker.
+  const [mentionable, setMentionable] = useState<MentionPerson[]>([]);
+  useEffect(() => {
+    if (anchor !== "tasks") return;
+    let live = true;
+    void api<{ id: string; email: string | null; display_name: string | null }[]>(
+      `/organisations/${orgId}/tasks/${anchorId}/mentionable`,
+    )
+      .then((people) => {
+        if (!live) return;
+        setMentionable(
+          people.map((p) => ({
+            id: p.id,
+            // The name the server matches on, and nothing else: a label the
+            // picker invented would insert text no mention could resolve.
+            name: p.display_name || p.email || "",
+            hint: p.display_name ? (p.email ?? undefined) : undefined,
+          })).filter((p) => p.name),
+        );
+      })
+      // A picker that couldn't load is a picker that doesn't appear. Typing
+      // a name by hand still works, because the server does the resolving.
+      .catch(() => setMentionable([]));
+    return () => {
+      live = false;
+    };
+  }, [orgId, anchor, anchorId]);
 
   const load = useCallback(async () => {
     setThread(await api<Thread>(base));
@@ -318,7 +355,13 @@ export function CommentThread({
             <div ref={top} />
             <ul className="space-y-4">
               {orderedMessages.map((comment) => (
-                <CommentRow key={comment.id} orgId={orgId} comment={comment} onChanged={refresh} />
+                <CommentRow
+                  key={comment.id}
+                  orgId={orgId}
+                  comment={comment}
+                  onChanged={refresh}
+                  mentionable={mentionable}
+                />
               ))}
             </ul>
           </>
@@ -390,12 +433,13 @@ export function CommentThread({
               </div>
             )}
 
-            <Textarea
+            <MentionTextarea
               rows={2}
+              people={mentionable}
               value={draft}
               aria-label="Write a comment"
               placeholder="Write a comment…"
-              onChange={(e) => setDraft(e.target.value)}
+              onValueChange={setDraft}
               onKeyDown={(e) => {
                 // Enter sends, Shift+Enter breaks the line. A comment box that
                 // needs a mouse to submit is one people stop using; a
@@ -430,6 +474,7 @@ export function CommentThread({
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
                 Enter to send, Shift+Enter for a new line
+                {mentionable.length > 0 && ", @ to notify someone"}
               </span>
               <span className="flex items-center gap-1">
                 <input
@@ -477,10 +522,15 @@ function CommentRow({
   orgId,
   comment,
   onChanged,
+  mentionable,
 }: {
   orgId: string;
   comment: Comment;
   onChanged: () => Promise<void>;
+  /** Both for picking a name while editing and for picking the names already
+   *  in the posted text out of it. An edit that adds one notifies, so the
+   *  edit box offers the same picker the composer does. */
+  mentionable: MentionPerson[];
 }) {
   const toast = useToastManager();
   const [editing, setEditing] = useState(false);
@@ -548,11 +598,12 @@ function CommentRow({
       </div>
       {editing ? (
         <div className="space-y-2">
-          <Textarea
+          <MentionTextarea
             rows={2}
+            people={mentionable}
             value={value}
             aria-label="Edit comment body"
-            onChange={(e) => setValue(e.target.value)}
+            onValueChange={setValue}
           />
           <div className="flex gap-2">
             {/* Distinct from the task's own Save on the same screen — one
@@ -569,7 +620,9 @@ function CommentRow({
       ) : (
         <>
           {/* `whitespace-pre-wrap`, so the line breaks someone typed survive. */}
-          <p className="text-sm whitespace-pre-wrap">{comment.body}</p>
+          <p className="text-sm whitespace-pre-wrap">
+            <MentionedText body={comment.body} people={mentionable} />
+          </p>
           {comment.attachments.length > 0 && (
             <ul className="mt-2 flex flex-wrap gap-2">
               {comment.attachments.map((file) => (

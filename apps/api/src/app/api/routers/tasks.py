@@ -67,6 +67,7 @@ from app.services import attachments as attachments_service
 from app.services import checklists as checklists_service
 from app.services import conversations as conversations_service
 from app.services import dependencies as dependencies_service
+from app.services import mentions as mentions_service
 from app.services import notes as notes_service
 from app.services import pins as pins_service
 from app.services import projects as projects_service
@@ -1443,6 +1444,25 @@ def _grant_out(grant: TaskGrant, user: User | None, team: Team | None) -> GrantO
         else None,
         created_at=grant.created_at,
     )
+
+
+@router.get("/tasks/{task_id}/mentionable", response_model=list[PersonOut])
+async def task_mentionable(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Who can be named in this task's comments: everyone who can see it.
+
+    Its own route rather than a field on `/access`. That response describes
+    *how* each person got in — owner, action-required, this grant, that team —
+    which is what the access card renders, and a team grant there is the team
+    rather than the people in it. A mention picker needs the flat list of
+    people with teams expanded: a different question about the same rule. See
+    `services/mentions.py`.
+
+    `read` is enough to fetch it, the same bar as commenting at all — naming a
+    colleague is a contribution, not a change to the work.
+    """
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    candidates = await mentions_service.for_task(db, ctx.organisation.id, tctx.task)
+    return [_person(c.user) for c in candidates]
 
 
 @router.get("/tasks/{task_id}/access", response_model=TaskAccessOut)

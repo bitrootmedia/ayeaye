@@ -357,8 +357,12 @@ async def edit_comment(
     db: DbSession,
 ):
     message, thread = await _own_message(db, ctx, user, message_id)
-    updated = await conversations_service.edit(db, ctx, message, user, body=body.body)
-    del thread
+    # The thread goes through: an edit that adds an @mention notifies whoever
+    # it named, and only the names the edit actually added — rule 5 in
+    # `services/conversations.py`.
+    updated = await conversations_service.edit(
+        db, ctx, message, user, body=body.body, thread=thread
+    )
     return _message_out(updated, user, me=user.id)
 
 

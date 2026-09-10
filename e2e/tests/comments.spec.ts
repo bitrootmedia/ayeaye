@@ -143,6 +143,72 @@ test.describe("comments", () => {
     await them.context().close();
   });
 
+  test("@ offers the people who can see the task, and naming one notifies them", async ({
+    page,
+    browser,
+  }) => {
+    // The two halves of the feature in one pass: the list is *task access*
+    // rather than the organisation's roster, and posting tells whoever was
+    // named. A picker that offered somebody with no route into the task
+    // would notify nobody, which is worse than no picker at all.
+    const owner = uniqueEmail("own");
+    const viewer = uniqueEmail("vw");
+    const stranger = uniqueEmail("str");
+    await signUp(page, owner);
+    const orgId = await createOrg(page, `Naming ${Date.now()}`);
+    const viewerLink = await inviteMember(page, orgId, viewer);
+    const strangerLink = await inviteMember(page, orgId, stranger);
+    const them = await otherPerson(browser, viewer);
+    await acceptInvite(them, viewerLink);
+    const outsider = await otherPerson(browser, stranger);
+    await acceptInvite(outsider, strangerLink);
+
+    await createProject(page, orgId, "Naming refit");
+    await page.getByLabel("Share with").click();
+    await page.getByRole("option", { name: viewer }).click();
+    await page.getByRole("button", { name: "Share" }).click();
+    await expect(page.getByText(`Shared with ${viewer}`)).toBeVisible();
+    await createTask(page, orgId, "Name somebody", "Naming refit");
+
+    // A display name, so the list reads as a person rather than an address —
+    // and so the inserted text is the thing the server matches on. Set after
+    // the share, because the Share picker is addressed by email above and a
+    // display name would change that option's own label.
+    await them.goto("/account");
+    await them.getByLabel("Display name").fill("Sam Hale");
+    await them.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(them.getByRole("heading", { name: "Saved", exact: true })).toBeVisible();
+
+    await openTask(page, orgId, "Name somebody");
+
+    await box(page).pressSequentially("@");
+    const list = page.getByRole("listbox", { name: "People you can mention" });
+    await expect(list.getByRole("option", { name: "Sam Hale" })).toBeVisible();
+    // Never the whole roster: this person is in the organisation and has no
+    // route into this task.
+    await expect(list.getByRole("option", { name: stranger })).toHaveCount(0);
+
+    // Enter chooses a name rather than posting a half-typed one. The composer
+    // sends on Enter, so this is the one key the list has to intercept —
+    // without it, choosing somebody posts a comment reading "@Sam".
+    await box(page).pressSequentially("Sam");
+    await box(page).press("Enter");
+    await expect(box(page)).toHaveValue("@Sam Hale ");
+    await expect(page.getByText("No comments yet")).toBeVisible();
+
+    await box(page).pressSequentially("can you look at the osmosis?");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await expect(box(page)).toHaveValue("");
+    await expect(page.getByText(/@Sam Hale can you look/)).toBeVisible();
+
+    // Their side: an inbox entry naming the author, not a silent no-op.
+    await them.goto("/notifications");
+    await expect(them.getByText(/mentioned you in/)).toBeVisible({ timeout: 10_000 });
+
+    await them.context().close();
+    await outsider.context().close();
+  });
+
   test("projects have their own thread", async ({ page }) => {
     await signUp(page, uniqueEmail("cm"));
     const orgId = await createOrg(page, `Proj ${Date.now()}`);

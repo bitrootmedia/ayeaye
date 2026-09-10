@@ -21,6 +21,14 @@ Four rules:
    otherwise a back-and-forth is one notification and one email per line, which
    is how an inbox becomes something nobody reads.
 
+5. **Naming somebody is the one thing that skips rule 4.** An `@mention` is a
+   direct address, and "you already have unread messages in that thread" is
+   exactly the case where they still need telling — it is why the author typed
+   a name rather than just posting. Its own kind (`KIND_COMMENT_MENTION`), and
+   never a second notification on top of the ordinary one: whoever is named
+   gets the mention instead. Who *can* be named is who can see the anchor,
+   resolved in `services/mentions.py`.
+
 Who gets notified is deliberately **not** "everyone who can see it": org admins
 can see everything, and drowning them is not a feature. It is the people with
 a stake — the task's owner, whoever is being asked to act, and anyone who has
@@ -37,9 +45,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Conversation, Message, MessageRead, Project, Task, User
-from app.models.notification import KIND_TASK_SHARED
+from app.models.notification import KIND_COMMENT_MENTION, KIND_TASK_SHARED
 from app.realtime import events
 from app.services import access
+from app.services import mentions as mentions_service
 from app.services import notifications as notifications_service
 from app.services import projects as projects_service
 from app.services import tasks as tasks_service
@@ -206,8 +215,45 @@ async def post(
     await mark_read(db, thread.conversation, user, upto=message.created_at)
 
     recipients = await _interested(db, thread, exclude=user.id)
-    await _announce(db, ctx, thread, message, user, recipients)
+    mentioned = await _mentioned(db, ctx, thread, message.body, exclude=user.id)
+    await _announce(db, ctx, thread, message, user, recipients, mentioned)
     return message
+
+
+async def _candidates(
+    db: AsyncSession, ctx: OrgContext, thread: ThreadContext
+) -> list[mentions_service.Mentionable]:
+    """Who could be named in this thread: everyone who can see its anchor.
+
+    Task threads only. A project thread has no candidate builder and its
+    composer offers no names either, so the affordance is absent rather than
+    present and silently doing nothing — `services/mentions.py` says what the
+    sibling function would be.
+
+    Fetched once even where it's used twice (an edit compares the old body
+    against the new), because it is four queries rather than one.
+    """
+    if thread.conversation.task_id is None:
+        return []
+    task = (
+        await db.execute(select(Task).where(Task.id == thread.conversation.task_id))
+    ).scalar_one_or_none()
+    if task is None:
+        return []
+    return await mentions_service.for_task(db, ctx.organisation.id, task)
+
+
+async def _mentioned(
+    db: AsyncSession,
+    ctx: OrgContext,
+    thread: ThreadContext,
+    body: str,
+    *,
+    exclude: uuid.UUID,
+) -> list[uuid.UUID]:
+    """Who this comment names, minus its author."""
+    candidates = await _candidates(db, ctx, thread)
+    return mentions_service.resolve(body, candidates, exclude=exclude)
 
 
 async def _interested(
@@ -256,6 +302,14 @@ async def _interested(
     return list(people)
 
 
+def _link(ctx: OrgContext, thread: ThreadContext) -> str:
+    """Where a notification about this thread points: the anchor's own
+    screen. A thread has no page of its own, which is the whole of rule 1."""
+    if thread.conversation.task_id:
+        return f"/orgs/{ctx.organisation.id}/tasks/{thread.conversation.task_id}"
+    return f"/orgs/{ctx.organisation.id}/projects/{thread.conversation.project_id}"
+
+
 async def _announce(
     db: AsyncSession,
     ctx: OrgContext,
@@ -263,13 +317,15 @@ async def _announce(
     message: Message,
     author: User,
     recipients: list[uuid.UUID],
+    mentioned: list[uuid.UUID] | None = None,
 ) -> None:
-    """Push it live, and notify whoever isn't already behind."""
-    link = (
-        f"/orgs/{ctx.organisation.id}/tasks/{thread.conversation.task_id}"
-        if thread.conversation.task_id
-        else f"/orgs/{ctx.organisation.id}/projects/{thread.conversation.project_id}"
-    )
+    """Push it live, and notify whoever isn't already behind.
+
+    `mentioned` is rule 5: those people hear about it regardless of what they
+    already have unread, and are not also told the ordinary way.
+    """
+    mentioned = mentioned or []
+    link = _link(ctx, thread)
 
     # A comment is activity on the task, so it counts as the task changing:
     # `updated_at` is "last activity", and the list view sorts by it. Done
@@ -293,12 +349,30 @@ async def _announce(
     await events.publish_message(
         conversation_id=str(thread.conversation.id),
         message_id=str(message.id),
-        user_ids=[str(uid) for uid in [*recipients, author.id]],
+        # Anyone named is on this list too: they may have the thread open
+        # already, and an event they never receive is a screen that only
+        # moves on its next refetch.
+        user_ids=[str(uid) for uid in {*recipients, *mentioned, author.id}],
         anchor={"kind": thread.anchor_kind, "id": str(anchor_id)},
     )
 
     who = author.display_name or author.email or "Someone"
+
+    # Rule 5, and it runs first so the loop below can skip these people: one
+    # comment naming the task's owner is one notification, the specific one.
+    for recipient in mentioned:
+        await notifications_service.notify(
+            db,
+            user_id=recipient,
+            kind=KIND_COMMENT_MENTION,
+            title=f"{who} mentioned you in “{thread.anchor_title}”",
+            link_path=link,
+            organisation_id=ctx.organisation.id,
+        )
+
     for recipient in recipients:
+        if recipient in mentioned:
+            continue
         # Rule 4. Two unread messages in one thread is one notification; the
         # alternative is an email per line of a conversation.
         if await unread_count(db, thread.conversation, recipient) > 1:
@@ -405,8 +479,23 @@ def can_modify(*, author_id: uuid.UUID | None, actor_id: uuid.UUID, org_role: st
 
 
 async def edit(
-    db: AsyncSession, ctx: OrgContext, message: Message, user: User, *, body: str
+    db: AsyncSession,
+    ctx: OrgContext,
+    message: Message,
+    user: User,
+    *,
+    body: str,
+    thread: ThreadContext | None = None,
 ) -> Message:
+    """Rewrite your own words.
+
+    `thread` is optional only because a caller without one can't resolve
+    mentions; every route here has one already, having needed it to re-check
+    access to the anchor. Given it, **a name the edit added is notified and a
+    name that was already there is not** — "I forgot to @ them" is a real
+    thing people do, and re-notifying on every save would make fixing a typo
+    a second nudge. See rule 5.
+    """
     if not can_modify(author_id=message.user_id, actor_id=user.id, org_role=ctx.role):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN, detail="you can only edit your own comments"
@@ -415,10 +504,28 @@ async def edit(
         raise HTTPException(
             status_code=http_status.HTTP_409_CONFLICT, detail="that comment was removed"
         )
+    was = message.body
     message.body = _clean(body)
     message.edited_at = func.now()
     await db.commit()
     await db.refresh(message)
+
+    if thread is not None:
+        candidates = await _candidates(db, ctx, thread)
+        before = set(mentions_service.resolve(was, candidates, exclude=user.id))
+        now = mentions_service.resolve(message.body, candidates, exclude=user.id)
+        who = user.display_name or user.email or "Someone"
+        for recipient in now:
+            if recipient in before:
+                continue
+            await notifications_service.notify(
+                db,
+                user_id=recipient,
+                kind=KIND_COMMENT_MENTION,
+                title=f"{who} mentioned you in “{thread.anchor_title}”",
+                link_path=_link(ctx, thread),
+                organisation_id=ctx.organisation.id,
+            )
     return message
 
 

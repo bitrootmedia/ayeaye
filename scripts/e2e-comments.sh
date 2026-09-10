@@ -22,7 +22,13 @@ signup(){ curl -s -c "$1" -o /dev/null -H 'Content-Type: application/json' -H 'r
 code(){ curl -s -o /dev/null -w '%{http_code}' "$@"; }
 j(){ python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 post(){ curl -s -b "$1" -H 'Content-Type: application/json' -X POST "$2" -d "$3"; }
+patch(){ curl -s -b "$1" -H 'Content-Type: application/json' -X PATCH "$2" -d "$3"; }
 say(){ post "$1" "$2" "{\"body\":\"$3\"}"; }
+# How many notifications of one shape this person has. Mentions and ordinary
+# comment nudges are counted separately on purpose: the point of a mention is
+# that it arrives *instead of* the debounced one, and a test that summed both
+# would pass whichever fired.
+nots(){ curl -s -b "$1" $B/api/notifications | j "sum(1 for n in d if '$2' in n['title'])"; }
 
 A=ca$S@example.com; BB=cb$S@example.com; C=cc$S@example.com
 signup /tmp/ca.jar $A; signup /tmp/cb.jar $BB; signup /tmp/cc.jar $C
@@ -110,6 +116,63 @@ say /tmp/ca.jar $TASKC "Talking to myself" >/dev/null
 mine_after=$(curl -s -b /tmp/ca.jar $B/api/notifications | j "sum(1 for n in d if 'commented on' in n['title'])")
 ok "posting notifies nobody about themselves" "$(python3 -c "print($mine_after - $mine_before)")" "0"
 ok "and their own post is read" "$(curl -s -b /tmp/ca.jar $TASKC | j "d['unread']")" "0"
+
+echo "== @mentions: who can be named"
+# Not the organisation's roster — everyone who can *see the task*, teams
+# expanded. Bob reads it through a project grant; Carol has no route in at all.
+patch /tmp/ca.jar $B/api/me '{"display_name":"Alice Keel"}' >/dev/null
+patch /tmp/cb.jar $B/api/me '{"display_name":"Bob Fisher"}' >/dev/null
+patch /tmp/cc.jar $B/api/me '{"display_name":"Carol Danvers"}' >/dev/null
+MENT=$B/api/organisations/$OID/tasks/$TID/mentionable
+ok "the owner can be named"     "$(curl -s -b /tmp/ca.jar $MENT | j "sum(1 for p in d if p['email']=='$A')")" "1"
+ok "so can a project grantee"   "$(curl -s -b /tmp/ca.jar $MENT | j "[p['display_name'] for p in d if p['email']=='$BB']")" "['Bob Fisher']"
+ok "somebody with no route cannot" "$(curl -s -b /tmp/ca.jar $MENT | j "sum(1 for p in d if p['email']=='$C')")" "0"
+# The list is a hint for a picker, so read access is enough to fetch it —
+# the same bar as commenting at all.
+ok "a read-only viewer may fetch it" "$(code -b /tmp/cb.jar $MENT)" "200"
+ok "an outsider cannot: 404"    "$(code -b /tmp/cc.jar $MENT)" "404"
+
+echo "== naming somebody notifies them, debounce or no debounce"
+# Bob has unread messages in this thread already, so rule 4 would suppress an
+# ordinary comment notification. Being named is a direct address and skips it:
+# this is the whole reason the mention has its own kind.
+ok "he is behind on the thread" "$(curl -s -b /tmp/cb.jar $TASKC | j "str(d['unread'] > 1)")" "True"
+bm=$(nots /tmp/cb.jar 'mentioned you'); bc=$(nots /tmp/cb.jar 'commented on')
+say /tmp/ca.jar $TASKC "@Bob Fisher can you look at the osmosis?" >/dev/null
+ok "the mention notifies"       "$(python3 -c "print($(nots /tmp/cb.jar 'mentioned you') - $bm)")" "1"
+# …and *instead of*, not as well as. One comment, one notification.
+ok "and not twice"              "$(python3 -c "print($(nots /tmp/cb.jar 'commented on') - $bc)")" "0"
+# The title names the *author*, not the person named — it is their inbox, so
+# what they need to know is who wants them.
+ok "it says who wants them"     "$(curl -s -b /tmp/cb.jar $B/api/notifications | j "[n['title'] for n in d if 'mentioned you' in n['title']][0]")" "Alice Keel mentioned you in “Survey the keel”"
+
+echo "== and what does not count as naming somebody"
+cm=$(nots /tmp/cc.jar 'mentioned you')
+say /tmp/ca.jar $TASKC "@Carol Danvers might know" >/dev/null
+ok "somebody who cannot see it is not notified" "$(python3 -c "print($(nots /tmp/cc.jar 'mentioned you') - $cm)")" "0"
+am=$(nots /tmp/ca.jar 'mentioned you')
+say /tmp/ca.jar $TASKC "note to self, ask @Bob Fisher tomorrow" >/dev/null
+ok "naming yourself notifies nobody" "$(python3 -c "print($(nots /tmp/ca.jar 'mentioned you') - $am)")" "0"
+bm2=$(nots /tmp/cb.jar 'mentioned you')
+say /tmp/ca.jar $TASKC "write to $BB about it" >/dev/null
+ok "an email address in prose is not a mention" "$(python3 -c "print($(nots /tmp/cb.jar 'mentioned you') - $bm2)")" "0"
+
+echo "== a task grant is a route in, and hiding takes every route away"
+post /tmp/ca.jar $B/api/organisations/$OID/tasks/$TID/access "{\"user_id\":\"$CUID\",\"level\":\"read\"}" >/dev/null
+ok "granted on the task alone, she can be named" "$(curl -s -b /tmp/ca.jar $MENT | j "sum(1 for p in d if p['email']=='$C')")" "1"
+HID=$(post /tmp/ca.jar $B/api/organisations/$OID/tasks "{\"title\":\"Quiet one\",\"project_id\":\"$PID\"}" | j "d['id']")
+ok "an ordinary task lists more than its owner" "$(curl -s -b /tmp/ca.jar $B/api/organisations/$OID/tasks/$HID/mentionable | j "str(len(d) > 1)")" "True"
+post /tmp/ca.jar $B/api/organisations/$OID/tasks/$HID/hidden '{"hidden":true}' >/dev/null
+ok "hidden, only the owner is left" "$(curl -s -b /tmp/ca.jar $B/api/organisations/$OID/tasks/$HID/mentionable | j "[p['email'] for p in d]")" "['$A']"
+
+echo "== an edit that adds a name notifies it, once"
+E=$(say /tmp/ca.jar $TASKC "Blocked on the survey" | j "d['id']")
+bm3=$(nots /tmp/cb.jar 'mentioned you')
+patch /tmp/ca.jar $B/api/organisations/$OID/comments/$E '{"body":"Blocked on the survey, @Bob Fisher"}' >/dev/null
+ok "adding a name notifies"     "$(python3 -c "print($(nots /tmp/cb.jar 'mentioned you') - $bm3)")" "1"
+bm4=$(nots /tmp/cb.jar 'mentioned you')
+patch /tmp/ca.jar $B/api/organisations/$OID/comments/$E '{"body":"Blocked on the keel survey, @Bob Fisher"}' >/dev/null
+ok "fixing a typo does not"     "$(python3 -c "print($(nots /tmp/cb.jar 'mentioned you') - $bm4)")" "0"
 
 echo "== projects have threads too"
 ok "project thread is empty"    "$(curl -s -b /tmp/ca.jar $PROJC | j "len(d['messages'])")" "0"
