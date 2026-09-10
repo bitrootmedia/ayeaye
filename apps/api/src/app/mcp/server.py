@@ -67,6 +67,7 @@ from app.models.token import SCOPE_READ, SCOPE_WRITE
 from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
+from app.services import notifications as notifications_service
 from app.services import organisations as organisations_service
 from app.services import planner as planner_service
 from app.services import projects as projects_service
@@ -468,6 +469,41 @@ async def my_reminders(ctx: Context) -> str:
         f"{r.note or t.title} [{t.id}]"
         for r, t in rows
     )
+
+
+@mcp.tool()
+async def notifications(
+    ctx: Context,
+    unread_only: bool = True,
+    limit: Annotated[int, Field(ge=1, le=100)] = 20,
+) -> str:
+    """Your notification inbox, across every organisation — the same list and
+    the same count the bell in the web app shows.
+
+    Deliberately not organisation-scoped, unlike almost everything else here.
+    A notification is addressed to a person, not filed in a place: some carry
+    an organisation and some don't, and a count that disagreed with the bell
+    would be a second, quieter answer to the same question.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        rows = await notifications_service.list_for_user(
+            db, user, unread_only=unread_only, limit=limit
+        )
+        unread = await notifications_service.unread_count(db, user)
+    # The count leads, on its own line, and is stated even when nothing is
+    # listed: it is the answer to "how many", which is a different question
+    # from "which ones" and the only one some callers are asking.
+    header = f"{unread} unread"
+    if not rows:
+        return header + "." if unread == 0 else header + ", none listed."
+    lines = [header + ":"]
+    for row in rows:
+        bits = [f"[{row.id}]", row.kind, row.title]
+        if row.read_at:
+            bits.append("read")
+        lines.append(" | ".join(bits))
+    return "\n".join(lines)
 
 
 def _book_line(book, level: str) -> str:

@@ -1603,6 +1603,19 @@ check. It places with `position=None`, appending: the same trade the task
 screen's own bucket picker makes, since fetching a whole board to compute a
 midpoint for a task nobody has looked at yet would be a strange one.
 
+**`notifications` is the inbox, and it is the one read tool that takes no
+organisation.** Added for the menu bar app's badge, which needs a number
+before it needs a list. It leads with the unread count on its own line
+(`3 unread:`) so a caller that only wants the number doesn't have to count
+rows, and states the count even when nothing is listed — "how many" and
+"which ones" are different questions and some callers only ask the first.
+Deliberately not organisation-scoped, unlike almost everything else here: a
+notification is addressed to a person, not filed in a place — some carry an
+organisation and some don't — and `notifications_service.unread_count` is
+what the web app's own bell polls. A count that disagreed with the bell
+would be a second, quieter answer to the same question. `my_reminders` is
+the existing precedent for a tool with no organisation id.
+
 **`task_versions` is read-only, and restoring is deliberately not a tool.**
 It reports the earlier versions of a task's title and description (see the
 Task versions section above), stripped to prose with `richtext.to_plain_text`

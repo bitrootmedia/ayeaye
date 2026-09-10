@@ -273,6 +273,25 @@ BOGUSARGS=$(args organisation_id=$OID task_id=$TID tag=NoSuchTag)
 BOGUS=$(tool "$WRITE" untag_task "$BOGUSARGS")
 ok "untagging a name that was never applied is refused" "$(echo "$BOGUS" | j "d['result']['isError']")" "True"
 
+echo "== the notification inbox"
+# The count the menu bar badge is drawn from. Not organisation-scoped, on
+# purpose — it is the same number the bell in the web app shows.
+NONE=$(tool "$WRITE" notifications '{}' | text)
+ok "says how many even when there are none" "$(echo "$NONE" | grep -c '^0 unread')" "1"
+# Something that actually notifies somebody: being asked to act. Alice asks
+# the admin, so the admin's inbox is the one that moves and hers is the one
+# that must not.
+ASK_BODY=$(args organisation_id=$OID "title=Look at the shackle" action_required_email=$ADMIN)
+tool "$WRITE" create_task "$ASK_BODY" >/dev/null
+ADMIN_INBOX=$(tool "$ADMTOK" notifications '{}' | text)
+ok "being asked to act raises one"     "$(echo "$ADMIN_INBOX" | grep -c 'Look at the shackle')" "1"
+ok "…and the count leads"              "$(echo "$ADMIN_INBOX" | head -1 | grep -cE '^[1-9][0-9]* unread:')" "1"
+ok "…in the asked person's inbox only" "$(tool "$WRITE" notifications '{}' | text | grep -c '^0 unread')" "1"
+ok "a stranger's inbox is their own"   "$(tool "$BOBTOK" notifications '{}' | text | grep -c '^0 unread')" "1"
+# A read-only token must be able to read this: a status light is exactly what
+# somebody should be able to point a read credential at.
+ok "a read-only token can read it"     "$(tool "$MEMTOK" notifications '{}' | text | grep -c 'unread')" "1"
+
 echo "== the report tools"
 ok "activity reports the week"  "$(tool "$WRITE" activity "{\"organisation_id\":\"$OID\",\"days\":7}" | text | grep -ci "touched in the last 7 day")" "1"
 ok "search finds by word"       "$(tool "$WRITE" search "{\"organisation_id\":\"$OID\",\"query\":\"anode\"}" | text | grep -c "Replace the anode")" "1"
