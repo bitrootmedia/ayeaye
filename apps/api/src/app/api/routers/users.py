@@ -48,6 +48,10 @@ class MeOut(BaseModel):
     status_message: str | None
     # Opt-out, default on — see the column's own comment in models/user.py.
     daily_summary_enabled: bool
+    # Which local hour that digest goes out, 0-23, read against `timezone`
+    # above. Both are on the wire together because the account screen shows
+    # them together: "6am" means nothing without saying 6am *where*.
+    daily_summary_hour: int
 
 
 class MeUpdate(BaseModel):
@@ -55,6 +59,7 @@ class MeUpdate(BaseModel):
     timezone: str | None = None
     status_message: str | None = Field(default=None, max_length=140)
     daily_summary_enabled: bool | None = None
+    daily_summary_hour: int | None = Field(default=None, ge=0, le=23)
 
 
 class PasswordChange(BaseModel):
@@ -71,6 +76,7 @@ def _me(user) -> MeOut:
         timezone=user.timezone,
         status_message=user.status_message,
         daily_summary_enabled=user.daily_summary_enabled,
+        daily_summary_hour=user.daily_summary_hour,
     )
 
 

@@ -4,10 +4,11 @@
 #
 #   docker compose up -d && ./scripts/e2e-dashboard.sh
 #
-# Three things worth proving through HTTP: a password change refuses without
+# Four things worth proving through HTTP: a password change refuses without
 # the current password (the whole reason the endpoint isn't just a PATCH),
-# out-of-office is visible to colleagues and editable only by its owner, and
-# announcements are admins-only to write and everyone's to read.
+# out-of-office is visible to colleagues and editable only by its owner,
+# announcements are admins-only to write and everyone's to read, and the
+# daily digest goes out at an hour you choose rather than a hardcoded one.
 #
 # Creates real accounts and leaves them behind. Dev stacks only.
 set -u
@@ -41,6 +42,21 @@ echo "== your own status line"
 ok "starts empty"               "$(curl -s -b /tmp/dc.jar $B/api/me | j "d['status_message'] is None")" "True"
 ok "set it"                     "$(patch /tmp/dc.jar $B/api/me '{"status_message":"Heads-down on the refit"}' | j "d['status_message']")" "Heads-down on the refit"
 ok "clear it"                   "$(patch /tmp/dc.jar $B/api/me '{"status_message":"  "}' | j "d['status_message'] is None")" "True"
+
+echo "== when the daily digest goes out"
+# It used to be one hardcoded hour for the whole installation, which is only
+# ever right by luck: reported by somebody whose digest arrived just after
+# midnight. Yours to choose now, read against your own timezone.
+ok "defaults to 6am"            "$(curl -s -b /tmp/dc.jar $B/api/me | j "d['daily_summary_hour']")" "6"
+ok "choose another hour"        "$(patch /tmp/dc.jar $B/api/me '{"daily_summary_hour":9}' | j "d['daily_summary_hour']")" "9"
+ok "midnight is a real choice"  "$(patch /tmp/dc.jar $B/api/me '{"daily_summary_hour":0}' | j "d['daily_summary_hour']")" "0"
+# An hour outside the clock would read as "never sent" rather than failing
+# anywhere anybody would look, so it's refused at the edge.
+ok "24 is refused"              "$(code -b /tmp/dc.jar -H 'Content-Type: application/json' -X PATCH $B/api/me -d '{"daily_summary_hour":24}')" "422"
+ok "so is -1"                   "$(code -b /tmp/dc.jar -H 'Content-Type: application/json' -X PATCH $B/api/me -d '{"daily_summary_hour":-1}')" "422"
+DIGEST_OFF='{"daily_summary_enabled":false,"daily_summary_hour":7}'
+ok "turning it off keeps the hour" "$(patch /tmp/dc.jar $B/api/me "$DIGEST_OFF" | j "(d['daily_summary_enabled'], d['daily_summary_hour'])")" "(False, 7)"
+ok "…and back on again"         "$(patch /tmp/dc.jar $B/api/me '{"daily_summary_enabled":true}' | j "(d['daily_summary_enabled'], d['daily_summary_hour'])")" "(True, 7)"
 
 echo "== changing your password"
 ok "the wrong current one is refused" \

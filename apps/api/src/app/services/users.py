@@ -96,6 +96,7 @@ async def update_profile(
     timezone: str | None = None,
     status_message: str | None = None,
     daily_summary_enabled: bool | None = None,
+    daily_summary_hour: int | None = None,
 ) -> User:
     if display_name is not None:
         user.display_name = display_name.strip() or None
@@ -105,6 +106,11 @@ async def update_profile(
         user.status_message = status_message.strip()[:140] or None
     if daily_summary_enabled is not None:
         user.daily_summary_enabled = daily_summary_enabled
+    if daily_summary_hour is not None:
+        # Clamped rather than refused: the router's own field already bounds
+        # it, and the CHECK constraint is the backstop — an hour arriving from
+        # somewhere else is worth landing on a real hour, not a 500.
+        user.daily_summary_hour = max(0, min(23, daily_summary_hour))
     await db.commit()
     await db.refresh(user)
     return user

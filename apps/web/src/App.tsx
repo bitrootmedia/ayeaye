@@ -65,6 +65,9 @@ export type Me = {
   status_message: string | null;
   /** Opt-out, default on — see `models/user.py`'s own comment for why. */
   daily_summary_enabled: boolean;
+  /** Which local hour that digest goes out, 0-23, read against `timezone`.
+   *  Default 6. Yours to change on the account screen. */
+  daily_summary_hour: number;
 };
 
 /**

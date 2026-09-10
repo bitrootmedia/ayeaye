@@ -1,7 +1,17 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Index, String, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Index,
+    SmallInteger,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -60,6 +70,16 @@ class User(Base):
     daily_summary_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    # Which local hour that digest goes out, 0-23. Per person rather than one
+    # constant for the whole installation, because the only sensible value is
+    # the one somebody picked: a digest is read at the start of *their* day.
+    # Defaults to 6 — early enough to shape the day, and late enough that it
+    # is never the 3am message a timezone-naive scheduler eventually sends
+    # somebody. Read against `timezone`, so a wrong zone moves the hour with
+    # it; the account screen shows both together for exactly that reason.
+    daily_summary_hour: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("6")
+    )
     # The claim for the digest sweep — a date, not a timestamp, because the
     # question is "did they get today's" and a date is the whole answer. Same
     # discipline as `Reminder.notified_ahead_at`: the sweep's UPDATE sets this
@@ -98,6 +118,10 @@ class User(Base):
 
     __table_args__ = (
         Index("ix_users_disabled", "disabled_at", postgresql_where=text("disabled_at IS NOT NULL")),
+        # An hour outside the range would read as "never sent" rather than
+        # failing anywhere anybody would look, so it is refused by the
+        # database as well as by the API field that writes it.
+        CheckConstraint("daily_summary_hour BETWEEN 0 AND 23", name="ck_users_daily_summary_hour"),
     )
 
     created_at: Mapped[datetime] = mapped_column(

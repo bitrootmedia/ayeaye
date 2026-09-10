@@ -17,6 +17,7 @@ import { useOutletContext } from "react-router-dom";
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { TotpEnroll } from "@/components/mfa-enroll";
+import { EntityPicker, type PickerItem } from "@/components/entity-picker";
 import { PageHeader } from "@/components/page-header";
 import { WorkingHoursGrid } from "@/components/working-hours-grid";
 import { Badge } from "@/components/ui/badge";
@@ -54,6 +55,14 @@ import {
 } from "@/lib/types";
 import { cellKey } from "@/lib/working-hours";
 
+/** The 24 hours, labelled the way every other hour in this product is — the
+ *  working-hours grid and `format.ts`'s own timestamps are both zero-padded
+ *  24-hour, so this is not the one place that says "6 am". */
+const HOUR_ITEMS: PickerItem[] = Array.from({ length: 24 }, (_, hour) => ({
+  value: String(hour),
+  label: `${String(hour).padStart(2, "0")}:00`,
+}));
+
 /**
  * Your account: who you are, how to reach you, and when you aren't here.
  *
@@ -69,6 +78,7 @@ export default function Account() {
   const [displayName, setDisplayName] = useState(me?.display_name ?? "");
   const [status, setStatus] = useState(me?.status_message ?? "");
   const [dailySummary, setDailySummary] = useState(me?.daily_summary_enabled ?? true);
+  const [summaryHour, setSummaryHour] = useState(me?.daily_summary_hour ?? 6);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -80,6 +90,7 @@ export default function Account() {
           display_name: displayName,
           status_message: status,
           daily_summary_enabled: dailySummary,
+          daily_summary_hour: summaryHour,
         }),
       });
       await reload();
@@ -146,6 +157,30 @@ export default function Account() {
                 A morning nudge, per organisation, with what&rsquo;s planned for today and what
                 closed yesterday. On by default; turn it off here any time.
               </p>
+              {/* Only when there's a digest to time. A picker that changes
+                  nothing is worse than an absent one — the same reasoning as
+                  hiding a control that would 403. */}
+              {dailySummary && (
+                <div className="space-y-2">
+                  <Label htmlFor="summary-hour">Sent at</Label>
+                  <EntityPicker
+                    id="summary-hour"
+                    ariaLabel="Daily summary hour"
+                    items={HOUR_ITEMS}
+                    value={String(summaryHour)}
+                    onChange={(value) => value !== null && setSummaryHour(Number(value))}
+                  />
+                  {/* The zone is named here, not only in the list below: "6am"
+                      is meaningless without saying 6am where, and a digest
+                      arriving in the middle of the night is exactly what a
+                      stale zone looks like. */}
+                  <p className="text-xs text-muted-foreground">
+                    Your own time, in{" "}
+                    <span className="font-mono">{me?.timezone ?? "UTC"}</span>. If that
+                    isn&rsquo;t where you are, the digest arrives that many hours out.
+                  </p>
+                </div>
+              )}
             </div>
             <Button onClick={save} disabled={saving}>
               Save

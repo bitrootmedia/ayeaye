@@ -918,8 +918,8 @@ rescheduling a task leaves it permanently silent about its new date.
 **The daily digest** (`services/daily_summary.py`, `tasks/daily_summary.py`)
 sends what's planned for today (the Planner's Today bucket, **open tasks
 only**) and what closed yesterday (tasks the person owns, closed in their
-local yesterday), once per organisation with something to report, around each
-person's local 7am. Open-only is the same rule the Planner's own buckets
+local yesterday), once per organisation with something to report, at each
+person's own local hour. Open-only is the same rule the Planner's own buckets
 apply — a plan is what's still to do — and without it a task closed
 yesterday arrived under both headings of the same message. Reported after it
 shipped, from a real digest; the Planner was corrected to match immediately
@@ -931,9 +931,29 @@ off that almost nobody would ever find. The claim
 (`users.last_daily_summary_sent_on`, a date, not a timestamp — the question
 is "did they get today's") is gated on the **hour** as well as the day,
 which neither reminders nor the deadline sweep need: a digest that could
-arrive at 3am is not a digest anybody reads, so `claim()` checks
-`datetime.now(tz).hour == SUMMARY_HOUR` in Python before it ever runs the
-UPDATE. **One notification per organisation, never one merged across all of
+arrive at 3am is not a digest anybody reads, so `claim()` works out what
+time it is in that zone once, in Python, and compares it against each
+person's own column inside the same claiming UPDATE — one statement per
+zone however many different hours the people in it chose.
+
+**The hour is `users.daily_summary_hour` (default 6), set on the Account
+screen — it used to be one hardcoded `SUMMARY_HOUR = 7` for the whole
+installation.** Reported by somebody whose digest was arriving just after
+midnight, which is what a single hardcoded hour does the moment a stored
+timezone is wrong: the hour is only ever read against `users.timezone`, so
+a stale zone moves the digest by exactly its own error and there was no
+setting to reach for either way. Three things follow. The match stays
+**strict equality**, not "at or after" — a missed tick costs one day's
+digest, where `>=` would let a worker that was down all morning deliver at
+11pm the message this gate exists to prevent. The default moved to 6 rather
+than being preserved at 7, because nobody chose 7; it was the only value
+there was. And the Account screen names the timezone next to the picker
+(`Your own time, in Europe/Lisbon`), so a wrong zone is visible where the
+hour is chosen instead of only in the read-only list below it — the zone
+itself is still detected from the browser on `GET /me`, never typed, so
+loading the app corrects a stale one on its own.
+
+**One notification per organisation, never one merged across all of
 them** — a digest links somewhere, the Planner is scoped to one organisation
 like everything else that isn't the notification inbox, and there is no
 sensible single landing page for "your day across three organisations." An
@@ -4118,7 +4138,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-notepad.sh                # the notepad: same rule, a list this time, org-scoped
 ./scripts/e2e-bookmarks.sh              # the shared shelf: three different bars, and only an owner pins
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
-./scripts/e2e-dashboard.sh              # passwords, out of office, announcements
+./scripts/e2e-dashboard.sh              # passwords, out of office, announcements, digest hour
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person
 ./scripts/e2e-oauth.sh                  # DCR, PKCE, rotating refresh tokens, a real 401
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override

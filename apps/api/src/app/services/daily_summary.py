@@ -4,8 +4,18 @@ Same claim discipline as `services/reminders.py` and `services/deadlines.py` —
 `claim()` is one conditional UPDATE, not a select, so a restart or two
 schedulers racing sends one digest per person per day, not several. The one
 difference from those two: this also gates on the **hour**, because a digest
-that could arrive at 3am is not a digest anybody reads. `claim()` only ever
-returns anyone once `SUMMARY_HOUR` has arrived in their own zone that day.
+that could arrive at 3am is not a digest anybody reads.
+
+**The hour is each person's own** (`users.daily_summary_hour`, default 6),
+not one constant for the whole installation — it used to be a hardcoded 7,
+which is only ever right by luck, and there was no setting to reach for when
+it wasn't. It stays a strict hour match rather than "at or after": a missed
+tick costs somebody one day's digest, where `>=` would let a worker that was
+down all morning deliver the 3am message this gate exists to prevent.
+
+The hour is read against `users.timezone`, which the browser sets on `GET
+/me` — so a stale zone moves the digest by exactly its own error, which is
+what a midnight arrival for somebody who chose 6am actually means.
 
 **Opt-out, not opt-in** (`users.daily_summary_enabled`, default `true`) — see
 the column's own comment for why a default-off setting nobody finds defeats
@@ -31,10 +41,12 @@ from app.models.organisation import STATUS_ACTIVE
 from app.models.planner import BUCKET_TODAY
 from app.services import access
 
-# Local hour the digest goes out. Morning, not the top of the day: 7am is
-# early enough to shape the day and late enough not to be the 3am problem
-# every timezone-naive scheduler eventually causes somebody.
-SUMMARY_HOUR = 7
+# What a fresh account gets, mirroring the column's own server default —
+# early enough to shape the day, late enough never to be the 3am problem
+# every timezone-naive scheduler eventually causes somebody. Only the default
+# lives here now; the value that actually decides a send is the person's own
+# `users.daily_summary_hour`.
+DEFAULT_SUMMARY_HOUR = 6
 
 
 async def timezones_in_use(db: AsyncSession) -> list[str]:
@@ -50,20 +62,21 @@ async def timezones_in_use(db: AsyncSession) -> list[str]:
 
 
 async def claim(db: AsyncSession, *, tz_name: str) -> list[uuid.UUID]:
-    """Claim everyone in this timezone whose local morning has arrived and
-    who hasn't had today's digest yet.
+    """Claim everyone in this timezone whose own chosen hour has just struck
+    and who hasn't had today's digest yet.
 
-    The hour check happens in Python before the UPDATE runs at all: there's
-    no cheap way to ask Postgres "is it currently 7am in Europe/Lisbon" from
-    inside a WHERE clause without doing the same zone conversion by hand, and
-    doing it once here reads the same as `deadlines.claim`'s own date math.
+    What time it is *in this zone* is computed in Python, once: there's no
+    cheap way to ask Postgres "what hour is it in Europe/Lisbon" from inside
+    a WHERE clause without doing the same zone conversion by hand, and doing
+    it here reads the same as `deadlines.claim`'s own date math. Comparing it
+    against each person's own column then stays part of the one claiming
+    statement, so a zone with people on four different hours is still one
+    UPDATE per sweep, not one per hour.
     """
     try:
         now = datetime.now(ZoneInfo(tz_name))
     except (ZoneInfoNotFoundError, ValueError):
         now = datetime.now(ZoneInfo("UTC"))
-    if now.hour != SUMMARY_HOUR:
-        return []
     today = now.date()
 
     in_zone = func.coalesce(User.timezone, "UTC") == tz_name
@@ -73,6 +86,7 @@ async def claim(db: AsyncSession, *, tz_name: str) -> list[uuid.UUID]:
             .where(
                 User.daily_summary_enabled.is_(True),
                 in_zone,
+                User.daily_summary_hour == now.hour,
                 (User.last_daily_summary_sent_on.is_(None))
                 | (User.last_daily_summary_sent_on < today),
             )
@@ -181,4 +195,4 @@ async def for_user(db: AsyncSession, user_id: uuid.UUID, *, tz_name: str) -> lis
     return out
 
 
-__all__ = ["SUMMARY_HOUR", "OrgSummary", "claim", "for_user", "timezones_in_use"]
+__all__ = ["DEFAULT_SUMMARY_HOUR", "OrgSummary", "claim", "for_user", "timezones_in_use"]
