@@ -52,9 +52,16 @@ One container stack, one hostname, two commands. A free public instance runs at
 - **Search everywhere.** ⌘K on any screen, typo-tolerant, as you type. It only
   ever finds what you have access to — the permission check runs in the same
   query as the text match, so there is no index to fall out of date.
+- **A panel for whoever runs the installation** — who has signed up, what
+  organisations exist, when each was last active, and the ability to suspend
+  an account or an organisation. It shows counts, dates and names and nothing
+  else, and it grants no access to anybody's work. See [Running the
+  installation](#running-the-installation).
 
-Not here, deliberately: no billing, no landing page, no admin backoffice, no
-second hostname.
+Not here, deliberately: no billing, no landing page, no second hostname — and
+no staff account that can read your work, which is a promise the panel above
+keeps rather than breaks: see [Running the
+installation](#running-the-installation).
 
 ## What you need
 
@@ -285,6 +292,68 @@ integration: every call resolves through the same permission rules as the web
 app, as you. It cannot see a project nobody shared with you, cannot read
 anybody's private notes, cannot see a task somebody hid, and cannot invite
 people. Revoking access, either kind, takes effect on the next call.
+
+## Running the installation
+
+Nothing below is needed to use the product. It is for whoever runs the server.
+
+**Hand yourself the panel from a shell:**
+
+```bash
+./scripts/instance.sh grant-admin you@example.com
+```
+
+Reload the app and an **Instance** item appears at the bottom of the rail:
+totals for the whole installation, every account and every organisation with
+its last activity and task count, a search box, and a Suspend button on each.
+
+**Granting is shell-only, and that is the point.** A panel that could appoint
+its own successors would turn one stolen session into a permanent one, so
+there is no button and no API route that hands out the row — only this
+command, which needs access to the box. Everything *else* the panel does has
+a command too, for when a terminal is easier to reach than a browser:
+
+```bash
+./scripts/instance.sh admins                  # who has the panel
+./scripts/instance.sh revoke-admin them@example.com
+
+./scripts/instance.sh stats                   # totals for the installation
+./scripts/instance.sh users                   # accounts, newest first
+./scripts/instance.sh orgs                    # organisations, with counts
+
+./scripts/instance.sh suspend them@example.com --reason "bulk signups"
+./scripts/instance.sh restore them@example.com
+./scripts/instance.sh suspend-org their-slug --reason "spam"
+./scripts/instance.sh restore-org their-slug
+```
+
+**Suspending is reversible and deletes nothing.** A suspended *account* can't
+sign in, and any session it has open ends immediately. A suspended
+*organisation* locks everybody in it out of that one organisation and tells
+them why — the rest of their account, and their other organisations, carry on
+working. `restore` and `restore-org` put things back exactly as they were.
+
+**Running the installation is not a way to read people's work.** The panel and
+the commands show counts, dates and names — never a task title, a comment, a
+note or a file — and holding the panel gives you no access inside any
+organisation at all. A hidden task stays hidden from you, a private note stays
+private, and an organisation you aren't a member of is as invisible to you as
+to anybody else. If you need somebody's data, the honest routes are the same
+ones they have: ask them, or take a backup.
+
+**If signups run well ahead of organisations created, look.** That gap is the
+shape spam takes here — accounts are cheap to make, and creating an
+organisation is the first thing a real person does next. Both the panel and
+`stats` say so when they see it. If you're reading it weekly, the gate is open
+too wide: closing signup or turning on `EMAIL_VERIFICATION` is cheaper than
+suspending people one at a time.
+
+**Locked out of 2FA** on the only account that has it? That one is its own
+script, and it also needs the box:
+
+```bash
+./scripts/reset-mfa.sh you@example.com
+```
 
 ## Back it up
 
