@@ -1301,6 +1301,41 @@ async def start_timer(ctx: Context, organisation_id: str, task_id: str) -> str:
 
 
 @mcp.tool()
+async def running_timer(ctx: Context) -> str:
+    """What you are timing right now, in any organisation, or nothing.
+
+    Takes no organisation, like `notifications` and `my_reminders`, and for
+    the same reason those don't: there is **one running timer per person
+    across the whole installation** — a database constraint, not a
+    convention — so "which organisation" is an answer this gives rather than
+    a question it asks. A timer started yesterday in one organisation has to
+    be findable today from another, or you discover it on Monday.
+
+    `read` is enough. Knowing what your own clock is on is not a write.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        running = await time_tracking.running_with_task(db, user)
+    if running is None:
+        return "Nothing is running."
+    entry, task = running
+    elapsed = time_tracking.duration_seconds(entry.started_at, None, now=datetime.now(UTC))
+    # The task's id first, in brackets, like every other row here — and the
+    # organisation named as `organisation_id=` rather than `org=` so the
+    # value can be handed straight back to any of the tools that ask for one,
+    # which is the next thing a caller does with it (`stop_timer` needs none,
+    # but `task` and `update_task` both do).
+    bits = [
+        f"[{task.id}]",
+        task.title,
+        f"organisation_id={task.organisation_id}",
+        f"elapsed={time_tracking.format_duration(elapsed)}",
+        f"started={entry.started_at.isoformat()}",
+    ]
+    return " | ".join(bits)
+
+
+@mcp.tool()
 async def stop_timer(ctx: Context) -> str:
     """Stop whatever timer is currently running, in any organisation.
     Idempotent — nothing running is not an error."""

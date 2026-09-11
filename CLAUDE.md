@@ -1651,6 +1651,33 @@ what the web app's own bell polls. A count that disagreed with the bell
 would be a second, quieter answer to the same question. `my_reminders` is
 the existing precedent for a tool with no organisation id.
 
+**`running_timer` is the third tool that takes no organisation, and the
+reason is a database constraint rather than a preference.** There is one
+running timer per person across the whole installation — a partial unique
+index on `(user_id) WHERE ended_at IS NULL`, see `services/time_tracking.py`
+— so "which organisation" is something this tool *answers* rather than asks,
+and it answers it in the line (`organisation_id=…`) because a timer started
+yesterday in one organisation has to be findable today from another. It
+existed already as `GET /me/timer`, which the web shell polls for exactly
+that reason; MCP had `start_timer` and `stop_timer` and no way to ask what
+was running, which is fine for an assistant told to start one and useless to
+the menu bar app in the `ayeaye-menubar` repo, which draws a state light on
+its icon and cannot draw state it can't read. `read` is enough: knowing what
+your own clock is on is not a write, the same argument `notifications` makes
+for a status light being pointable at a read-only credential.
+
+The join it needs — the entry plus the task, for a title and an organisation
+— is `time_tracking.running_with_task`, added for this and adopted by
+`GET /me/timer`, which was doing the same two reads inline. That is not
+tidying: `app/mcp/server.py` has no `select()` of its own on purpose, so the
+second read had to live in the service or the tool would have been the
+module's first exception to its own rule. It loads the task **without an
+access check**, deliberately — the entry is the caller's own, so they could
+read the task when they started it, and a timer whose task has since gone out
+of view (hidden, or a project unshared) still has to say what it is on and
+still has to be stoppable. A clock running that nothing in the interface will
+name is the worse failure.
+
 **`changelog` and `record_change` are the organisation's dated log.** The
 read tool takes an optional `query` (the same matcher ⌘K uses) and states
 what its page is a page *of* when there is more — the text equivalent of

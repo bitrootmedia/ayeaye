@@ -379,8 +379,9 @@ Both paths answer the same questions once connected:
 > *Create a task for Ada to chase the yard about the travel lift, urgent.*
 
 **What it can do.** `organisations`, `list_tasks`, `search`, `task`,
-`activity`, `my_reminders` with read access; `create_task`, `update_task`,
-`comment`, `tag_task` and `untag_task` need write.
+`activity`, `my_reminders`, `running_timer` with read access; `create_task`,
+`update_task`, `comment`, `tag_task`, `untag_task`, `start_timer` and
+`stop_timer` need write.
 
 **What it can't.** A token — or an OAuth grant — is a person, not an
 integration: every call resolves through the same permission rules as the web

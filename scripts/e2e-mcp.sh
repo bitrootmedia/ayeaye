@@ -307,6 +307,45 @@ ok "an empty one is refused, and says why" \
 ok "a read-only token can't capture one" \
   "$(tool "$READ" create_spark "$(args body=nope)" | text | grep -ci 'read-only')" "1"
 
+echo "== the running timer"
+# The menu bar draws a state light from this, so the line it answers with is
+# a contract: `[task-id] | Title | organisation_id=… | elapsed=… | started=…`,
+# and an installation that reworded it would leave the icon silently blank.
+ok "nothing running says so, and names no task" \
+  "$(tool "$WRITE" running_timer '{}' | text | grep -c '^Nothing is running\.$')" "1"
+TIMERARGS=$(args organisation_id=$OID task_id=$TID)
+STARTED=$(tool "$WRITE" start_timer "$TIMERARGS" | text)
+ok "starting says which task"   "$(echo "$STARTED" | grep -c "\[$TID\]")" "1"
+RUNNING=$(tool "$WRITE" running_timer '{}' | text)
+ok "the running one is the task's id"    "$(echo "$RUNNING" | grep -c "^\[$TID\] |")" "1"
+ok "…with its title, not just the id"   "$(echo "$RUNNING" | grep -c 'Replace the anode')" "1"
+# The whole reason this tool takes no organisation: the caller has to be told
+# which one it is in, because a timer left running in one is found from
+# another — that is the field the menu bar builds a web link out of.
+ok "…and the organisation it is in"     "$(echo "$RUNNING" | grep -c "organisation_id=$OID")" "1"
+ok "…and how long it has been going"    "$(echo "$RUNNING" | grep -cE 'elapsed=[0-9]+[hm]')" "1"
+ok "…and when it started, as a timestamp" "$(echo "$RUNNING" | grep -cE 'started=20[0-9]{2}-')" "1"
+# Reading your own clock is a read. A status light is exactly the thing
+# somebody should be able to point a read-only credential at — the same
+# argument the notification count above makes.
+ok "a read-only token can read it"      "$(tool "$MEMTOK" running_timer '{}' | text | grep -c 'Nothing is running')" "1"
+# One per person, globally: a member's own timer is a different clock, and
+# Alice's must not appear in it.
+ok "…and sees its own, not somebody else's" \
+  "$(tool "$MEMTOK" running_timer '{}' | text | grep -c "$TID")" "0"
+# Starting elsewhere stops the first, rather than refusing — and the answer
+# says so, which is the only way a caller can report it.
+SECOND=$(tool "$WRITE" start_timer "$(args organisation_id=$OID task_id=$PLANNED_ID)" | text)
+ok "starting another stops the first, and says which" \
+  "$(echo "$SECOND" | grep -c "stopped the one running on \[$TID\]")" "1"
+ok "…and the running one has moved"     "$(tool "$WRITE" running_timer '{}' | text | grep -c "^\[$PLANNED_ID\] |")" "1"
+STOPPED=$(tool "$WRITE" stop_timer '{}' | text)
+ok "stopping names what it stopped"     "$(echo "$STOPPED" | grep -c "\[$PLANNED_ID\]")" "1"
+ok "…and then nothing is running"       "$(tool "$WRITE" running_timer '{}' | text | grep -c '^Nothing is running\.$')" "1"
+ok "stopping nothing is not an error"   "$(tool "$WRITE" stop_timer '{}' | text | grep -c 'Nothing was running')" "1"
+ok "a read-only token cannot start one" \
+  "$(tool "$MEMTOK" start_timer "$TIMERARGS" | text | grep -ci 'read-only')" "1"
+
 echo "== the changelog"
 # Shared, unlike a spark: every member of the organisation reads the same
 # log, so this is the one place here where Bob's own token is expected to

@@ -161,6 +161,30 @@ async def running_for(db: AsyncSession, user: User) -> TimeEntry | None:
     ).scalar_one_or_none()
 
 
+async def running_with_task(db: AsyncSession, user: User) -> tuple[TimeEntry, Task] | None:
+    """The caller's running timer and the task it is on, wherever that is.
+
+    `running_for` above answers "is something running"; anything that has to
+    *name* it needs the task too, and both callers that do — the shell's
+    `/me/timer` and MCP's `running_timer` — were otherwise going to fetch it
+    themselves. One of them is `app/mcp/server.py`, which has no `select()`
+    of its own on purpose, so the join belongs here rather than at either
+    call site.
+
+    The task is loaded without an access check, deliberately. The entry is
+    the caller's own — they started the timer, so they could read the task at
+    the time — and a timer whose task went out of view (hidden, or a project
+    unshared since) still has to be stoppable and still has to say what it is
+    on. Refusing to name it would leave a clock running that nothing in the
+    interface admits to.
+    """
+    entry = await running_for(db, user)
+    if entry is None:
+        return None
+    task = (await db.execute(select(Task).where(Task.id == entry.task_id))).scalar_one()
+    return entry, task
+
+
 async def list_for_task(
     db: AsyncSession, ctx: OrgContext, user: User, task_id: uuid.UUID
 ) -> list[tuple[TimeEntry, User]]:

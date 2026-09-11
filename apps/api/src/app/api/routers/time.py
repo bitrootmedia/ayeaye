@@ -10,10 +10,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, status
-from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
-from app.models import Task, TimeEntry, User
+from app.models import TimeEntry, User
 from app.schemas.structure import PersonOut
 from app.schemas.time import (
     ManualEntryIn,
@@ -68,11 +67,11 @@ async def my_timer(user: CurrentUser, db: DbSession):
     Polled by the shell so a timer left running yesterday is visible today,
     whichever organisation you happen to open.
     """
-    entry = await time_tracking.running_for(db, user)
-    if entry is None:
+    running = await time_tracking.running_with_task(db, user)
+    if running is None:
         return TimerOut(entry=None)
 
-    task = (await db.execute(select(Task).where(Task.id == entry.task_id))).scalar_one()
+    entry, task = running
     return TimerOut(
         entry=_entry_out(entry, who=user, task_title=task.title),
         organisation_id=str(task.organisation_id),
