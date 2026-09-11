@@ -143,6 +143,18 @@ async def context_for(db: AsyncSession, org_id: uuid.UUID, user: User) -> OrgCon
     part in should not be distinguishable from one that doesn't exist. A
     pending invitation is not membership: it doesn't grant access until it's
     accepted, so it reads as 404 here too.
+
+    **A suspended organisation is 403, not 404**, and the difference is
+    deliberate. The two answers mean different things everywhere else in this
+    product — 404 is "there is nothing here for you", 403 is "you can see
+    this, but not like that" — and a member of an organisation an instance
+    admin has locked is emphatically in the second case. Telling them it
+    vanished would send them to support believing they had been removed, and
+    the suspension is reversible, so the honest answer is the one that says
+    what happened. This is the single enforcement point: it sits upstream of
+    every visibility expression, which is what lets `services/access.py` stay
+    ignorant of the column (`test_account_suspension_is_not_a_role` asserts
+    exactly that).
     """
     row = (
         await db.execute(
@@ -162,7 +174,13 @@ async def context_for(db: AsyncSession, org_id: uuid.UUID, user: User) -> OrgCon
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND, detail="organisation not found"
         )
-    return OrgContext(organisation=row[0], membership=row[1])
+    organisation, membership = row
+    if organisation.suspended_at is not None:
+        detail = "this organisation has been suspended"
+        if organisation.suspended_reason:
+            detail = f"{detail}: {organisation.suspended_reason}"
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail=detail)
+    return OrgContext(organisation=organisation, membership=membership)
 
 
 # --- reads -------------------------------------------------------------------

@@ -19,6 +19,7 @@ from app.models import Organisation
 from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
 from app.security import authn
 from app.security.authn import MfaPendingSession, PendingSession, mark_mfa_satisfied
+from app.services import instance as instance_service
 from app.services import mfa as mfa_service
 from app.services import notification_channels as channels_service
 from app.services import oauth as oauth_service
@@ -52,6 +53,14 @@ class MeOut(BaseModel):
     # above. Both are on the wire together because the account screen shows
     # them together: "6am" means nothing without saying 6am *where*.
     daily_summary_hour: int
+    # Whether this account administers the *installation* — an
+    # `instance_admins` row, granted from the shell alone. It is on `/me`
+    # because it decides whether the rail shows an Instance item at all, and
+    # nothing else: it confers no extra access inside any organisation, and
+    # `services/access.py` never learns it exists. The server refuses
+    # regardless — this only stops the UI offering a link that 404s, the
+    # same reasoning `can_close` follows.
+    is_instance_admin: bool
 
 
 class MeUpdate(BaseModel):
@@ -67,7 +76,7 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
-def _me(user) -> MeOut:
+def _me(user, *, is_instance_admin: bool = False) -> MeOut:
     return MeOut(
         id=str(user.id),
         user_id=user.supertokens_user_id,
@@ -77,23 +86,29 @@ def _me(user) -> MeOut:
         status_message=user.status_message,
         daily_summary_enabled=user.daily_summary_enabled,
         daily_summary_hour=user.daily_summary_hour,
+        is_instance_admin=is_instance_admin,
     )
 
 
 @router.get("/me", response_model=MeOut)
-async def me(user: CurrentUser):
+async def me(user: CurrentUser, db: DbSession):
     """Who you are.
 
     Also the request that creates the local user row on first sight, which is
     why the SPA calls it before rendering anything.
+
+    One extra lookup here, for `is_instance_admin`: a tiny table, and asked
+    on every `/me` rather than cached, so revoking somebody from the shell
+    takes their panel away on their next navigation instead of their next
+    sign-in.
     """
-    return _me(user)
+    return _me(user, is_instance_admin=await instance_service.is_instance_admin(db, user))
 
 
 @router.patch("/me", response_model=MeOut)
 async def update_me(body: MeUpdate, user: CurrentUser, db: DbSession):
     updated = await users_service.update_profile(db, user, **body.model_dump(exclude_unset=True))
-    return _me(updated)
+    return _me(updated, is_instance_admin=await instance_service.is_instance_admin(db, updated))
 
 
 def _working_hours_out(user, cells) -> WorkingHoursOut:

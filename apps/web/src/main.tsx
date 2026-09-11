@@ -24,6 +24,7 @@ import Account from "@/views/Account";
 import CalendarView from "@/views/Calendar";
 import Dashboard from "@/views/Dashboard";
 import Help from "@/views/Help";
+import Instance from "@/views/Instance";
 import Landing, { Footer, Header } from "@/views/Landing";
 import ArticleDetail from "@/views/ArticleDetail";
 import Bookmarks from "@/views/Bookmarks";
@@ -337,6 +338,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 {/* Personal and cross-organisation, like the inbox above it. */}
                 <Route path="reminders" element={<Reminders />} />
                 <Route path="sparks" element={<Sparks />} />
+                {/* The installation's operator panel. Not organisation-scoped:
+                    it is about the whole installation, so it sits beside the
+                    inbox and Sparks rather than under an organisation. */}
+                <Route path="instance" element={<Instance />} />
                 <Route path="account" element={<Account />} />
                 <Route path="help" element={<Help />} />
                 {/* A route that throws, so the error boundary can be tested

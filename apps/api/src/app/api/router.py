@@ -14,6 +14,7 @@ from app.api.routers import (
     conversations,
     dashboard,
     exports,
+    instance,
     invites,
     knowledge_base,
     notifications,
@@ -120,6 +121,12 @@ api_router.include_router(invites.router)
 # Data exports — a ZIP built in the worker, one directory per task. Every
 # read filters on the requester; see services/exports.py.
 api_router.include_router(exports.router)
+
+# The instance operator's panel — who is on this installation, and stopping
+# abuse. Not organisation-scoped and not a role: an `instance_admins` row,
+# granted from the shell alone, and 404 for everybody else so the surface
+# isn't discoverable. Metadata only — see services/instance.py.
+api_router.include_router(instance.router)
 
 # Telegram's own callback for the notification-channel linking flow. No auth
 # dependency here at all — Telegram is not a browser and carries no session

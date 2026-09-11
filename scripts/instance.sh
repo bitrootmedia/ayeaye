@@ -7,22 +7,32 @@
 #   ./scripts/instance.sh orgs  [--limit N] [--offset N] [--oldest]
 #   ./scripts/instance.sh suspend <email|id> [--reason "..."]
 #   ./scripts/instance.sh restore <email|id>
+#   ./scripts/instance.sh suspend-org <slug|id> [--reason "..."]
+#   ./scripts/instance.sh restore-org <slug|id>
+#   ./scripts/instance.sh admins
+#   ./scripts/instance.sh grant-admin <email|id> [--note "..."]
+#   ./scripts/instance.sh revoke-admin <email|id>
 #
-# There is deliberately no screen for this. This product has no staff tier —
-# `users` has no `role` or `is_staff` column and a test fails the build if
-# one appears — so instance administration is an operator capability, held
-# by whoever can reach the box, exactly like scripts/reset-mfa.sh. Shell
-# access is the credential, and a better one than a login: whoever has it
-# already has Postgres and .env, so this grants no new power. A web
-# backoffice would be the highest-value account on the instance, guarding
-# data that organisation admins deliberately cannot reach.
+# There is a screen for this now — /instance in the web app, for anybody
+# holding an instance_admins row — and this shell tool is the other front
+# door onto the same code. What stayed shell-only is the part that matters:
+# GRANTING THE ROW. A panel that could appoint its own successors would turn
+# one stolen session into a permanent foothold, so grant-admin needs access
+# to this box, which is a credential the web cannot phish.
+#
+# This product still has no staff tier: `users` has no `role` or `is_staff`
+# column and a test fails the build if one appears. An instance admin has no
+# extra power inside any organisation either — services/access.py never
+# learns the table exists, so a hidden task stays hidden from them and a
+# private note stays private.
 #
 # Metadata only. Counts, dates and names — never a task title, a comment, a
 # private note or a file. See services/instance.py for why.
 #
-# `suspend` blocks sign-in and revokes every live session. It is
-# non-destructive and reversible: their data is untouched and `restore`
-# puts them straight back.
+# `suspend` blocks sign-in and revokes every live session. `suspend-org`
+# locks an organisation for everybody in it. Both are non-destructive and
+# reversible: no data is touched and `restore`/`restore-org` put things
+# straight back.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

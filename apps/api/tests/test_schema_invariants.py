@@ -7,7 +7,7 @@ and catch the mistake at the point it's written rather than on deploy.
 from pathlib import Path
 
 from app.db.base import Base
-from app.models import User
+from app.models import InstanceAdmin, Organisation, User
 from app.services import access
 
 
@@ -63,3 +63,46 @@ def test_account_suspension_is_not_a_role():
 
     source = (Path(access.__file__)).read_text()
     assert "disabled_at" not in source
+
+
+def test_instance_admin_is_a_table_not_a_column():
+    """Administering the *installation* is a row in its own table, never an
+    attribute of the account.
+
+    The test above forbids a `role`/`is_admin`/`is_staff` column on `users`
+    because what somebody may do inside an organisation must come from their
+    membership and their grants — one place to look. An instance admin
+    doesn't answer that question at all: they get the operator view (counts,
+    dates, names) and the ability to suspend an account or an organisation,
+    and **no additional access inside any organisation whatsoever**.
+
+    So it is allowed, on exactly the terms `disabled_at` is: the property
+    that keeps it honest is that `services/access.py` never reads it. A
+    visibility expression that knew about `instance_admins` would quietly be
+    the staff tier this product doesn't have — a hidden task would stop being
+    hidden, a private note would stop being private.
+    """
+    assert not set(User.__table__.c.keys()) & {"is_instance_admin", "instance_role"}
+
+    source = Path(access.__file__).read_text()
+    assert "instance_admin" not in source
+    assert "InstanceAdmin" not in source
+    # The model exists and points at an account, so the row is the whole fact.
+    assert "user_id" in InstanceAdmin.__table__.c.keys()
+
+
+def test_organisation_suspension_is_not_a_visibility_rule():
+    """`organisations.suspended_at` is the organisation-level twin of
+    `users.disabled_at`, and sits on the same side of the same line.
+
+    It decides whether an organisation works at all; it says nothing about
+    what anybody may do inside a working one. `services/organisations.py`'s
+    `context_for` is the single enforcement point, upstream of every
+    visibility expression — so `services/access.py` never reads it, and a
+    `suspended_at` that crept into one would be a second, quieter answer to
+    "can this person see this row".
+    """
+    assert "suspended_at" in Organisation.__table__.c.keys()
+
+    source = Path(access.__file__).read_text()
+    assert "suspended_at" not in source

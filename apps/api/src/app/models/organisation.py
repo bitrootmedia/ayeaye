@@ -63,6 +63,20 @@ class Organisation(Base):
         Boolean, nullable=False, server_default=text("false")
     )
 
+    # Set by an instance admin, never by anybody inside the organisation —
+    # the organisation-level twin of `users.disabled_at`, and on the same
+    # side of the line: it decides whether the organisation works at all,
+    # and says nothing about what anyone may do inside a working one.
+    # `services/organisations.py::context_for` is the single place it is
+    # enforced, upstream of the whole access model, so `services/access.py`
+    # never reads it and a test asserts that stays true. Non-destructive and
+    # reversible: nothing is deleted, and clearing it puts everybody back
+    # exactly where they were.
+    suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    suspended_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

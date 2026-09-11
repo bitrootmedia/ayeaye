@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import User
 from app.security.authn import VerifiedSession
+from app.services import instance as instance_service
 from app.services import organisations as orgs_service
 from app.services import users as users_service
 from app.services.organisations import OrgContext
@@ -73,3 +74,27 @@ async def get_org_context(org_id: uuid.UUID, user: CurrentUser, db: DbSession) -
 
 
 CurrentOrg = Annotated[OrgContext, Depends(get_org_context)]
+
+
+async def get_instance_admin(user: CurrentUser, db: DbSession) -> User:
+    """The caller, if they administer this *installation* — see
+    `services/instance.py`.
+
+    **404, not 403**, unlike almost every other refusal in this codebase. The
+    usual rule is that 403 means "you can see this, but not at that level",
+    and that presumes the thing is something you were meant to know about. An
+    operator panel isn't: answering 403 confirms to anybody who guesses the
+    URL that the route exists and that somebody's session would reach it,
+    which is a map of where to aim. The same reasoning `access.py` applies to
+    a project you have no route into, pointed at a surface rather than a row.
+
+    Resolved per request rather than cached on the session: revoking somebody
+    (`scripts/instance.sh revoke-admin`) has to take effect on their next
+    request, not their next sign-in.
+    """
+    if not await instance_service.is_instance_admin(db, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+    return user
+
+
+CurrentInstanceAdmin = Annotated[User, Depends(get_instance_admin)]

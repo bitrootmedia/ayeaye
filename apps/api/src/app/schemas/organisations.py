@@ -30,6 +30,13 @@ class OrganisationOut(BaseModel):
     # Unions with a member's own TOTP enrollment rather than replacing it —
     # see services/mfa.py's account_requires_mfa.
     require_mfa: bool
+    #: Locked by an instance admin. On the *list* rather than only on the
+    #: 403 from `context_for`, so the app can say what happened on the
+    #: screen the person is already looking at instead of letting every
+    #: panel on it fail its own fetch and render nothing. Reversible, and
+    #: nothing inside was deleted.
+    suspended: bool = False
+    suspended_reason: str | None = None
     created_at: datetime
 
 

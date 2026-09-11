@@ -37,6 +37,12 @@ export type Organisation = {
   /** Unions with a member's own TOTP enrollment rather than replacing it —
    *  see services/mfa.py's account_requires_mfa. */
   require_mfa: boolean;
+  /** Locked by an instance admin. It stays in your list rather than
+   *  vanishing — you are still a member, it is coming back, and a thing that
+   *  silently disappeared would send you to support believing you had been
+   *  removed. Every route under it answers 403 while this is set. */
+  suspended: boolean;
+  suspended_reason: string | null;
   created_at: string;
 };
 
@@ -934,4 +940,58 @@ export type Bookmark = {
    *  omit the control rather than show one that 403s, the same reasoning
    *  `can_close` on a task follows. */
   can_edit: boolean;
+};
+
+/* ---------------------------------------------------------------------------
+ * The instance panel. Metadata only, by design — counts, dates and names,
+ * never a task title, a comment, a private note or a file. See
+ * `services/instance.py` for why that restriction is the price of having
+ * this on the web at all.
+ * ------------------------------------------------------------------------ */
+
+export type InstanceTotals = {
+  users: number;
+  disabled_users: number;
+  organisations: number;
+  suspended_organisations: number;
+  tasks: number;
+  users_last_24h: number;
+  organisations_last_24h: number;
+  /** A signup rate well ahead of the organisations-created rate is the shape
+   *  spam takes here. Resolved server-side so the panel and the CLI can't
+   *  disagree about what counts as worth a look. */
+  signups_outpacing_organisations: boolean;
+};
+
+export type InstanceUser = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  created_at: string;
+  /** Derived from what they have actually *done* — a task event, a time
+   *  entry, a comment, a sign-in — rather than stamped on every request.
+   *  So somebody who only ever reads looks idle, and null means they have
+   *  signed up and done nothing at all. */
+  last_active_at: string | null;
+  organisations: number;
+  tasks: number;
+  disabled_at: string | null;
+  disabled_reason: string | null;
+  is_instance_admin: boolean;
+};
+
+export type InstanceOrganisation = {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  /** The newest `tasks.updated_at` in it, which is "last activity" by this
+   *  product's own definition — a comment, a file or an hour logged all
+   *  stamp it, not just editing the task. */
+  last_active_at: string | null;
+  owner_email: string | null;
+  members: number;
+  tasks: number;
+  suspended_at: string | null;
+  suspended_reason: string | null;
 };

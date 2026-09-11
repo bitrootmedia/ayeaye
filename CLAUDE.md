@@ -108,6 +108,13 @@ column.** What a person may do comes from their membership and their grants,
 never from an attribute of the account. A second place to look when something
 is denied is exactly the thing being avoided.
 
+**`instance_admins` is not a counter-example**, and its being a table rather
+than a column on `users` is why. It answers a different question — does this
+installation let you see the operator panel — and confers no access inside any
+organisation whatsoever; `services/access.py` never learns it exists, and a
+test asserts that by reading the module's source. Same side of the same line
+as `users.disabled_at`. See "Instance administration".
+
 **2. One React app, no shared package.** Four apps forced `source(none)` plus a
 per-app `@source`, a repo-root Docker context and a workspace-aware install.
 None of that exists here: standard Tailwind, app-scoped Docker contexts,
@@ -190,6 +197,8 @@ ayeayecaptain/
     │       │                #     and who wrote it down),
     │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
     │       │                #   export (a ZIP build, requester-only, autodeletes),
+    │       │                #   instance_admin (who runs the installation —
+    │       │                #     its own table, never a column on users),
     │       │                #   reminder,
     │       │                #   presence (out of office, announcements),
     │       │                #   working_hours (a weekly grid, informational),
@@ -215,6 +224,7 @@ ayeayecaptain/
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   bookmarks.py — shared, ordered, owner-pinned
     │       │                #   changelog.py — shared, dated, paged
+    │       │                #   instance.py — the operator view. CLI *and* panel
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
     │       │                #   reminders.py presence.py working_hours.py sparks.py
@@ -1857,79 +1867,123 @@ itself and went through consent.
 ## Instance administration
 
 Read `services/instance.py`. Who is on this installation, and stopping
-abuse — reached only through `scripts/instance.sh`, never over HTTP.
+abuse — reached two ways now: `scripts/instance.sh`, and the web panel at
+`/instance` for anybody holding an `instance_admins` row.
 
-**It is an operator capability, not an in-app role, and that is the whole
-design.** There is no staff tier: `users` has no `role`, `kind` or
-`is_staff` column and `test_a_user_has_no_role_or_kind_column` fails the
-build if one appears. So this is a shell tool, the same shape
-`scripts/reset-mfa.sh` already established. Shell access *is* the
-credential and a better one than a login would be — whoever has it already
-has Postgres and `.env`, so the tool grants no new power, it only makes
-power they already hold ergonomic. A web backoffice would instead be the
-single highest-value account on the instance, phishable and
-brute-forceable, guarding data organisation admins deliberately cannot
-reach.
+**It shipped as a shell tool alone, and this file argued for that at
+length.** The argument was that a web backoffice becomes the single
+highest-value account on an instance — phishable and brute-forceable in a way
+an SSH key is not — guarding data that organisation admins deliberately
+cannot reach. That argument still holds, and it is the reason for every
+restriction below. What changed is a product decision: an operator should be
+able to do this from the app. So the mitigations are what survived, and they
+are load-bearing rather than decorative.
 
-**Metadata only. Nothing here reads anybody's content** — counts, dates and
-names, never a task title, a comment, a private note or a file. Not
-squeamishness: this product makes hard promises a browsing backoffice would
-quietly void (a hidden task is invisible to org admins, `services/notes.py`
-has no override branch at all, an export is the requester's "not even an
-admin's"). Spam triage needs volume and timing, not prose. An
-organisation's *name* is the one judgement call, included because a name is
-what a spam organisation is recognised by.
+**1. The panel cannot appoint its own successors.** `instance_admins` rows
+are granted and revoked from the shell only (`grant-admin`/`revoke-admin`).
+There is no route that hands one out, and `scripts/e2e-instance.sh` asserts
+that by walking the OpenAPI document rather than trusting the code to stay
+that way. One stolen session cannot become a permanent foothold, and cannot
+widen past itself.
 
-**`users.disabled_at` is allowed where `is_staff` is not, and the line
-between them is the point.** A role says what someone may do *inside* an
-organisation, which membership and grants already answer — a second answer
-is what that invariant test exists to prevent. Suspension says whether the
-account works at all, upstream of the whole access model: the account-level
-twin of `organisation_members.status = 'disabled'`. If the account works,
-authorization is exactly what it was.
-`test_account_suspension_is_not_a_role` asserts `services/access.py` never
-reads the column, because a `disabled_at` that crept into a visibility
-expression would quietly be the staff tier this product doesn't have.
+**2. An instance admin gets no extra power inside any organisation.**
+`services/access.py` never learns the table exists — a hidden task stays
+hidden from them, a private note stays private, an export stays the
+requester's, and opening somebody's organisation is still a 404.
+`test_instance_admin_is_a_table_not_a_column` asserts the absence by reading
+that module's source, exactly as the `disabled_at` test already does. The
+e2e suite proves the live half: the panel can *count* an organisation's
+tasks and cannot *open* it.
 
-**Suspension is two mechanisms, and a test that checked one would pass
-while the other let somebody carry on working.**
+**3. Metadata only.** Counts, dates and names, never a task title, a comment,
+a private note or a file. Not squeamishness: this product makes promises a
+browsing backoffice would quietly void. An organisation's *name* is the one
+judgement call, included because a name is what a spam organisation is
+recognised by.
 
-- **The front door** — `sign_in_post` is overridden in `security/authn.py`
-  to answer `SIGN_IN_NOT_ALLOWED`. Checked *before* the password is
-  verified, so a suspended account can't be used as an oracle for whether a
-  password is right. Emailpassword only, unlike `create_new_session`'s
-  login-history hook (chosen precisely because it catches every recipe) —
-  the trade is opposite here: this needs to *refuse*, and refusing inside
-  session creation means the credentials already checked out with no typed
-  response shape to say so cleanly.
-- **The open tab** — `set_disabled`'s caller revokes every live session
-  through SuperTokens, which owns them. In practice that is what fires, and
-  the suite asserts **401**, not 403: the session is gone, so the request
-  never reaches a route. `deps.py`'s own 403 is defence in depth behind it,
-  for a deployment where an access token outlives its revocation. Asserting
-  403 there would have been asserting the weaker path and calling the real
-  one a failure — which is exactly how the first version of the test read.
+**Still no staff tier — and `instance_admins` being a table rather than a
+column is the whole reason that is still true.** `users` has no `role`,
+`kind` or `is_admin` column and `test_a_user_has_no_role_or_kind_column`
+fails the build if one appears, because what a person may do *inside* an
+organisation must come from their membership and their grants, with no second
+place to look. An instance admin doesn't answer that question at all. It sits
+on the same side of the same line as `users.disabled_at`: upstream of the
+access model, saying nothing about what a working account may do in a working
+organisation.
+
+**Suspension is two mechanisms for an account, and one for an
+organisation.**
+
+- **An account** — the front door is `sign_in_post`, overridden in
+  `security/authn.py` to answer `SIGN_IN_NOT_ALLOWED`, checked *before* the
+  password is verified so a suspended account can't be used as an oracle for
+  whether a password is right. The open tab is `set_disabled`'s caller
+  revoking every live session through SuperTokens, which owns them. In
+  practice that is what fires, and the suite asserts **401**, not 403: the
+  session is gone, so the request never reaches a route. `deps.py`'s own 403
+  is defence in depth behind it. Asserting 403 there would be asserting the
+  weaker path and calling the real one a failure — which is how the first
+  version of the test read.
+- **An organisation** — `organisations.suspended_at`, enforced in exactly one
+  place: `organisations.context_for`, upstream of every visibility
+  expression. **403, not 404**, unlike an organisation you were never in: the
+  member *is* a member, it *is* there, and it is coming back, so telling them
+  it vanished would send them to support believing they had been removed. No
+  sessions are revoked either — the people in it may be perfectly legitimate
+  members of other organisations, and signing them out of the product would
+  be punishing them for it.
+
+**A suspended organisation stays in your list rather than disappearing, and
+`App.tsx` says why.** `OrganisationOut` carries `suspended`/
+`suspended_reason`, and the shell renders `SuspendedOrg` in place of the
+whole screen — the same wholesale replacement `MfaGate` and `VerifyEmailGate`
+already do, and for the same reason: without it every panel on the page fails
+its own fetch with a 403 and the person is looking at an empty screen with no
+explanation. The operator's reason is the most useful sentence there, so it
+is the one in the largest type.
+
+**"Last active" is derived, never stamped.** There is no `last_seen_at`
+column, deliberately: keeping one accurate costs a write on the request hot
+path for every signed-in person. `_last_active()` is instead the newest of
+the things somebody actually *did* — a task event, a time entry, a comment, a
+sign-in — as four correlated `MAX`es under one `GREATEST` (which skips NULLs,
+so "signed up and did nothing" is a real NULL rather than an epoch date). The
+caveat worth knowing before reading it as "last seen": **somebody who only
+reads looks idle.** For abuse triage that bias is right, since the thing being
+looked for is people generating volume. An organisation's own last activity
+is one subquery instead — `MAX(tasks.updated_at)`, which is "last activity"
+by this product's own definition rather than "last row update", since a
+comment, a file, a tag or an hour logged all stamp it through
+`tasks_service.announce()`.
 
 **The local `users` row is created lazily, and for this tool that is the
-target population rather than an edge case.** It appears on somebody's
-first authenticated request, so an account that signed up and walked away
-has no row at all — precisely what a registration script produces.
-`suspend` therefore falls back to asking SuperTokens (which knew about them
-at signup) and materialises the row through `users_service.get_or_create`,
-so there is somewhere to record the suspension. Deliberately **not** done
-for `users`/`orgs`: inventing rows as a side effect of *listing* would make
-the totals disagree with themselves between runs.
+target population rather than an edge case.** It appears on somebody's first
+authenticated request, so an account that signed up and walked away has no row
+at all — precisely what a registration script produces. `suspend` and
+`grant-admin` therefore fall back to asking SuperTokens and materialise the
+row through `users_service.get_or_create`, so there is somewhere to record
+the fact. Deliberately **not** done for `users`/`orgs`: inventing rows as a
+side effect of *listing* would make the totals disagree with themselves
+between runs.
 
-**Ordering matters in `suspend`.** The flag is committed before sessions
-are revoked — the other way round, a revoked session just sends them to the
+**Ordering matters in `suspend`.** The flag is committed before sessions are
+revoked — the other way round, a revoked session just sends them to the
 sign-in screen and straight back in.
 
-**Prevention beats cleanup, and the tool says so.** `stats` flags a signup
-rate well ahead of the organisations-created rate, because that gap is the
-shape spam takes here: accounts are cheap to make, and creating an
-organisation is the first thing a real person does next. If that reading is
-routine, the gate is open too wide — closing signup or enforcing
-`EMAIL_VERIFICATION` is the cheaper fix than suspending people weekly.
+**You cannot suspend yourself from the panel**, and it is the one guard in
+`api/routers/instance.py` that isn't about who may reach the surface. Locking
+yourself out of the panel you are standing in is recoverable only from a
+shell you might not have to hand. Suspending a *different* instance admin is
+allowed — that is a real thing an operator may need to do, and the shell is
+the backstop either way.
+
+**Prevention beats cleanup, and both front doors say so.** A signup rate well
+ahead of the organisations-created rate is the shape spam takes here:
+accounts are cheap to make, and creating an organisation is the first thing a
+real person does next. `signups_outpacing_organisations` is resolved
+server-side so the CLI's note and the panel's banner cannot disagree. If that
+reading is routine, the gate is open too wide — closing signup or enforcing
+`EMAIL_VERIFICATION` is cheaper than suspending people weekly.
 
 **A trap worth not repeating.** `AccountInfoInput` is in
 `supertokens_python.types.base`, not `supertokens_python.types` — guessed
@@ -1937,6 +1991,17 @@ wrong first, and the failure was swallowed by the broad `except` that keeps
 an unreachable core from being fatal, so it reported "no account matching"
 rather than an import error. Confirm an SDK symbol against the installed
 package, the same rule the MCP section already states.
+
+**A second trap, found by a browser test and worth more than it looks.** The
+panel's suspend dialog originally stayed mounted and cleared its fields in an
+effect keyed on the target — and the target was a fresh object literal on
+every parent render, so the effect refired and wiped the reason somebody had
+just typed. The suspension landed with no note at all, which on *this* screen
+means an irreversible-looking action with nothing for the next person to
+review. The fix is the same one the changelog's own add dialog uses: mount
+one per target, keyed by its id, and initialise state at mount rather than
+resetting it in an effect. **An effect whose dependency is built inline in
+JSX fires on every render of the parent**, and there is no warning anywhere.
 
 ## Self-hosting
 
@@ -4420,7 +4485,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-planner.sh                # the pool, the buckets, and the admin override
 ./scripts/e2e-recurring-tasks.sh        # the generation sweep, run twice, sending once
 ./scripts/e2e-mfa.sh                    # TOTP, backup codes, the org toggle, not-instant-on-purpose
-./scripts/e2e-instance.sh               # suspension: sign-in blocked, sessions revoked, data kept
+./scripts/e2e-instance.sh               # the panel is 404 until the shell says otherwise; suspension, both kinds
 ./scripts/e2e-exports.sh                # yours only not even an admin's, build, download, autodelete
 ./scripts/e2e-task-sharing.sh           # sharing one task, never the project it's filed in
 ./scripts/e2e-dependencies.sh           # the DAG stays a DAG, informational, never enforced

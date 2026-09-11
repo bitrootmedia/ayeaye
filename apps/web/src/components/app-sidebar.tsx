@@ -26,6 +26,7 @@ import {
   NetworkIcon,
   NotebookIcon,
   ScrollTextIcon,
+  ServerCogIcon,
   SettingsIcon,
   SparklesIcon,
   SunIcon,
@@ -251,6 +252,26 @@ export function AppSidebar({
                   <span>Account</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {/* The installation's operator panel, for whoever holds an
+                  `instance_admins` row — granted from the shell alone, never
+                  from the panel itself. Hidden rather than disabled for
+                  everybody else, the same "don't show a control that refuses"
+                  rule as a task's Close button; the server answers 404 rather
+                  than 403 regardless, so the surface isn't discoverable by
+                  guessing the URL either. Last in the group because it is the
+                  rarest item in the product by a distance. */}
+              {me?.is_instance_admin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={isActive("/instance")}
+                    tooltip="Instance"
+                    render={<Link to="/instance" />}
+                  >
+                    <ServerCogIcon />
+                    <span>Instance</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

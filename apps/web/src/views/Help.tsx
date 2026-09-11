@@ -418,23 +418,44 @@ export default function Help() {
               else can skip this section.
             </p>
             <p>
-              There is no admin screen for the installation as a whole, on purpose: this
-              product has no staff account that can see across organisations, so there is
-              nothing to log in to. Whoever runs the server does it from a shell instead:
+              There&rsquo;s an <strong>Instance</strong> item at the bottom of the rail for
+              whoever runs this installation: who&rsquo;s signed up, what organisations exist,
+              how recently each was active, and the ability to suspend an account or a whole
+              organisation. It doesn&rsquo;t appear for anybody else.
+            </p>
+            <p>
+              <strong>Being handed that panel is done from a shell, never from the panel
+              itself.</strong> That&rsquo;s deliberate: a screen that could appoint its own
+              successors would turn one stolen session into a permanent one. The same
+              commands do everything the panel does, for when it&rsquo;s easier to reach a
+              terminal than a browser:
             </p>
             <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs">
-              {`./scripts/instance.sh stats      # totals for the whole installation
+              {`./scripts/instance.sh grant-admin someone@example.com   # hand over the panel
+./scripts/instance.sh revoke-admin someone@example.com
+./scripts/instance.sh admins     # who has it
+
+./scripts/instance.sh stats      # totals for the whole installation
 ./scripts/instance.sh users      # accounts, newest first
 ./scripts/instance.sh orgs       # organisations, with member and task counts
 ./scripts/instance.sh suspend someone@example.com --reason "why"
-./scripts/instance.sh restore someone@example.com`}
+./scripts/instance.sh restore someone@example.com
+./scripts/instance.sh suspend-org their-slug --reason "why"
+./scripts/instance.sh restore-org their-slug`}
             </pre>
             <p>
-              Suspending blocks sign-in and ends any session already open. It doesn&rsquo;t
-              touch their data and <strong>restore</strong> puts them straight back. The
-              listings show counts and dates only — never anyone&rsquo;s tasks, comments,
-              notes or files, which stay as private from the server&rsquo;s operator as the
-              rest of the product promises.
+              Suspending an account blocks sign-in and ends any session already open.
+              Suspending an organisation locks everybody in it out of that one organisation
+              and tells them why, leaving the rest of their account alone. Neither touches
+              any data, and <strong>restore</strong> puts things straight back.
+            </p>
+            <p>
+              <strong>Running the installation is not a way to read people&rsquo;s work.</strong>{" "}
+              The panel and the commands show counts, dates and names only — never anyone&rsquo;s
+              tasks, comments, notes or files — and holding the panel gives no extra access
+              inside any organisation at all. A hidden task stays hidden, a private note stays
+              private, and an organisation you&rsquo;re not a member of is as invisible to you
+              as it is to anybody else.
             </p>
             <p>
               Email and Telegram are both optional infrastructure: leave them unconfigured and

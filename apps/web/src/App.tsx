@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { signOut } from "supertokens-auth-react/recipe/session";
 
-import { BellIcon, PlusIcon } from "lucide-react";
+import { BellIcon, LockIcon, PlusIcon } from "lucide-react";
 
 import { ApiError, api } from "@/api";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -68,6 +68,14 @@ export type Me = {
   /** Which local hour that digest goes out, 0-23, read against `timezone`.
    *  Default 6. Yours to change on the account screen. */
   daily_summary_hour: number;
+  /** Whether this account administers the *installation* — an
+   *  `instance_admins` row, granted from the shell alone
+   *  (`scripts/instance.sh grant-admin`). It decides whether the rail shows
+   *  an Instance item and nothing else: it confers no extra access inside
+   *  any organisation, and `services/access.py` never learns it exists. The
+   *  server refuses regardless, so this only stops the UI offering a link
+   *  that 404s — the same reasoning `can_close` follows. */
+  is_instance_admin: boolean;
 };
 
 /**
@@ -424,7 +432,17 @@ function Shell() {
         </header>
 
         <main className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-          <Outlet context={shell} />
+          {/* A suspended organisation is a real member of a real list, and
+              every route under it answers 403 — so without this, each panel
+              on the screen would fail its own fetch and render nothing, and
+              the person would be looking at an empty page with no idea why.
+              Said here rather than in each screen for the same reason
+              `MfaGate` is: it replaces the content wholesale, and there is
+              exactly one condition to check. `currentOrg` is the URL's
+              organisation, not the rail's — being *in* a suspended one is
+              what this is about, not glancing at your inbox while you happen
+              to belong to one. */}
+          {currentOrg?.suspended ? <SuspendedOrg org={currentOrg} /> : <Outlet context={shell} />}
         </main>
       </SidebarInset>
 
@@ -520,5 +538,41 @@ function CreateOrgDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+
+/**
+ * What a member of a suspended organisation sees instead of its screens.
+ *
+ * **It says what happened, and it does not pretend the organisation is
+ * gone.** The server answers 403 rather than 404 for exactly this reason:
+ * they are still a member, nothing was deleted, and it is reversible — a
+ * thing that silently vanished would send somebody to support believing they
+ * had been removed. The reason, when the operator left one, is the most
+ * useful sentence on the screen, so it is the one in the largest type.
+ *
+ * The rail stays exactly as it was: their other organisations still work,
+ * and so do the inbox, reminders and their account. Only this one is shut.
+ */
+function SuspendedOrg({ org }: { org: Organisation }) {
+  return (
+    <div className="flex flex-1 items-center justify-center py-16">
+      <div className="max-w-prose space-y-3 text-center">
+        <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-muted">
+          <LockIcon className="size-5 text-muted-foreground" />
+        </div>
+        <h1 className="text-xl font-semibold">{org.name} is suspended</h1>
+        <p className="text-sm text-muted-foreground">
+          {org.suspended_reason
+            ? org.suspended_reason
+            : "Whoever runs this installation has locked it."}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Nothing in it has been deleted, and everything comes back exactly as it was if it is
+          unlocked. Your other organisations are unaffected.
+        </p>
+      </div>
+    </div>
   );
 }

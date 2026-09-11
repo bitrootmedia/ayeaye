@@ -39,6 +39,8 @@ def _org_out(org, role: str) -> OrganisationOut:
         slug=org.slug,
         role=role,
         require_mfa=org.require_mfa,
+        suspended=org.suspended_at is not None,
+        suspended_reason=org.suspended_reason,
         created_at=org.created_at,
     )
 

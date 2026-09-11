@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import {
@@ -286,6 +289,18 @@ test("photograph the product", async ({ page }) => {
   await page.goto("/help");
   await shot(page, "14b-help");
 
+  // The instance operator's panel. Granting the row is shell-only by design,
+  // so the screenshot run does it the only way anybody can — which is itself
+  // the feature working. Reloaded because `/me` decides the rail item and is
+  // fetched on load.
+  execFileSync(path.resolve(process.cwd(), "../scripts/instance.sh"), ["grant-admin", owner], {
+    stdio: "pipe",
+  });
+  await page.goto("/instance");
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Instance totals" })).toBeVisible();
+  await shot(page, "14c-instance");
+
   // The same product with the lights off. The tokens are one set with a `.dark`
   // override, so this is the check that nothing hard-codes a colour.
   await setTheme(page, "dark");
@@ -305,6 +320,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/changelog`);
   await shot(page, "17d-changelog-dark");
+
+  await page.goto("/instance");
+  await shot(page, "17e-instance-dark");
 
   // The task screen carries three native `type="date"` inputs (Due, Est.
   // start) — the one place a browser-drawn control (the calendar picker

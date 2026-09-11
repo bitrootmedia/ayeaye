@@ -1,8 +1,10 @@
 """The instance operator's command line. See `services/instance.py` first.
 
-Run through `scripts/instance.sh`, never over HTTP — there is no route to
-any of this and there must not be one. The whole reason this is a shell tool
-rather than a screen is written up in that service's docstring.
+Run through `scripts/instance.sh`. There is a web panel onto the same service
+now (`/instance`, `api/routers/instance.py`), and this is the other front
+door — but **granting the `instance_admins` row is shell-only and stays that
+way**, because a panel that can appoint its own successors turns one stolen
+session into a permanent foothold. See that service's docstring.
 
 Output is plain aligned text rather than a table library: this is read in an
 SSH session on somebody's phone as often as on a laptop, and it should also
@@ -122,7 +124,9 @@ async def _suspend(args: argparse.Namespace, *, disabled: bool) -> None:
         if disabled:
             # Order matters: the flag is committed above, so a session
             # revoked here cannot be replaced by signing straight back in.
-            revoked = await _revoke_sessions(user.supertokens_user_id)
+            # Shared with the panel's own route rather than duplicated —
+            # see `services/instance.py::revoke_sessions`.
+            revoked = await instance_service.revoke_sessions(user.supertokens_user_id)
             print(f"suspended {user.email} — {revoked} session(s) revoked")
             print("they can no longer sign in, and their data is untouched")
         else:
@@ -162,27 +166,75 @@ async def _adopt_from_supertokens(db, who: str):
         return None
 
 
-async def _revoke_sessions(supertokens_user_id: str) -> int:
-    """SuperTokens owns sessions, so this is its call to make, not a row we
-    could clear ourselves. Never fatal: the suspension already landed, and
-    an unreachable core must not leave the operator thinking nothing
-    happened when the important half did."""
-    try:
-        from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
+async def _suspend_org(args: argparse.Namespace, *, suspended: bool) -> None:
+    """Lock or unlock a whole organisation.
 
-        from app.security.authn import init_auth
+    No sessions are revoked, unlike suspending an account: its members may be
+    perfectly legitimate members of other organisations, and signing them out
+    of the product would be punishing them for it.
+    """
+    async with SessionLocal() as db:
+        org = await instance_service.find_organisation(db, args.which)
+        if org is None:
+            print(f"no organisation matching {args.which!r}", file=sys.stderr)
+            print("(give the slug or the id — names are not unique)", file=sys.stderr)
+            raise SystemExit(1)
+        changed = await instance_service.set_organisation_suspended(
+            db, org, suspended=suspended, reason=getattr(args, "reason", None)
+        )
+        if not changed:
+            print(f"{org.slug} is already {'suspended' if suspended else 'active'}")
+            return
+        if suspended:
+            print(f"suspended {org.slug} — its members are locked out and told why")
+            print("nothing was deleted; `restore-org` puts everybody straight back")
+        else:
+            print(f"restored {org.slug} — its members are back exactly where they were")
 
-        # `init_auth()`, not `create_app()`: the recipes have to be
-        # registered before any SuperTokens call, and this process is a CLI
-        # rather than the API, so nothing has done it. Building the whole
-        # FastAPI app to get the same side effect would also mount every
-        # router and open a second engine for no reason.
-        init_auth()
-        return len(await revoke_all_sessions_for_user(supertokens_user_id))
-    except Exception as exc:  # pragma: no cover - depends on a live core
-        print(f"warning: could not revoke live sessions ({exc})", file=sys.stderr)
-        print("the account is suspended; any open tab stops working on its next request")
-        return 0
+
+async def _admins() -> None:
+    async with SessionLocal() as db:
+        rows = await instance_service.list_admins(db)
+    if not rows:
+        print("  no instance admins — grant one with: instance.sh grant-admin <email>")
+        return
+    print(f"  {'EMAIL':42} {'SINCE':>6}  NOTE")
+    for user, admin in rows:
+        print(f"  {_clip(user.email, 42):42} {_ago(admin.created_at):>6}  {_clip(admin.note, 40)}")
+
+
+async def _set_admin(args: argparse.Namespace, *, grant: bool) -> None:
+    """Grant or revoke the instance-admin row.
+
+    **Deliberately shell-only**, which is the whole reason the web panel is
+    acceptable at all: it cannot appoint its own successors, so one stolen
+    session is not a permanent foothold. See `models/instance_admin.py`.
+    """
+    async with SessionLocal() as db:
+        user = await instance_service.find_user(db, args.who)
+        if user is None and grant:
+            # Same reasoning as `suspend`: the local row is created lazily on
+            # somebody's first authenticated request, so an account that
+            # signed up and hasn't used the app yet has none to attach this
+            # to. Ask SuperTokens and materialise it.
+            user = await _adopt_from_supertokens(db, args.who)
+        if user is None:
+            print(f"no account matching {args.who!r}", file=sys.stderr)
+            raise SystemExit(1)
+        if grant:
+            changed = await instance_service.grant_admin(db, user, note=args.note)
+            if changed:
+                print(f"{user.email} is now an instance admin")
+                print("they will see an Instance item in the rail on their next page load")
+            else:
+                print(f"{user.email} already is one")
+        else:
+            changed = await instance_service.revoke_admin(db, user)
+            print(
+                f"{user.email} is no longer an instance admin"
+                if changed
+                else f"{user.email} wasn't one"
+            )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -204,6 +256,22 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("restore", help="let a suspended account back in")
     p.add_argument("who", help="email address or user id")
 
+    p = sub.add_parser("suspend-org", help="lock a whole organisation")
+    p.add_argument("which", help="slug or organisation id")
+    p.add_argument("--reason", help="shown to its members when they try to open it")
+
+    p = sub.add_parser("restore-org", help="unlock a suspended organisation")
+    p.add_argument("which", help="slug or organisation id")
+
+    sub.add_parser("admins", help="who administers this installation")
+
+    p = sub.add_parser("grant-admin", help="give somebody the instance panel")
+    p.add_argument("who", help="email address or user id")
+    p.add_argument("--note", help="why, for whoever reads this list later")
+
+    p = sub.add_parser("revoke-admin", help="take the instance panel away")
+    p.add_argument("who", help="email address or user id")
+
     args = parser.parse_args(argv)
     if args.command == "stats":
         asyncio.run(_stats())
@@ -215,6 +283,16 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_suspend(args, disabled=True))
     elif args.command == "restore":
         asyncio.run(_suspend(args, disabled=False))
+    elif args.command == "suspend-org":
+        asyncio.run(_suspend_org(args, suspended=True))
+    elif args.command == "restore-org":
+        asyncio.run(_suspend_org(args, suspended=False))
+    elif args.command == "admins":
+        asyncio.run(_admins())
+    elif args.command == "grant-admin":
+        asyncio.run(_set_admin(args, grant=True))
+    elif args.command == "revoke-admin":
+        asyncio.run(_set_admin(args, grant=False))
 
 
 if __name__ == "__main__":

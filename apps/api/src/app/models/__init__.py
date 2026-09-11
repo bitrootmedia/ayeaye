@@ -10,6 +10,7 @@ from app.models.conversation import (
     MessageRead,
 )
 from app.models.export import Export
+from app.models.instance_admin import InstanceAdmin
 from app.models.knowledge_base import Article, ArticleRevision, Book, BookMember
 from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
@@ -55,6 +56,7 @@ __all__ = [
     "Message",
     "MessageRead",
     "Export",
+    "InstanceAdmin",
     "LoginEvent",
     "MfaBackupCode",
     "MfaTotpDevice",
