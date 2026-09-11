@@ -74,6 +74,7 @@ from app.services import projects as projects_service
 from app.services import reminders as reminders_service
 from app.services import richtext, time_tracking
 from app.services import search as search_service
+from app.services import sparks as sparks_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 from app.services.oauth import OAuthTokenVerifier
@@ -1154,6 +1155,37 @@ async def update_reminder(
         updated = await reminders_service.update_one(db, row, user, fields=fields)
     what = updated.title or updated.note or updated.id
     return f"Updated reminder: {what} for {updated.remind_on}"
+
+
+@mcp.tool()
+async def create_spark(
+    ctx: Context,
+    body: Annotated[str, Field(description="One field. A thought, a link, a note to self.")],
+) -> str:
+    """Capture a spark: a stray thought, not yet a task. Yours alone —
+    nobody else, not even an organisation admin, ever sees it.
+
+    Takes no organisation, like `my_reminders` and `notifications`: the
+    point of a capture tool is catching a thought regardless of which
+    organisation happens to be open when it strikes, and a spark carries no
+    `organisation_id` at all.
+
+    Use this rather than `create_task` when there is nothing to do yet.
+    A task is work somebody is accountable for; a spark is a line in a
+    notebook, reviewed and turned into something else — or deleted — later
+    on the `/sparks` screen.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    if not body.strip():
+        # The service raises a 422 for this, which the SDK would take as a
+        # crash and withhold the text of. Anticipated, so it says so.
+        raise Denied("A spark needs something in it.")
+    async with SessionLocal() as db:
+        row = await sparks_service.create(db, user, body=body)
+    # One line, whatever was captured: a spark has no title to report back
+    # instead, and the body is short by construction.
+    return f"Saved [{row.id}] {row.body.splitlines()[0][:120]}"
 
 
 @mcp.tool()

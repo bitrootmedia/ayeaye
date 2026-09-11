@@ -292,6 +292,21 @@ ok "a stranger's inbox is their own"   "$(tool "$BOBTOK" notifications '{}' | te
 # somebody should be able to point a read credential at.
 ok "a read-only token can read it"     "$(tool "$MEMTOK" notifications '{}' | text | grep -c 'unread')" "1"
 
+echo "== capturing a spark"
+# The other thing the menu bar box can file. No organisation argument at all
+# — the tool for the one record in this schema that has no organisation_id —
+# and nobody but its author is ever meant to see it, which is what the two
+# REST reads below are here to prove: there is no MCP read tool for sparks to
+# check it with, on purpose.
+SPARK=$(tool "$WRITE" create_spark "$(args 'body=Ask the yard about the shackle pin')" | text)
+ok "a spark saves, and says so"       "$(echo "$SPARK" | grep -c 'Ask the yard about the shackle pin')" "1"
+ok "…into your own list"              "$(curl -s -b /tmp/ma.jar $B/api/sparks | j "sum(1 for x in d if 'shackle pin' in x['body'])")" "1"
+ok "…and nobody else's"               "$(curl -s -b /tmp/mb.jar $B/api/sparks | j "len(d)")" "0"
+ok "an empty one is refused, and says why" \
+  "$(tool "$WRITE" create_spark '{"body":"   "}' | text | grep -ci 'needs something in it')" "1"
+ok "a read-only token can't capture one" \
+  "$(tool "$READ" create_spark "$(args body=nope)" | text | grep -ci 'read-only')" "1"
+
 echo "== the report tools"
 ok "activity reports the week"  "$(tool "$WRITE" activity "{\"organisation_id\":\"$OID\",\"days\":7}" | text | grep -ci "touched in the last 7 day")" "1"
 ok "search finds by word"       "$(tool "$WRITE" search "{\"organisation_id\":\"$OID\",\"query\":\"anode\"}" | text | grep -c "Replace the anode")" "1"
