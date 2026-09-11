@@ -7,51 +7,146 @@ One container stack, one hostname, two commands. A free public instance runs at
 
 ## What it does
 
+Grouped, because there is a lot of it. Nothing here is an upsell tier — a
+self-hosted installation has all of it.
+
+### The work
+
 - **Organisations** with owners, admins and members. Invite by email — or by a
-  copyable link, so it works with no mail server at all.
+  copyable link, so it works with no mail server at all. Removing somebody
+  hands their projects, tasks and recurring series to an owner who's staying
+  rather than refusing to let them go, so offboarding is never a puzzle.
+- **Teams and project groups.** A team is a set of people you can share with
+  in one go; a group is a folder for projects. Filing a project in a group
+  gives nobody access — it's a label, not a boundary.
 - **Projects, private by default.** Not to the organisation — to the person who
   created them. Sharing is explicit, to a named person or a named team, and
   every project lists exactly who can see it, organisation admins included.
 - **Tasks** with an owner and one action-required person, five statuses, six
   priorities, and open/closed as a separate field — so "closed while still
-  blocked" is something you can say. A board that groups by status or by
-  priority, a sortable table with filters on every column, and a full history
-  of every change. Anything that happens to a task — a comment, a file, an
-  hour logged — counts as activity, so "what moved this week" is one click on
-  a column heading.
-- **Descriptions with formatting.** Headings, lists, quotes, links, and code
-  blocks with syntax colouring. Paste or drop a picture straight in — it
-  becomes a file on the task, so it's in the Files panel too.
+  blocked" is something you can say. A board that groups by status, priority
+  or who's on the hook, a sortable table with filters on every column, and a
+  full history of every change. Anything that happens to a task — a comment, a
+  file, an hour logged — counts as activity, so "what moved this week" is one
+  click on a column heading.
+- **A task can be shared on its own**, without sharing the project it's filed
+  in. Being asked to act on something carries the access to open it, because
+  the alternative is asking people to work on what they can't see.
+- **Checklists and sheets.** More than one checklist per task — "packing list"
+  and "before we ship" are two lists, not two headings in one. A sheet is the
+  same idea in two dimensions: the same three checks across twenty servers,
+  as a grid, with who ticked each box and when.
+- **Depends on.** Record that one task is waiting on another, in both
+  directions. It's visibility, not a gate — you can still close a task with
+  open dependencies, because the ask was to *see* what's blocking, and this
+  product doesn't invent enforcement nobody asked for.
+- **Recurring tasks.** A cadence on a task makes the next one appear on
+  schedule whether or not the last one got closed — like a calendar event,
+  not a checklist. Two open "pay rent"s is an honest backlog.
+- **Tags**, shared across the organisation. Mark one *off the board* and its
+  tasks stop queueing for attention — that's how a reference item lives
+  alongside the work without cluttering it, while staying searchable.
+- **Descriptions with formatting.** Headings, lists, quotes, links, code
+  blocks with syntax colouring, and Mermaid diagrams that render in place.
+  Paste or drop a picture straight in — it becomes a file on the task, so it's
+  in the Files panel too.
 - **Files on tasks.** Drag one onto the task or onto a comment — or use the
   button — and either way it lands in the same Files panel, with thumbnails
   for images that open full size in place.
-- **Tags**, shared across the organisation. Mark one *off the board* and its
-  tasks stop queueing for attention — that's how a knowledge-base article
-  lives alongside the work without cluttering it, while staying searchable.
-- **Private notes.** A scratchpad on any task that nobody else can read —
-  not the task's owner, not an administrator — and that only you can search.
-- **Hidden tasks.** The owner can make one visible to themselves alone,
-  overriding every other permission. Sharing stays set up and resumes when
-  they un-hide it.
-- **Reminders.** A date and a note on any task. You're told the day before and
-  again on the day, and anything that has come due sits in a red badge until
-  you deal with it.
-- **A dashboard per organisation** — announcements from its admins, and who's
-  away in the next fortnight — plus an account screen for your password, your
-  status line and your own out-of-office days.
-- **Time tracking.** One timer, wherever you are. Type "1h30" for work already
-  done. Rollups by person, project and task.
 - **Comments** on tasks and projects, live over a WebSocket, with file
-  attachments and in-browser voice notes.
-- **No dropdown you can only scroll.** Anywhere you pick a project or a
-  person, the list opens with a filter already focused.
+  attachments and in-browser voice notes. Type `@` to name somebody who can
+  see the task, and they're told.
+- **Versions.** Every save that replaces a title or a description keeps what
+  it replaced, with who and when, and you can put an old one back. A colleague
+  saving over your description is recoverable rather than gone.
+
+### Getting through the week
+
+- **Triage.** Open work nobody has been asked to pick up — the queue that
+  falls between "what's mine" and "what's everything". Say how urgent it is
+  and who takes it, from the row, and it leaves the queue.
+- **A planner.** Your own week as five buckets — today, tomorrow, this week,
+  next week, someday — dragged into place from a pool of everything you can
+  see. It's yours; an organisation admin can look at somebody's if they need
+  to, and still can't see anything that person can't.
+- **A calendar.** A month at a glance: every due date you can see, your own
+  reminders, and who's away. Task dates are the team's; reminders are yours
+  alone, on the same grid.
+- **Reminders.** A date and a note, on a task or on nothing in particular.
+  You're told the day before and again on the day, and anything that has come
+  due sits in a red badge until you deal with it.
+- **Time tracking.** One timer, wherever you are. Type "1h30" for work already
+  done. Corrections leave a trail, and rollups go by person, project and task.
+- **A dashboard per organisation** — announcements from its admins, who's away
+  in the next fortnight, what's critical or due soon, and whatever you've
+  pinned.
+
+### Yours alone
+
+- **Private notes.** A scratchpad on any task that nobody else can read — not
+  the task's owner, not an administrator — and that only you can search.
+- **Hidden tasks.** The owner can make one visible to themselves alone,
+  overriding every other permission. Organisation admins included. Sharing
+  stays set up and resumes when they un-hide it.
+- **A notepad**, per organisation, autosaved as you type, for the thinking
+  that isn't about any one task.
+- **Sparks.** ⌘J anywhere, type the thought, back to what you were doing. One
+  field and no organisation to choose, because a capture box that asks
+  questions isn't one.
+
+### Reference material
+
+- **A knowledge base.** Books of articles, shared the way projects are, with
+  every edit kept as history. An article starts as a private draft only its
+  author can see until they publish it.
+- **Bookmarks.** The organisation's shared shelf of links, in an order
+  everybody sees. Anyone can add and reorder; the owner decides what's pinned
+  to the top.
+- **A changelog.** A dated record of what happened — a version lift, a config
+  change, a supplier switched. The date is the date it *happened*, not the day
+  somebody got round to writing it down.
+
+### Being told about it
+
+- **One inbox**, across every organisation you're in, with per-row read and
+  delete and a badge that clears itself.
+- **Where nudges go is yours to choose.** Email always works; add Telegram or
+  a signed webhook, and pick which kinds of notification go to which. A
+  different email address per organisation, if you want one — confirmed by a
+  link before anything is sent to it.
+- **Tasks from Telegram.** `/task Fix the winch` in a chat with your bot files
+  it, first line as the title and the rest as the description.
+- **A daily digest**, at an hour you choose in your own timezone: what you
+  planned for today and what you closed yesterday. Opt out on the account
+  screen.
+
+### Your account, and your data
+
+- **Two-factor authentication**, with backup codes. Optional for you, and an
+  organisation can require it of its members. Hand-rolled on TOTP rather than
+  a paid add-on, so it costs nothing to self-host.
+- **Email verification** turns itself on when you've configured SMTP and stays
+  off when you haven't — so a fresh install can't lock its first user out.
+- **Working hours.** A weekly grid colleagues can see before they ask you for
+  something — converted into whatever timezone the person looking is in, so
+  nobody has to do the arithmetic.
+- **Take your data out.** A ZIP of an organisation or a project, one folder per
+  task with its files, built in the background. Scoped to what *you* can see —
+  not even an organisation admin can download somebody else's.
 - **Connect your own assistant.** An MCP endpoint at `/mcp` lets Claude — or
-  any MCP client — read your work and, if you let it, create tasks and comment
-  as you. It acts as *you*: it reaches exactly what you can reach. See
+  any MCP client — read your work and, if you let it, create tasks, comment
+  and log time as you. It acts as *you*: it reaches exactly what you can
+  reach. Personal access tokens, or OAuth for clients that expect it. See
   [Your own assistant](#your-own-assistant).
+
+### Throughout
+
 - **Search everywhere.** ⌘K on any screen, typo-tolerant, as you type. It only
   ever finds what you have access to — the permission check runs in the same
   query as the text match, so there is no index to fall out of date.
+- **No dropdown you can only scroll.** Anywhere you pick a project or a
+  person, the list opens with a filter already focused.
+- **Light and dark**, following your system until you say otherwise.
 - **A panel for whoever runs the installation** — who has signed up, what
   organisations exist, when each was last active, and the ability to suspend
   an account or an organisation. It shows counts, dates and names and nothing
