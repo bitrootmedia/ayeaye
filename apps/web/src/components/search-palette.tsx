@@ -1,4 +1,11 @@
-import { CircleDotIcon, FolderKanbanIcon, NotebookPenIcon, SearchIcon } from "lucide-react";
+import {
+  BookOpenIcon,
+  CircleDotIcon,
+  FolderKanbanIcon,
+  NotebookPenIcon,
+  ScrollTextIcon,
+  SearchIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -38,6 +45,8 @@ const KIND_ICON = {
   // A private note. The hit IS a note but the link is to the task — you
   // search your notes to get back to the work, not to read them here.
   note: NotebookPenIcon,
+  article: BookOpenIcon,
+  changelog: ScrollTextIcon,
 } as const;
 
 export function SearchPalette({
@@ -111,17 +120,37 @@ export function SearchPalette({
     return () => clearTimeout(timer);
   }, [query, orgId]);
 
+  /**
+   * Where a hit goes. One place, and it has to name **every** kind
+   * `services/search.py::search` can return — the default is a task URL, so
+   * a kind that falls through here lands on "task not found" with its own id
+   * in the address bar. That is exactly what article hits did from the day
+   * the knowledge base shipped: `articles_stmt` was added to `search()` and
+   * this function (and `SearchHit["kind"]`) never heard about it.
+   *
+   * A changelog entry has no screen of its own — it is a row in a log — so
+   * it goes to the log **carrying the query that matched it**. The list
+   * filters server-side with the identical `search_service.matches`, so the
+   * page it lands on is guaranteed to contain the row; landing on page one
+   * of a five-year log instead would be a link that technically arrived and
+   * practically didn't.
+   */
   const go = useCallback(
     (hit: SearchHit) => {
       onOpenChange(false);
+      const q = encodeURIComponent(query.trim());
       navigate(
         hit.kind === "project"
           ? `/orgs/${orgId}/projects/${hit.id}`
-          : // Both tasks and note hits carry the task's id.
-            `/orgs/${orgId}/tasks/${hit.id}`,
+          : hit.kind === "article"
+            ? `/orgs/${orgId}/kb/articles/${hit.id}`
+            : hit.kind === "changelog"
+              ? `/orgs/${orgId}/changelog?q=${q}`
+              : // Both tasks and note hits carry the task's id.
+                `/orgs/${orgId}/tasks/${hit.id}`,
       );
     },
-    [navigate, onOpenChange, orgId],
+    [navigate, onOpenChange, orgId, query],
   );
 
   const onKeyDown = (event: React.KeyboardEvent) => {

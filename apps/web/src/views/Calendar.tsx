@@ -12,6 +12,7 @@ import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { isoDate } from "@/lib/format";
 import {
   PRIORITY_TONE,
   STATUS_DOT,
@@ -24,18 +25,6 @@ import {
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-/** `YYYY-MM-DD` in the *local* timezone — `toISOString()` converts to UTC
- *  first, which slides a day near midnight for anyone not on UTC. Every date
- *  here is a plain calendar day, not an instant, the same reasoning
- *  `services/reminders.py` gives for doing this arithmetic itself rather
- *  than trusting a library. */
-function isoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 /** The Monday on or before the 1st of the month — where a 6-week grid
  *  starts so every day of the month has a cell, Monday-first. */

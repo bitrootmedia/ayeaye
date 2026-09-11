@@ -33,3 +33,18 @@ export function ago(iso: string): string {
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
 }
+
+/** `YYYY-MM-DD` from a `Date`'s **local** fields.
+ *
+ *  Deliberately not `toISOString().slice(0, 10)`, which converts to UTC
+ *  first and so slides the date by a whole day for anyone not on UTC near
+ *  midnight — the same "a date has no timezone" fact `services/reminders.py`
+ *  documents on the server side. Shared rather than copied a third time: the
+ *  calendar and the changelog both need today's date as the API spells it.
+ */
+export function isoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}

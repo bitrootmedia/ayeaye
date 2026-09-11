@@ -197,6 +197,28 @@ test("photograph the product", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Pinned", exact: true })).toBeVisible();
   await shot(page, "10b-bookmarks");
 
+  // The changelog, with two entries on two different dates — the date
+  // heading is stated once per day, so a single-entry log would photograph
+  // only half of how this screen reads.
+  await page.goto(`/orgs/${orgId}/changelog`);
+  const addEntry = async (what: string, when: string) => {
+    await page.getByRole("button", { name: "Add entry" }).first().click();
+    const dialog = page.locator('[data-slot="dialog-content"]');
+    await dialog.getByRole("textbox", { name: "What happened" }).fill(what);
+    await dialog.getByLabel("Date", { exact: true }).fill(when);
+    await dialog.getByRole("button", { name: "Add entry" }).click();
+    // Wait for the dialog to actually go, not just for the click: until it
+    // does, the text is also sitting in the textarea it was typed into, so
+    // `getByText` resolves against *that* and the next iteration opens the
+    // second dialog on top of the first one. "Wait for the effect, not the
+    // click", exactly as CLAUDE.md says.
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByText(what)).toBeVisible();
+  };
+  await addEntry("Hauled out for the season; hull surveyed and signed off.", "2026-03-02");
+  await addEntry("Switched the yard's booking feed to the new endpoint.", "2026-03-09");
+  await shot(page, "10c-changelog");
+
   // The search palette, mid-query.
   await page.goto(`/orgs/${orgId}/tasks`);
   await page.getByRole("button", { name: "Search" }).click();
@@ -280,6 +302,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/bookmarks`);
   await shot(page, "17c-bookmarks-dark");
+
+  await page.goto(`/orgs/${orgId}/changelog`);
+  await shot(page, "17d-changelog-dark");
 
   // The task screen carries three native `type="date"` inputs (Due, Est.
   // start) — the one place a browser-drawn control (the calendar picker

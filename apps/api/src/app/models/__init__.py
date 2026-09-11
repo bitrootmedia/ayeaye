@@ -1,6 +1,7 @@
 # Import every model here so `import app.models` populates Base.metadata.
 # Alembic's env.py imports this module for autogenerate to see the tables.
 from app.models.bookmark import Bookmark
+from app.models.changelog import ChangelogEntry
 from app.models.checklist import TaskChecklist, TaskChecklistItem
 from app.models.conversation import (
     Attachment,
@@ -48,6 +49,7 @@ __all__ = [
     "Book",
     "BookMember",
     "Bookmark",
+    "ChangelogEntry",
     "Conversation",
     "Attachment",
     "Message",

@@ -307,9 +307,35 @@ ok "an empty one is refused, and says why" \
 ok "a read-only token can't capture one" \
   "$(tool "$READ" create_spark "$(args body=nope)" | text | grep -ci 'read-only')" "1"
 
+echo "== the changelog"
+# Shared, unlike a spark: every member of the organisation reads the same
+# log, so this is the one place here where Bob's own token is expected to
+# see what Alice recorded rather than proving it can't.
+CL=$(tool "$WRITE" record_change "$(args organisation_id=$OID 'description=BingAds version lift' happened_on=2026-03-02)" | text)
+ok "records, and reports the date"    "$(echo "$CL" | grep -c '2026-03-02: BingAds version lift')" "1"
+# The whole point of `happened_on`: Tuesday's change recorded on Thursday
+# must be filed under Tuesday, not under today.
+ok "…under the date it happened"      "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/changelog | j "d[0]['happened_on']")" "2026-03-02"
+ok "an omitted date is your today"    "$(tool "$WRITE" record_change "$(args organisation_id=$OID 'description=Recorded with no date')" | text | grep -c "$(date -u +%F)")" "1"
+ok "reading it back"                  "$(tool "$WRITE" changelog "$(args organisation_id=$OID)" | text | grep -c 'BingAds version lift')" "1"
+ok "…says who recorded it"            "$(tool "$WRITE" changelog "$(args organisation_id=$OID)" | text | grep 'BingAds version lift' | grep -c "by $ALICE")" "1"
+ok "a query narrows it"               "$(tool "$WRITE" changelog "$(args organisation_id=$OID query=BingAds)" | text | grep -c 'Recorded with no date')" "0"
+ok "a colleague reads the same log"   "$(tool "$ADMTOK" changelog "$(args organisation_id=$OID)" | text | grep -c 'BingAds version lift')" "1"
+ok "a stranger's org is 404-shaped"   "$(tool "$BOBTOK" changelog "$(args organisation_id=$OID)" | text | grep -ci 'no such organisation')" "1"
+ok "a bad date is refused, and says why" \
+  "$(tool "$WRITE" record_change "$(args organisation_id=$OID description=When happened_on=the-3rd)" | text | grep -ci 'YYYY-MM-DD')" "1"
+ok "an empty description is refused"  "$(tool "$WRITE" record_change "$(args organisation_id=$OID 'description=   ')" | text | grep -ci 'needs a description')" "1"
+ok "a read-only token can read it"    "$(tool "$MEMTOK" changelog "$(args organisation_id=$OID)" | text | grep -c 'BingAds version lift')" "1"
+ok "…but cannot record one"           "$(tool "$MEMTOK" record_change "$(args organisation_id=$OID description=nope)" | text | grep -ci 'read-only')" "1"
+# The kind has to reach `search` too, or the assistant can find a task by
+# name and not the log entry about it.
+ok "search finds a changelog entry"   "$(tool "$WRITE" search "$(args organisation_id=$OID query=BingAds)" | text | grep -c 'changelog: BingAds version lift')" "1"
+
 echo "== the report tools"
-ok "activity reports the week"  "$(tool "$WRITE" activity "{\"organisation_id\":\"$OID\",\"days\":7}" | text | grep -ci "touched in the last 7 day")" "1"
-ok "search finds by word"       "$(tool "$WRITE" search "{\"organisation_id\":\"$OID\",\"query\":\"anode\"}" | text | grep -c "Replace the anode")" "1"
+ACTIVITY_ARGS=$(python3 -c "import json;print(json.dumps({'organisation_id':'$OID','days':7}))")
+SEARCH_ARGS=$(args organisation_id=$OID query=anode)
+ok "activity reports the week"  "$(tool "$WRITE" activity "$ACTIVITY_ARGS" | text | grep -ci "touched in the last 7 day")" "1"
+ok "search finds by word"       "$(tool "$WRITE" search "$SEARCH_ARGS" | text | grep -c "Replace the anode")" "1"
 
 echo "== revoking is immediate"
 TOKID=$(curl -s -b /tmp/ma.jar $B/api/me/tokens | j "[t['id'] for t in d if t['name']=='Read only'][0]")

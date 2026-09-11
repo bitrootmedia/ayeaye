@@ -133,6 +133,44 @@ test.describe("search", () => {
     await them.context().close();
   });
 
+  test("an article hit opens the article, not a task URL", async ({ page }) => {
+    await signUp(page, uniqueEmail("srch-kb"));
+    const orgId = await createOrg(page, `Manual ${Date.now()}`);
+
+    // Set up through the API rather than by clicking through the knowledge
+    // base: this test is about where a *search hit* goes, and the KB's own
+    // creation flow is somebody else's test. `page.request` shares this
+    // context's cookie jar, so it is the same signed-in person either way.
+    const api = async (url: string, method: "post" | "patch", data: object) => {
+      const res = await page.request.fetch(`/api${url}`, { method, data });
+      expect(res.ok()).toBe(true);
+      return res.json();
+    };
+    const book = await api(`/organisations/${orgId}/kb/books`, "post", { name: "Runbooks" });
+    const article = await api(`/organisations/${orgId}/kb/books/${book.id}/articles`, "post", {
+      title: "Winterising the engine",
+    });
+    // Born private; published so it is an ordinary hit rather than one only
+    // its owner can see.
+    await api(`/organisations/${orgId}/kb/articles/${article.id}/private`, "patch", {
+      is_private: false,
+    });
+
+    await page.goto(`/orgs/${orgId}/tasks`);
+    await openSearch(page);
+    await searchBox(page).pressSequentially("Winteris");
+    const hit = page.getByRole("button", { name: /Winterising the engine/ });
+    await expect(hit).toBeVisible();
+    await hit.click();
+
+    // The regression this pins: `articles_stmt` was added to `search()` when
+    // the knowledge base shipped and the palette's own routing never heard
+    // about it, so every article hit went to `/tasks/<an article id>` and
+    // landed on "task not found".
+    await page.waitForURL(new RegExp(`/kb/articles/${article.id}$`));
+    await expect(page.getByRole("heading", { name: "Winterising the engine" })).toBeVisible();
+  });
+
   test("a typo still finds it", async ({ page }) => {
     await signUp(page, uniqueEmail("srch"));
     const orgId = await createOrg(page, `Fuzzy ${Date.now()}`);

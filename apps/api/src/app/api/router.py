@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from app.api.routers import (
     bookmarks,
     calendar,
+    changelog,
     conversations,
     dashboard,
     exports,
@@ -96,6 +97,12 @@ api_router.include_router(personal_notes.router)
 # reads every row rather than because only one does. Pinning is the one
 # owner-only capability in the product outside deleting an organisation.
 api_router.include_router(bookmarks.router)
+
+# The changelog: a dated log of what happened, written by anybody in the
+# organisation and read by everybody. Membership is the whole visibility
+# rule, like the shelf above — but paged, because unlike a curated shelf a
+# log only ever gets longer.
+api_router.include_router(changelog.router)
 
 # Comment threads on tasks and projects. There is no separate comment system —
 # these ARE the conversations, which is what makes attachments, voice notes and

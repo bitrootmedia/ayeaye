@@ -185,6 +185,9 @@ ayeayecaptain/
     │       │                #   bookmark (the org's shared shelf of links —
     │       │                #     ordered, one description each, and
     │       │                #     pinned by an owner alone),
+    │       │                #   changelog (the org's dated record of what
+    │       │                #     happened — two dates, one description,
+    │       │                #     and who wrote it down),
     │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
     │       │                #   export (a ZIP build, requester-only, autodeletes),
     │       │                #   reminder,
@@ -211,6 +214,7 @@ ayeayecaptain/
     │       │                #   mentions.py      — @naming somebody, and who can be
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   bookmarks.py — shared, ordered, owner-pinned
+    │       │                #   changelog.py — shared, dated, paged
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
     │       │                #   reminders.py presence.py working_hours.py sparks.py
@@ -1637,6 +1641,19 @@ what the web app's own bell polls. A count that disagreed with the bell
 would be a second, quieter answer to the same question. `my_reminders` is
 the existing precedent for a tool with no organisation id.
 
+**`changelog` and `record_change` are the organisation's dated log.** The
+read tool takes an optional `query` (the same matcher ⌘K uses) and states
+what its page is a page *of* when there is more — the text equivalent of
+`X-Total-Count`, and the same "a caller that believes it has everything and
+doesn't" failure the REST list avoids. `record_change`'s docstring leans on
+`happened_on` hard on purpose: an assistant told on Thursday that something
+happened on Tuesday will otherwise file it under Thursday, which is the one
+mistake that column exists to prevent. Both pre-validate emptiness and length
+into `Denied` rather than letting `clean_description`'s 422 become a crash
+with its text withheld, exactly as `create_spark` documents. **No edit or
+delete tool**, deliberately — correcting a log is a person's judgement about
+their own record, and nothing asked for it.
+
 **`create_spark` takes no organisation at all**, and unlike `stop_timer` or
 `update_reminder` — which merely don't need one to find what they act on —
 it is because the record itself has none, ever. See the Sparks section.
@@ -1998,7 +2015,7 @@ unobtrusive**, the exact placement asked for, because it's a reference
 screen you reach for on purpose, the identical reasoning the People roster's
 own move off the dashboard already established for this codebase.
 
-**One page, not a multi-page docs site.** Eighteen sections, a sticky anchor
+**One page, not a multi-page docs site.** Nineteen sections, a sticky anchor
 table of contents down the left on `lg` and up (`<nav>` of plain `<a
 href="#id">` links, no scroll-spy JS — a reader either arrives from the TOC
 or scrolls, and both already work with nothing fancier than
@@ -3558,6 +3575,131 @@ either is one more `*_stmt` in `services/search.py` or one more tool in
 `app/mcp/server.py` respectively; both would be additive, and neither is
 pretended at anywhere in the code.
 
+## The changelog
+
+Read `services/changelog.py`. The organisation's dated record of what
+happened — "BingAds version lift", "switched the feed to the new endpoint".
+Three fields and no more: the date it happened, a description, and who wrote
+it down. `/orgs/{id}/changelog`, its own rail item under Bookmarks, because
+both are reference material you go to on purpose.
+
+**Two dates, and conflating them would be the whole bug.** `happened_on` is
+what is being recorded; `created_at` is when somebody typed it in. Tuesday's
+version lift routinely gets written down on Thursday, and a log that can only
+say Thursday is a log of when people remembered rather than of what happened.
+The list groups by `happened_on` and states each date once; a redated entry
+therefore belongs under a different heading, which is why the frontend
+reloads after an edit that moved the date rather than patching the row where
+it sits.
+
+**It is the bookmark shelf's first two bars, and deliberately not its
+third.** Reading and adding is ordinary membership — `CurrentOrg` is the
+whole check and `list_stmt` carries no access expression at all, because a
+log only an admin may write to is a log that stays empty, and an incomplete
+history is worse than none since people believe it. Editing and deleting is
+whoever recorded it, or an org admin (403, never 404 — every member can see
+the entry). There is **no pinning and no reordering**: a shelf of links has
+no inherent order so one is worth storing, but a log's order is its dates,
+and dragging an entry above one that happened after it would let the list lie
+about the sequence — which is the one thing a changelog is for. So there is
+no `position` column here, unlike `bookmarks`.
+
+**Paged, also unlike bookmarks, and that is the difference between a shelf
+and a log.** A shelf is curated and stops growing; a changelog is append-only
+by nature. `limit`/`offset` with `X-Total-Count`, and **no default limit** —
+the same call `/tasks` makes, and a silent cap on a *history* is the worst
+place for one.
+
+**`happened_on` defaults to the caller's own today, never the server's** —
+`reminders.today_for` reused rather than re-derived, because a date has no
+timezone and anyone west of London recording something in the evening would
+otherwise file it under tomorrow. `lib/format.ts`'s `isoDate` is the
+browser's half of the same rule, promoted out of `views/Calendar.tsx` when
+this screen became its second real caller: `toISOString()` converts to UTC
+first and slides the day near midnight.
+
+**The description is plain text and stays plain text.** Nothing renders it
+with `dangerouslySetInnerHTML`, so unlike a task description there is nothing
+to sanitise — the same safe-by-construction position Sparks holds. Storing
+HTML here would create a trust boundary this feature hasn't got. It is
+**refused rather than truncated** when too long, the same call
+`bookmarks.normalise_url` makes for a long URL: an entry cut in half says
+something other than what was written.
+
+**`created_by_user_id` is `SET NULL`**, so like bookmarks this needed no
+branch in `organisations._reassign_everything_owned_by` — an entry has no
+owner, only somebody who happened to record it. The `User` join in
+`list_stmt` is therefore an **outer** join and has to stay one: an inner join
+would silently drop every orphaned row, quietly editing the organisation's
+own history, which is the one thing this table exists not to do.
+
+Two things on the frontend are worth knowing before touching it:
+
+- **The add dialog is keyed by an open counter, not reseeded by an effect.**
+  `openSeq` bumps on every open so a fresh instance mounts, which is what
+  makes the date today *every* time you open it without anything ever
+  writing over a field somebody is already typing into — the same "a
+  different thing is a different component" idiom `Keyed` in `main.tsx`
+  uses for detail routes.
+- **The empty state must not quote the dialog's own placeholder.** It did at
+  first — both said "BingAds version lift" — and every assertion on that
+  phrase matched two elements. The placeholder is the more useful home for
+  the example, since it is in front of you while you type. Same family as
+  the "Knowledge base" nav-item collision already recorded below.
+
+**Searchable from ⌘K, and the one `*_stmt` in `services/search.py` with no
+access expression in it.** That is right rather than an omission: a changelog
+entry has no per-resource visibility to resolve, so membership — already
+established by `ctx` — is the whole check, and inventing a `level >
+NO_ACCESS` here would be a second answer to a question the feature doesn't
+ask. `changelog_stmt` maps an entry onto the `Hit` shape the palette already
+renders: **the title is the description's first line** (`split_part`, because
+an entry has no title of its own — the description *is* the content) and
+**the date is the context**, where a task's project name goes. No subtitle:
+for a one-line entry it would repeat the title word for word. The score is
+computed over the whole description, so a match three lines down still
+surfaces the entry. Migration 0047 adds the `gin_trgm_ops` index that keeps
+it an index lookup rather than a scan over what is likely to be the longest
+table a self-hoster has after a few years.
+
+**A hit lands on the log carrying the query that matched it**
+(`/orgs/{id}/changelog?q=…`), because a changelog entry has no screen of its
+own — it is a row in a list. That only works because the list filters with
+the **same** `search_service.matches`, not a second ILIKE written in
+`services/changelog.py`: two different predicates would mean a link that
+arrives at a log not containing the row it promised. The filter is
+server-side, unlike the Projects list's own name filter, for the ordinary
+reason — this list is a page, so filtering in the browser would only narrow
+the page it happens to be holding. `X-Total-Count` goes through the same
+predicate, or "Showing 5 of 312" would count the whole log while showing a
+filtered page of it. `_matches` became public `matches` for this: the same
+promotion `snippet` and `recurrence.advance` already went through when a
+second real caller turned up.
+
+**Wiring the palette for it surfaced a bug that had been there since the
+knowledge base shipped.** `search-palette.tsx`'s `go()` routes `project` to
+the projects screen and **everything else to a task URL** — so when
+`articles_stmt` was added to `search()`, every article hit navigated to
+`/orgs/{id}/tasks/<an article id>` and landed on "task not found".
+`SearchHit["kind"]` was still `"task" | "project" | "note"` too, so
+TypeScript never noticed. Both fixed, and `search.spec.ts`'s "an article hit
+opens the article, not a task URL" pins it. The lesson for the next kind:
+**`go()` has to name every kind `search()` can return**, because its fallback
+is a task URL rather than an error.
+
+**Two MCP tools, `changelog` (read) and `record_change` (write).** The read
+one takes an optional `query` — the same matcher again — and says what its
+page is a page *of* when there is more, the text equivalent of
+`X-Total-Count`. `record_change`'s own docstring leans on `happened_on`
+hard, because an assistant told "we lifted the BingAds version on Tuesday"
+on a Thursday will otherwise file it under Thursday, which is precisely the
+mistake the column exists to prevent. Both refuse through `Denied` rather
+than letting a service's `HTTPException` become a crash with its text
+withheld — the length and emptiness checks are pre-validated here for
+`create_spark`'s own documented reason. There is deliberately **no edit or
+delete tool**: correcting a log is a person's judgement about their own
+record, and the two tools that exist cover what was actually asked for.
+
 ## The knowledge base
 
 Read `services/books.py` and `services/articles.py`. Book → article, with
@@ -3804,6 +3946,20 @@ returned ids: the engine ranks, the database authorises.
 Adding a searchable kind is one more `*_stmt` in that module returning the same
 shape. Messages and comments (Phase 6) inherit visibility from the task or
 project they hang off, so it's the same `level > NO_ACCESS` test.
+
+**`changelog_stmt` is the exception that proves the rule: no access
+expression at all.** A changelog entry has no per-resource visibility — the
+organisation's log is read by every member of it — so membership, already
+established by `ctx`, is the whole check. Every other `*_stmt` ANDs a level
+because its resource genuinely has levels.
+
+**And a kind is two places, not one.** `search-palette.tsx`'s `go()` falls
+back to a task URL for any kind it doesn't name, so a new `*_stmt` without a
+matching branch there sends its hits to `/tasks/<some other id>` and a "task
+not found" screen. That is exactly what article hits did between the
+knowledge base shipping and the changelog being added — see the changelog
+section. `SearchHit["kind"]` has to grow too, or TypeScript won't catch it
+either.
 
 **The new-task dialog's duplicate check is `tasks_stmt` called directly, not
 `search()`.** `GET /tasks/similar` reuses the exact same access-scoped
@@ -4256,6 +4412,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-notes.sh                  # private notes: nobody else, ever
 ./scripts/e2e-notepad.sh                # the notepad: same rule, a list this time, org-scoped
 ./scripts/e2e-bookmarks.sh              # the shared shelf: three different bars, and only an owner pins
+./scripts/e2e-changelog.sh              # the dated log, and ⌘K agreeing with the screen it links to
 ./scripts/e2e-reminders.sh              # the sweep, run twice, sending once
 ./scripts/e2e-dashboard.sh              # passwords, out of office, announcements, digest hour
 ./scripts/e2e-mcp.sh                    # access tokens, and MCP acting as a person

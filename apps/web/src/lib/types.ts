@@ -643,7 +643,10 @@ export const canActOn = (actor: Role, subject: Role) => ROLE_RANK[actor] >= ROLE
 
 /** One search result. `kind` decides the icon and the link. */
 export type SearchHit = {
-  kind: "task" | "project" | "note";
+  /** Every kind `services/search.py::search` can return. "article" was
+   *  missing here from the day the knowledge base shipped, which is how its
+   *  hits ended up being routed to a task URL — see `search-palette.tsx`. */
+  kind: "task" | "project" | "note" | "article" | "changelog";
   id: string;
   title: string;
   /** A window around the match, so a hit deep in a description shows why. */
@@ -881,6 +884,29 @@ export type ArticleRevision = {
   /** Whether this is the mutable "current" revision — the one an autosave
    *  can still land on. Every older row is history, read-only. */
   is_current: boolean;
+};
+
+/** One line of the organisation's changelog: what happened, the date it
+ *  happened, and who wrote it down.
+ *
+ *  `happened_on` is the date being *recorded* — `created_at` is when somebody
+ *  typed it in, and the two are routinely different (Tuesday's version lift
+ *  gets written down on Thursday). `added_by` is NULL once that person has
+ *  been removed from the installation: who recorded it is a fact about the
+ *  past rather than a claim on the row, and the entry is still the
+ *  organisation's own history. */
+export type ChangelogEntry = {
+  id: string;
+  /** `YYYY-MM-DD`. A plain calendar day with no time and no zone. */
+  happened_on: string;
+  description: string;
+  added_by: Person | null;
+  created_at: string;
+  updated_at: string;
+  /** Whoever recorded it, or an org admin — resolved server-side so the UI
+   *  can omit the control rather than show one that 403s, the same reasoning
+   *  `can_close` on a task follows. */
+  can_edit: boolean;
 };
 
 /** One link on the organisation's shared shelf.

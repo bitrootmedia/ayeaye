@@ -65,7 +65,17 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.models import Article, ArticleRevision, Book, Project, Tag, Task, TaskNote, TaskTag
+from app.models import (
+    Article,
+    ArticleRevision,
+    Book,
+    ChangelogEntry,
+    Project,
+    Tag,
+    Task,
+    TaskNote,
+    TaskTag,
+)
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -83,7 +93,7 @@ DEFAULT_LIMIT = 6
 
 @dataclass(frozen=True)
 class Hit:
-    kind: str  # "task" | "project" | "note" | "article"
+    kind: str  # "task" | "project" | "note" | "article" | "changelog"
     id: str
     title: str
     subtitle: str | None
@@ -116,7 +126,7 @@ def _score(column, q: str) -> ColumnElement[float]:
     return func.greatest(*signals).cast(Float)
 
 
-def _matches(column, q: str) -> ColumnElement[bool]:
+def matches(column, q: str) -> ColumnElement[bool]:
     """The predicate. **Both halves must be index-servable.**
 
     `ILIKE '%…%'` is, through `gin_trgm_ops`. The fuzzy half only is when it
@@ -189,7 +199,7 @@ def tasks_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
         select(1)
         .select_from(TaskTag)
         .join(Tag, Tag.id == TaskTag.tag_id)
-        .where(TaskTag.task_id == Task.id, _matches(Tag.name, q))
+        .where(TaskTag.task_id == Task.id, matches(Tag.name, q))
         .correlate(Task)
     )
     score = func.greatest(
@@ -217,7 +227,7 @@ def tasks_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
         .where(
             Task.organisation_id == ctx.organisation.id,
             level > access.NO_ACCESS,
-            or_(_matches(Task.title, q), _matches(Task.description_text, q), tag_hit),
+            or_(matches(Task.title, q), matches(Task.description_text, q), tag_hit),
         )
         # Open work first at equal relevance — that is what people are usually
         # looking for — then score, then newest.
@@ -246,7 +256,7 @@ def projects_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) ->
         .where(
             Project.organisation_id == ctx.organisation.id,
             level > access.NO_ACCESS,
-            or_(_matches(Project.name, q), _matches(Project.description, q)),
+            or_(matches(Project.name, q), matches(Project.description, q)),
         )
         .order_by(Project.archived_at.isnot(None), score.desc(), Project.id.desc())
         .limit(limit)
@@ -281,7 +291,7 @@ def notes_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
             TaskNote.user_id == user_id,
             Task.organisation_id == ctx.organisation.id,
             level > access.NO_ACCESS,
-            _matches(TaskNote.body, q),
+            matches(TaskNote.body, q),
         )
         .order_by(score.desc(), TaskNote.id.desc())
         .limit(limit)
@@ -331,9 +341,53 @@ def articles_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) ->
         .where(
             Book.organisation_id == ctx.organisation.id,
             level > access.NO_ACCESS,
-            or_(_matches(revision.title, q), _matches(revision.body_text, q)),
+            or_(matches(revision.title, q), matches(revision.body_text, q)),
         )
         .order_by(Book.archived_at.isnot(None), score.desc(), Article.id.desc())
+        .limit(limit)
+    )
+
+
+def changelog_stmt(*, ctx: OrgContext, q: str, limit: int) -> Select:
+    """Matching changelog entries.
+
+    **The one statement here with no access expression in it, and that is
+    right rather than an omission.** A changelog entry has no per-resource
+    visibility to resolve — the organisation's log is read by every member of
+    it, full stop (see `services/changelog.py`) — so membership, already
+    established by `ctx`, is the whole check. Every other `*_stmt` in this
+    module ANDs a `level > NO_ACCESS` because its resource genuinely has
+    levels; inventing one here would be a second answer to a question the
+    feature doesn't ask.
+
+    **The title is the entry's first line, and the date is the context.** An
+    entry has no title of its own — the description *is* the content — so the
+    first line stands in for one and `happened_on` goes where a task's
+    project name goes, which is the thing somebody scanning results actually
+    wants beside the words. The score is computed over the whole description,
+    so a match three lines down still surfaces the entry.
+    """
+    score = _score(ChangelogEntry.description, q)
+    return (
+        select(
+            literal("changelog").label("kind"),
+            ChangelogEntry.id.label("id"),
+            func.split_part(ChangelogEntry.description, "\n", 1).label("title"),
+            # No subtitle: for a one-line entry it would repeat the title
+            # word for word, and the palette already shows the date.
+            literal(None).label("subtitle"),
+            func.to_char(ChangelogEntry.happened_on, "YYYY-MM-DD").label("context"),
+            score.label("score"),
+            # Nothing here is ever archived or closed — a log entry is a
+            # fact, and facts don't go inactive.
+            literal(False).label("inactive"),
+        )
+        .select_from(ChangelogEntry)
+        .where(
+            ChangelogEntry.organisation_id == ctx.organisation.id,
+            matches(ChangelogEntry.description, q),
+        )
+        .order_by(score.desc(), ChangelogEntry.happened_on.desc(), ChangelogEntry.id.desc())
         .limit(limit)
     )
 
@@ -372,6 +426,7 @@ async def search(
         projects_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         notes_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         articles_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
+        changelog_stmt(ctx=ctx, q=q, limit=limit),
     ):
         for row in (await db.execute(stmt)).all():
             hits.append(
@@ -419,4 +474,6 @@ __all__ = [
     "projects_stmt",
     "notes_stmt",
     "articles_stmt",
+    "changelog_stmt",
+    "matches",
 ]

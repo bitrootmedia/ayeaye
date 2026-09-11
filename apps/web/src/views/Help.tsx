@@ -12,6 +12,7 @@ import {
   KeyRoundIcon,
   NotebookIcon,
   PackageIcon,
+  ScrollTextIcon,
   SearchIcon,
   SendIcon,
   ServerCogIcon,
@@ -41,6 +42,7 @@ const SECTIONS: Section[] = [
   { id: "calendar", title: "Calendar & reminders", icon: CalendarIcon },
   { id: "notepad", title: "Notepad", icon: NotebookIcon },
   { id: "bookmarks", title: "Bookmarks", icon: BookmarkIcon },
+  { id: "changelog", title: "Changelog", icon: ScrollTextIcon },
   { id: "notifications", title: "Notifications", icon: BellIcon },
   { id: "telegram", title: "Telegram", icon: SendIcon },
   { id: "security", title: "Two-factor authentication", icon: ShieldCheckIcon },
@@ -280,6 +282,28 @@ export default function Help() {
               thing here an admin can&rsquo;t do. If you don&rsquo;t see a pin button, that
               isn&rsquo;t a fault: you&rsquo;ll still see which links are pinned, under
               their own heading.
+            </p>
+          </Section>
+
+          <Section id="changelog" title="Changelog">
+            <p>
+              A dated record of what happened, kept by the whole organisation &mdash; a
+              version lift, a config change, a supplier switched. Each entry is a date, a
+              short description, and whoever wrote it down, newest first.
+            </p>
+            <p>
+              <strong>The date is the date it happened</strong>, not the date you typed it
+              in, so Tuesday&rsquo;s change can be recorded on Thursday and still land in
+              the right place. Anyone in the organisation can add an entry; correcting or
+              removing one is whoever recorded it, or an organisation admin. A corrected
+              entry is marked as edited, so the log never quietly rewrites itself.
+            </p>
+            <p>
+              Entries turn up in search (&#8984;K) alongside tasks and projects, and
+              opening one lands you on the log already narrowed to what you searched for.
+              There&rsquo;s a filter box on the screen itself too, and what it&rsquo;s
+              showing stays in the address bar &mdash; so a narrowed log is something you
+              can send a colleague.
             </p>
           </Section>
 

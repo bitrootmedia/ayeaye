@@ -27,6 +27,7 @@ import Help from "@/views/Help";
 import Landing, { Footer, Header } from "@/views/Landing";
 import ArticleDetail from "@/views/ArticleDetail";
 import Bookmarks from "@/views/Bookmarks";
+import Changelog from "@/views/Changelog";
 import BookDetail from "@/views/BookDetail";
 import KnowledgeBase from "@/views/KnowledgeBase";
 import OrganisationDetail from "@/views/OrganisationDetail";
@@ -330,6 +331,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="orgs/:orgId/calendar" element={<CalendarView />} />
                 <Route path="orgs/:orgId/notes" element={<Notepad />} />
                 <Route path="orgs/:orgId/bookmarks" element={<Bookmarks />} />
+                <Route path="orgs/:orgId/changelog" element={<Changelog />} />
                 <Route path="orgs/:orgId/time" element={<Time />} />
                 <Route path="notifications" element={<Notifications />} />
                 {/* Personal and cross-organisation, like the inbox above it. */}

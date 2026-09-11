@@ -60,6 +60,7 @@ from pydantic import AnyHttpUrl, Field
 from app.core.config import settings
 from app.db import SessionLocal
 from app.models import Book, User
+from app.models.changelog import MAX_DESCRIPTION_LENGTH as MAX_CHANGELOG_DESCRIPTION
 from app.models.organisation import STATUS_ACTIVE as MEMBER_STATUS_ACTIVE
 from app.models.planner import BUCKETS as PLANNER_BUCKETS
 from app.models.task import PRIORITIES, STATUSES
@@ -67,6 +68,7 @@ from app.models.token import SCOPE_READ, SCOPE_WRITE
 from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
+from app.services import changelog as changelog_service
 from app.services import notifications as notifications_service
 from app.services import organisations as organisations_service
 from app.services import planner as planner_service
@@ -1155,6 +1157,96 @@ async def update_reminder(
         updated = await reminders_service.update_one(db, row, user, fields=fields)
     what = updated.title or updated.note or updated.id
     return f"Updated reminder: {what} for {updated.remind_on}"
+
+
+@mcp.tool()
+async def changelog(
+    ctx: Context,
+    organisation_id: str,
+    query: Annotated[
+        str | None,
+        Field(description="Optional text to narrow by. Typo-tolerant, same matcher as `search`."),
+    ] = None,
+    limit: Annotated[int, Field(gt=0, le=200, description="How many entries.")] = 20,
+) -> str:
+    """The organisation's changelog: a dated record of what happened — a
+    version lift, a config change, a supplier switched. Newest first, by the
+    date the thing happened rather than the date somebody typed it in.
+
+    Read by every member of the organisation; there is no per-entry
+    visibility to resolve. Use `record_change` to add one.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        rows, total = await changelog_service.list_page(
+            db, org, limit=limit, offset=0, q=query or ""
+        )
+    if not rows:
+        return "Nothing in the changelog." if not query else f"Nothing matches {query!r}."
+    lines = [
+        # The date first, because that is what a log is read by. One line per
+        # entry, description collapsed — same density as `_one_line` for a
+        # task, and for the same reason.
+        f"[{entry.id}] {entry.happened_on} | {' '.join(entry.description.split())[:160]}"
+        + (f" | by {author.display_name or author.email}" if author else "")
+        for entry, author in rows
+    ]
+    # Says what this is a page *of*, the same honesty the REST list keeps
+    # with `X-Total-Count` — a caller that believes it has everything and
+    # doesn't is the failure this avoids.
+    if total > len(rows):
+        lines.append(f"({len(rows)} of {total} — ask for a larger limit, or narrow with a query.)")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def record_change(
+    ctx: Context,
+    organisation_id: str,
+    description: Annotated[str, Field(description="What happened. Plain text, not markdown.")],
+    happened_on: Annotated[
+        str | None,
+        Field(description="The date it happened, YYYY-MM-DD. Defaults to your today."),
+    ] = None,
+) -> str:
+    """Add an entry to the organisation's changelog. Any member may.
+
+    **`happened_on` is the date the thing happened, not today by
+    necessity** — Tuesday's version lift is routinely recorded on Thursday,
+    and filing it under Thursday is the mistake this field exists to avoid.
+    If the person says when, pass it; if they don't, leave it out and it
+    takes your own today rather than the server's.
+
+    Plain text, deliberately: unlike `create_task`'s description this is
+    never rendered as HTML, so markdown syntax would show up literally.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    when: date | None = None
+    if happened_on:
+        try:
+            when = date.fromisoformat(happened_on)
+        except ValueError as exc:
+            # Anticipated, so it says so — an unhandled ValueError would
+            # reach the client as the bare "Error executing tool" string.
+            raise Denied("The date must be YYYY-MM-DD.") from exc
+    # Pre-validated here rather than left to the service, for `create_spark`'s
+    # own reason: `clean_description` raises a 422, which the SDK treats as a
+    # crash and withholds the text of. Anticipated, so it says so.
+    if not description.strip():
+        raise Denied("A changelog entry needs a description.")
+    if len(description.strip()) > MAX_CHANGELOG_DESCRIPTION:
+        raise Denied(
+            f"That description is too long (limit {MAX_CHANGELOG_DESCRIPTION} characters). "
+            "It is refused rather than cut, because half an entry says something else."
+        )
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        entry = await changelog_service.create(
+            db, org, user, description=description, happened_on=when
+        )
+    return f"Recorded [{entry.id}] {entry.happened_on}: {' '.join(entry.description.split())[:160]}"
 
 
 @mcp.tool()
