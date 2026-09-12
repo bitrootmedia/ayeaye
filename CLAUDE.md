@@ -195,6 +195,8 @@ ayeayecaptain/
     │       │                #   changelog (the org's dated record of what
     │       │                #     happened — two dates, one description,
     │       │                #     and who wrote it down),
+    │       │                #   idempotency (a claimed key, so a retried write
+    │       │                #     repeats the answer and not the work),
     │       │                #   mfa (totp devices, backup codes — hand-rolled, see below),
     │       │                #   export (a ZIP build, requester-only, autodeletes),
     │       │                #   instance_admin (who runs the installation —
@@ -224,6 +226,7 @@ ayeayecaptain/
     │       │                #   tags.py checklists.py sheets.py notes.py personal_notes.py
     │       │                #   bookmarks.py — shared, ordered, owner-pinned
     │       │                #   changelog.py — shared, dated, paged
+    │       │                #   idempotency.py — claiming a key before the work
     │       │                #   instance.py — the operator view. CLI *and* panel
     │       │                #   mfa.py — hand-rolled TOTP, not SuperTokens' paid recipe
     │       │                #   exports.py — yours only, not even an admin's
@@ -1717,6 +1720,164 @@ is better served by the words in front of them than by an assistant picking
 a version on their behalf. If they genuinely want it back, the text is right
 there to pass to `update_task`.
 
+**`task` reads the comment thread back, and that is the whole point of it.**
+Reported from a real day of agent-assisted work: an assistant resuming a
+task got its title, status and a list of event *kinds* — and a task read
+that way looks like a task nobody has started, so the honest next move is to
+begin again rather than continue. The state was never in the columns. It was
+in the thread: the decisions taken, the corrections, what is waiting on a
+person. `task` now also reports dependencies (both directions), checklists
+with each item's own tick and id, and files, so one call answers "where did
+this get to" instead of four. Four things about the shape:
+
+- **The thread is capped at `MAX_THREAD` (40, newest kept) and says so when
+  it truncates** — "the last 40 of 112". A silent cap on a recovery surface
+  is the failure `/tasks`'s own no-default-limit rule exists to avoid, just
+  spent on a model's context rather than a person's screen.
+- **Reading must not create a thread.** `conversations.for_task` is called
+  with `create=False` (its default), so `thread.conversation` is None until
+  somebody actually comments, and both `list_messages` and
+  `attachments.for_task` already take that. A read that writes a row is a
+  read that makes `GET`-shaped tools unsafe to retry.
+- **A removed comment is left out, not shown as a tombstone** — `remove()`
+  has already cleared the body, so there is nothing of the person's own
+  words left to read back. The same call `conversations.for_tasks` makes for
+  the data export.
+- **`_edge_line` renders an invisible dependency as "a task you can't
+  see".** Task access has six routes in, so the far end of an edge can be
+  perfectly invisible to somebody who can see this end — `list_dependencies`
+  already returns `task=None` for that case, and naming it here would leak
+  exactly what `effective_task_level` refuses to.
+
+**Dependencies and checklists were built and then not exposed, which is a
+failure mode worth naming.** `services/dependencies.py` and
+`services/checklists.py` both had full REST surfaces, e2e suites and access
+rules, and no MCP tool — so an assistant expressing "this is waiting on
+that" typed a UUID into English prose on the parent, and filed production
+steps as a markdown list inside a description where nothing could tick an
+item or be asked what was outstanding. `add_dependency`/`remove_dependency`
+and `add_checklist`/`add_checklist_item`/`check_item` are ordinary tools over
+those services, with no rule restated. Three decisions in them:
+
+- **Both dependency tools name the two tasks, never the link's own id.**
+  `remove_dependency` resolves the edge through `list_dependencies` rather
+  than asking for a `dependency_id` — the two task ids are what the caller
+  already has, and a third kind of id to carry around is friction for
+  nothing. Still no `select()` in this module.
+- **`add_checklist` takes its items with it.** Filing seven steps should be
+  one call, not eight; a blank line in a pasted list is skipped rather than
+  422ing and losing every item after it.
+- **`check_item` finds the item across every checklist on the task**, so the
+  id `task` printed beside it is the only one needed. `for_task` eager-loads
+  items, so the walk touches no lazy relationship — see
+  `checklists.get_checklist_or_404`'s own docstring for what happens when
+  one does.
+
+**The `Denied` lesson had a second half, and this is it.** `_refusal` turns
+a service's `HTTPException` into a `Denied`, because an `HTTPException`
+escaping a tool is an *unhandled* exception as far as the SDK is concerned
+and its text is withheld on exactly the same grounds. `tag_task`,
+`untag_task` and `attach_file` were calling `tctx.require` bare, so
+"you have read-only access to this task" — the one sentence saying what to
+do — was being discarded for anybody with a write-scope credential and
+read-only access to the task. Fixed alongside the new tools, since shipping
+better-behaved neighbours would have been the odd outcome.
+
+**A correction to the note above, found asserting it:** the string
+`Error executing tool <name>: ` prefixes *every* refusal, a well-behaved
+`ToolError` included — the SDK always writes it. What distinguishes a
+refusal that reached the client is whether the sentence *after* the colon
+survived, so a test for this asserts the whole string and never the absence
+of the prefix. (Which is also why the menu bar client's workaround keyed on
+that prefix: it was there either way.)
+
+
+**A write records what acted on the person's behalf — `messages.via`.**
+Reported as a workaround somebody had already invented: *"next time you
+comment prefix any comment with [Claude] so i know where it came from"*. A
+convention holds only as long as one model remembers it, and it was papering
+over a missing field. The name of the personal access token, or the OAuth
+client's own `client_name`, now rides out of `OAuthTokenVerifier` as RFC
+8693's **`act` claim** — the SDK's `AccessToken.claims` is the field for
+exactly this, so nothing had to be subclassed or smuggled through
+`client_id` — and `_Principal.via` carries it to the one tool that writes
+prose.
+
+- **Attribution, not authorship, and the distinction is load-bearing.**
+  `user_id` is still whose comment it is: a token *is* a person, which is
+  this whole surface's one rule. `via` only says how the words arrived. So
+  it is a second field beside the author, never a replacement for one, and
+  the thread renders "Alice · via Claude".
+- **Only comments carry it.** A status change is an action, already
+  attributed to the person and already authorised by them; a comment is the
+  one place an assistant produces prose that a colleague will read as
+  somebody's own words. Threading a principal down through every service
+  that writes a `task_events` row would be a large change for a much
+  smaller problem — if that's ever wanted, the shape is the same column on
+  `task_events` and a `via=` kwarg on `tasks_service.record`.
+- **NULL is "a person typed it", so there was nothing to backfill.** The
+  web app sends no `via` at all, which is what every row written before
+  this holds anyway.
+- **`task` reads it back**, so an assistant can tell its own earlier notes
+  from what a colleague actually wrote — the thing it could not do when
+  every comment looked like the token owner's.
+- **`e2e/tests/attribution.spec.ts` is the browser half, and it goes the
+  whole way round on purpose** — mint a real token through the account
+  screen, post over the real `/mcp` transport, then read the thread as a
+  person. A test that inserted the row directly would still pass with the
+  verifier's `act` claim removed, which is most of what could break. It
+  asserts the author's address *and* the badge (attribution is two facts,
+  not one) and posts a second comment from the browser as the control case,
+  without which "via Claude" appearing on everything would read as a pass.
+  The HTTP suite can prove the column and the API field; only this one can
+  prove a colleague actually sees which lines came through an assistant,
+  which is the whole feature.
+
+**Idempotency keys, so a retried write repeats the answer and not the
+work.** `create_task` and `comment` take an optional `idempotency_key`; read
+`services/idempotency.py` for the three rules. The one worth knowing before
+touching it: **a claim with no `entity_id` has two meanings, and only its
+age tells them apart.** In flight, or a process that died holding it — so a
+young one is reported as in progress (the caller waits and retries with the
+same key, which is what a retry already was) and an old one is taken over.
+Refusing forever would punish a caller for our crash; honouring immediately
+would let the genuine concurrent retry through, which is the duplicate this
+exists to prevent.
+
+- **A table, not a column per thing that can be created.** A key is a fact
+  about a request, not about the row the request made — a column would mean
+  a new nullable field and a new partial unique index for every future
+  write that wants one. Scoped to (person, key): two people using the same
+  obvious string must not collide.
+- **Claim commits before the work starts.** Recording the key afterwards
+  would mean two concurrent retries both do the work and only *then*
+  discover one was a duplicate, by which point the constraint can report
+  the fact and not prevent it.
+- **A failed call hands its key straight back.** Without `release()`,
+  somebody who sent a bad priority, read the refusal and fixed it would be
+  told their own failed call was still running — for five minutes, over a
+  request that had already finished. Scoped to `entity_id IS NULL` so it
+  can never delete a finished claim however it gets called.
+- **No key means no dedupe, and that is not an oversight.** Filing two
+  identical tasks on purpose has to stay possible, so the behaviour is
+  untouched unless a key is supplied. `scripts/e2e-mcp.sh` asserts both
+  directions.
+- **The same key on a different tool is refused**, rather than answered
+  with the first operation's id — a confidently wrong answer is worse than
+  an error.
+- **Three states, and two of them need the clock moved to test at all.**
+  The suite stages a bare claim and backdates it, the same "reach into the
+  stack rather than wait" move `e2e-reminders.sh` makes for its own sweep.
+
+**`create_task` and `comment` convert `HTTPException` too, and the second
+one had been lying.** `comment` flattened *every* failure into "No such
+task, or you can't comment on it" — so a 10,001-character comment was told
+its task did not exist. Both now go through `_refusal` for HTTP errors and
+keep a generic `Denied` only for the genuinely unrecognisable (a malformed
+UUID), so "that comment is too long" and "priority must be one of …" reach
+the caller who can act on them.
+
+
 Four things cost real time here, all of them non-obvious:
 
 - **There are two classes called `Context` in the SDK.** The tool decorator
@@ -2694,6 +2855,13 @@ UI's own gate is `people.length > 1` on write access, but the server does not
 trust that — the whole request 403s and nothing posts, rather than leaving a
 comment that claims a reassignment its own request body couldn't make good
 on.
+
+**A comment can say what posted it, without changing whose it is.**
+`messages.via` holds the name of the credential that wrote it — attribution,
+not authorship, since an assistant posts *as* the person whose token it
+holds. NULL for everything typed in the web app, which is nearly everything.
+See the MCP section for where the name comes from and why the column is
+here rather than on `task_events`.
 
 **The socket has two audiences, and conflating them was a bug.**
 

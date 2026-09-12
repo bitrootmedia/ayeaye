@@ -378,10 +378,20 @@ Both paths answer the same questions once connected:
 > *What did we get done in the last seven days?*
 > *Create a task for Ada to chase the yard about the travel lift, urgent.*
 
-**What it can do.** `organisations`, `list_tasks`, `search`, `task`,
-`activity`, `my_reminders`, `running_timer` with read access; `create_task`,
-`update_task`, `comment`, `tag_task`, `untag_task`, `start_timer` and
-`stop_timer` need write.
+**What it can do.** Read with `organisations`, `list_tasks`, `search`,
+`task` — which reads back a task's comments, checklists, files and what it
+is waiting on, not just its status — plus `activity`, `my_reminders` and
+`running_timer`. Write with `create_task`, `update_task`, `close_task`,
+`comment`, `tag_task`, `add_dependency`, `add_checklist`, `check_item`,
+`start_timer` and `stop_timer`, among others; any MCP client's own tool
+listing has the full set.
+
+**How it signs its work.** A comment posted through a token or a connected
+app is still yours — an assistant acts as you, which is the whole model —
+but the thread shows *via* whatever you named that credential, so nobody has
+to guess which lines you typed. And any write can carry an idempotency key,
+so an assistant that retries a call after a timeout repeats the answer
+rather than filing the task twice.
 
 **What it can't.** A token — or an OAuth grant — is a person, not an
 integration: every call resolves through the same permission rules as the web

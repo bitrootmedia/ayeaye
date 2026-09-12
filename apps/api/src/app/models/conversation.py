@@ -114,6 +114,20 @@ class Message(Base):
 
     body: Mapped[str] = mapped_column(Text, nullable=False)
 
+    # What acted on the author's behalf, if anything — the name of the
+    # personal access token or the OAuth client that posted this
+    # ("Claude"). NULL means a person typed it in the web app, which is the
+    # overwhelming majority of rows and why this is nullable rather than
+    # defaulted to something.
+    #
+    # **Attribution, not authorship.** `user_id` is still whose comment this
+    # is: an assistant posts as the person whose credential it holds, and
+    # that is the whole model here (see `app/mcp/server.py`'s one rule). This
+    # column only says how the words arrived, which is what stops a thread
+    # from reading as though somebody typed something they never wrote —
+    # the gap the `[Claude]` prefix convention existed to paper over.
+    via: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

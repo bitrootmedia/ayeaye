@@ -199,13 +199,21 @@ async def post(
     user: User,
     *,
     body: str,
+    via: str | None = None,
 ) -> Message:
+    """`via` names whatever acted on the author's behalf — a personal access
+    token or an OAuth client, by the name its owner gave it. It is
+    attribution, not authorship: `user_id` is still whose comment this is.
+    Defaults to None, which is what the web app sends and what every row
+    written before this existed holds."""
     if not thread.can_post:
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="you can't comment on this",
         )
-    message = Message(conversation_id=thread.conversation.id, user_id=user.id, body=_clean(body))
+    message = Message(
+        conversation_id=thread.conversation.id, user_id=user.id, body=_clean(body), via=via
+    )
     db.add(message)
     await db.commit()
     await db.refresh(message)

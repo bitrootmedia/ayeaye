@@ -44,6 +44,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
+from fastapi import HTTPException
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
@@ -69,6 +70,10 @@ from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
 from app.services import changelog as changelog_service
+from app.services import checklists as checklists_service
+from app.services import conversations as conversations_service
+from app.services import dependencies as dependencies_service
+from app.services import idempotency as idempotency_service
 from app.services import notifications as notifications_service
 from app.services import organisations as organisations_service
 from app.services import planner as planner_service
@@ -136,12 +141,23 @@ class Denied(ToolError):
 
 
 class _Principal:
-    """A `.scope` shim so `_require_write` needs no changes regardless of
-    whether the verified credential was a personal access token or an OAuth
-    access token — see `models/token.py`'s `SCOPE_READ`/`SCOPE_WRITE`."""
+    """What the verified credential is, regardless of which shape it was.
 
-    def __init__(self, scope: str) -> None:
+    `.scope` is the shim that lets `_require_write` stay the same whether a
+    personal access token or an OAuth access token got us here — see
+    `models/token.py`'s `SCOPE_READ`/`SCOPE_WRITE`.
+
+    `.via` is its display name: what somebody called the token on the account
+    screen, or the client name an OAuth app registered with. It is what a
+    write records as having acted on the person's behalf, so a comment posted
+    by an assistant says so instead of reading as though its owner typed it.
+    None if the credential somehow carries no name — attribution is a nicety
+    on top of a write, never a reason to refuse one.
+    """
+
+    def __init__(self, scope: str, via: str | None = None) -> None:
         self.scope = scope
+        self.via = via
 
 
 async def _caller(ctx: Context) -> tuple[User, _Principal]:
@@ -163,7 +179,13 @@ async def _caller(ctx: Context) -> tuple[User, _Principal]:
     if user is None:
         raise Denied("No valid access token.")
     scope = SCOPE_WRITE if SCOPE_WRITE in access_token.scopes else SCOPE_READ
-    return user, _Principal(scope)
+    # RFC 8693's `act` — the party acting on behalf of the subject — put
+    # there by `OAuthTokenVerifier` for both credential shapes. Read
+    # defensively: `claims` is an SDK field any future verifier could leave
+    # empty, and a missing name must cost a write nothing.
+    actor = (access_token.claims or {}).get("act") or {}
+    via = actor.get("name") if isinstance(actor, dict) else None
+    return user, _Principal(scope, via=via if isinstance(via, str) else None)
 
 
 async def _org(db, user: User, organisation_id: str):
@@ -203,6 +225,78 @@ def _one_line(task, project_names: dict) -> str:
     if task.closed_at:
         bits.append("closed")
     return " | ".join(bits)
+
+
+MAX_THREAD = 40
+"""How many comments `task` reads back, newest kept.
+
+A cap rather than the whole thread, because a long-running task's discussion
+would otherwise crowd out everything else in the answer — and the recent end
+is the end that says where the work got to. `task` states the real total
+whenever it truncates: a caller that believes it has everything and doesn't
+is the failure this cap would otherwise introduce, the same reason `/tasks`
+sends `X-Total-Count` and the changelog tool says what its page is a page of.
+"""
+
+
+def _edge_line(edge: dependencies_service.DependencyEdge) -> str:
+    """One dependency, from the reader's own point of view.
+
+    `edge.task is None` is a real answer rather than an error: task access
+    has six routes in, so the far end of an edge can be perfectly invisible
+    to somebody who can see this end of it. Naming it would leak exactly
+    what `effective_task_level` refuses to.
+    """
+    if edge.task is None:
+        return f"[{edge.other_task_id}] — a task you can't see"
+    other = edge.task
+    return (
+        f"[{other.id}] {other.title} "
+        f"(status={other.status}, {'closed' if other.closed_at else 'open'})"
+    )
+
+
+async def _claim_key(db, user: User, key: str | None, tool: str):
+    """Take an idempotency key, or hand back what it produced last time.
+
+    Returns `(claim, existing_id)`; both are None when no key was supplied,
+    which is the ordinary case and must stay free. `services/idempotency.py`
+    holds the reasoning — this only turns its two exceptions into refusals
+    the model can read, the same job `_refusal` does for HTTP ones.
+    """
+    if not key or not key.strip():
+        return None, None
+    try:
+        held = await idempotency_service.claim(db, user.id, key, tool)
+    except idempotency_service.InProgress as exc:
+        raise Denied(
+            "A call with that idempotency key is already running. Wait a moment "
+            "and ask again with the same key — do not retry without one, which "
+            "is how the duplicate you are avoiding gets created."
+        ) from exc
+    except idempotency_service.KeyReused as exc:
+        raise Denied(str(exc)) from exc
+    return held, held.existing_id
+
+
+async def _release_key(db, held) -> None:
+    """Hand a claim back after the work raised. A no-op when no key was
+    supplied, so callers need no branch of their own."""
+    if held is not None:
+        await idempotency_service.release(db, held)
+
+
+def _refusal(exc: HTTPException) -> Denied:
+    """A service's `HTTPException` as a refusal the model can actually read.
+
+    Services raise 403/404/409/422 carrying a sentence that says what went
+    wrong — "that would create a dependency cycle", "you have read-only
+    access to this task". An `HTTPException` escaping a tool is an
+    *unhandled* exception as far as the SDK is concerned, and its text is
+    deliberately withheld (see `Denied`), so without this the caller is told
+    only `Error executing tool add_dependency` and has nothing to act on.
+    """
+    return Denied(str(exc.detail))
 
 
 # --- reading ---------------------------------------------------------------------
@@ -347,7 +441,17 @@ async def search(
 
 @mcp.tool()
 async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
-    """Everything about one task, including its history."""
+    """Everything about one task: what it says, what it is waiting on, its
+    checklists, its files, its comments and its history.
+
+    **Read this before picking work back up.** A task's comment thread is
+    where its state actually lives — the decisions taken, the corrections,
+    what is waiting on a person — so a task read without it looks like a
+    task nobody has started, and the honest move after that is to begin
+    again rather than continue. The thread is capped here, and whenever it
+    is the real total is stated: an answer that has been truncated must
+    never read as a complete one.
+    """
     user, _ = await _caller(ctx)
     async with SessionLocal() as db:
         org = await _org(db, user, organisation_id)
@@ -355,9 +459,20 @@ async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        events = await tasks_service.list_events(db, tctx.task.id)
-        tags = (await tags_service.for_tasks(db, [tctx.task.id])).get(tctx.task.id, [])
         t = tctx.task
+        events = await tasks_service.list_events(db, t.id)
+        tags = (await tags_service.for_tasks(db, [t.id])).get(t.id, [])
+        depends_on, blocks = await dependencies_service.list_dependencies(db, org, user, t.id)
+        checklists = await checklists_service.for_task(db, t.id)
+        # `create=False`, the default: *reading* a task must not bring a
+        # thread into existence. `conversation` is None until somebody
+        # comments, and both readers below take that.
+        thread = await conversations_service.for_task(db, org, user, t.id)
+        messages = await conversations_service.list_messages(db, thread.conversation)
+        files = await attachments_service.for_task(
+            db, t, thread.conversation.id if thread.conversation else None
+        )
+
         lines = [
             f"{t.title}  [{t.id}]",
             f"status={t.status} priority={t.priority} "
@@ -370,6 +485,50 @@ async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
         if t.description:
             # The stripped column, so the model reads prose rather than markup.
             lines.append("\n" + (t.description_text or "").strip())
+
+        if depends_on or blocks:
+            lines.append("")
+            lines += [f"waiting on: {_edge_line(e)}" for e in depends_on]
+            lines += [f"blocking: {_edge_line(e)}" for e in blocks]
+
+        for checklist in checklists:
+            done = sum(1 for item in checklist.items if item.done_at)
+            lines.append(
+                f"\nchecklist {checklist.title} "
+                f"[{checklist.id}] — {done}/{len(checklist.items)} done"
+            )
+            lines += [
+                f"  [{'x' if item.done_at else ' '}] {item.text}  [{item.id}]"
+                for item in checklist.items
+            ]
+
+        # A removed comment has had its body cleared by `remove()`, so there
+        # is nothing of the person's own words left to read back — left out
+        # entirely rather than shown as a tombstone, the same call
+        # `conversations.for_tasks` makes for the data export.
+        live = [(m, u) for m, u in messages if m.deleted_at is None]
+        if live:
+            shown = live[-MAX_THREAD:]
+            counted = (
+                f"the last {len(shown)} of {len(live)}"
+                if len(shown) < len(live)
+                else f"{len(live)}"
+            )
+            lines.append(f"\ncomments ({counted}, oldest first):")
+            for message, author in shown:
+                who = author.email if author else "someone since removed"
+                # Attribution, not authorship — see `models/conversation.py`.
+                # Worth reading back so an assistant can tell its own earlier
+                # notes from what a colleague actually typed.
+                via = f" via {message.via}" if message.via else ""
+                edited = " (edited)" if message.edited_at else ""
+                lines.append(f"  {message.created_at:%Y-%m-%d %H:%M} {who}{via}{edited}:")
+                lines += [f"    {line}" for line in message.body.strip().splitlines()]
+
+        if files:
+            lines.append("\nfiles:")
+            lines += [f"  {f.filename} ({f.content_type}, {f.size_bytes} bytes)" for f in files]
+
         if events:
             lines.append("\nhistory (oldest first):")
             lines += [f"  {e.created_at:%Y-%m-%d %H:%M} {e.kind}" for e, _ in events[-20:]]
@@ -612,6 +771,13 @@ async def create_task(
             f"One of: {', '.join(PLANNER_BUCKETS)}."
         ),
     ] = None,
+    idempotency_key: Annotated[
+        str | None,
+        Field(
+            description="Any string of your own. Send the SAME one if you retry "
+            "this call after a timeout, and the task will not be created twice."
+        ),
+    ] = None,
 ) -> str:
     """Create a task, optionally for somebody else.
 
@@ -623,35 +789,71 @@ async def create_task(
     creating this for somebody else: a planner is one person's plan for
     their own week (see models/planner.py), and putting work on a colleague's
     board because you filed a ticket for them is not a thing to do quietly.
+
+    **If a call times out, retry it with the same `idempotency_key`.** A
+    timeout says nothing about whether the task was created, and calling
+    again without a key is how one request becomes two tasks.
     """
     user, tok = await _caller(ctx)
     _require_write(tok)
     async with SessionLocal() as db:
         org = await _org(db, user, organisation_id)
-        owner = await _member_by_email(db, org, owner_email)
-        acting = await _member_by_email(db, org, action_required_email)
-        created = await tasks_service.create(
-            db,
-            org,
-            user,
-            title=title,
-            # Markdown in, always — an assistant writes **bold**, not tags.
-            # A plain sentence with no markdown syntax converts to itself
-            # wrapped in a single <p>, so this is never a worse outcome than
-            # the old plain-text path.
-            description=richtext.from_markdown(description) if description else None,
-            project_id=uuid.UUID(project_id) if project_id else None,
-            priority=priority,
-            owner_user_id=owner,
-            action_required_user_id=acting,
-            due_on=date.fromisoformat(due_on) if due_on else None,
-        )
+        # Checked before anything is claimed or written. It used to be
+        # validated *after* `create`, which left a stray task behind every
+        # time somebody guessed a bucket name wrong — refusing and creating
+        # at the same time is the worst of both.
+        if planner_bucket and planner_bucket not in PLANNER_BUCKETS:
+            raise Denied(
+                f"{planner_bucket!r} is not a planner bucket. "
+                f"One of: {', '.join(PLANNER_BUCKETS)}."
+            )
+        held, already = await _claim_key(db, user, idempotency_key, "create_task")
+        if already is not None:
+            # The first attempt landed after all. Answering with its id is
+            # the whole point — the caller retried precisely because it
+            # could not tell.
+            return f"Already created [{already}] under that idempotency key."
+        try:
+            owner = await _member_by_email(db, org, owner_email)
+            acting = await _member_by_email(db, org, action_required_email)
+            created = await tasks_service.create(
+                db,
+                org,
+                user,
+                title=title,
+                # Markdown in, always — an assistant writes **bold**, not
+                # tags. A plain sentence with no markdown syntax converts to
+                # itself wrapped in a single <p>, so this is never a worse
+                # outcome than the old plain-text path.
+                description=richtext.from_markdown(description) if description else None,
+                project_id=uuid.UUID(project_id) if project_id else None,
+                priority=priority,
+                owner_user_id=owner,
+                action_required_user_id=acting,
+                due_on=date.fromisoformat(due_on) if due_on else None,
+            )
+        except HTTPException as exc:
+            # Nothing was created, so the key must not stay claimed —
+            # somebody who sent a bad argument, read the refusal and fixed it
+            # would otherwise be told their own failed call was still
+            # running. And the refusal has to be readable to be fixable:
+            # without `_refusal`, "priority must be one of …" arrives as the
+            # bare "Error executing tool create_task".
+            await _release_key(db, held)
+            raise _refusal(exc) from exc
+        except Exception:
+            await _release_key(db, held)
+            raise
+
+        if held is not None:
+            # **The moment the task exists, the key is answered** — and
+            # before the placement below, deliberately. Recording after it
+            # would mean a failed placement released the key on a task that
+            # had already committed, and the next retry would file a second
+            # one: exactly the duplicate this argument exists to prevent.
+            await idempotency_service.record(db, held, created.id)
+
         if planner_bucket:
-            if planner_bucket not in PLANNER_BUCKETS:
-                raise Denied(
-                    f"{planner_bucket!r} is not a planner bucket. "
-                    f"One of: {', '.join(PLANNER_BUCKETS)}."
-                )
             # Appended to the end of the bucket — `position=None`. Same
             # bargain the task screen's own bucket picker makes: fetching a
             # whole planner board to work out a midpoint, in order to place
@@ -776,22 +978,55 @@ async def reopen_task(ctx: Context, organisation_id: str, task_id: str) -> str:
 
 
 @mcp.tool()
-async def comment(ctx: Context, organisation_id: str, task_id: str, body: str) -> str:
-    """Add a comment to a task, as you. Everyone who can see the task sees it."""
+async def comment(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    body: str,
+    idempotency_key: Annotated[
+        str | None,
+        Field(
+            description="Any string of your own. Send the SAME one if you retry "
+            "this call after a timeout, and the comment will not be posted twice."
+        ),
+    ] = None,
+) -> str:
+    """Add a comment to a task, as you. Everyone who can see the task sees it.
+
+    **Posted under your own name, and marked as having come through this
+    credential** — the thread shows "via {the token's name}" beside it. So
+    there is no need to prefix what you write with your own name to make the
+    source clear; the product records that itself, and a prefix typed into
+    the body would be a convention only you remember to keep.
+    """
     user, tok = await _caller(ctx)
     _require_write(tok)
-    from app.services import conversations as conversations_service
-
     async with SessionLocal() as db:
         org = await _org(db, user, organisation_id)
+        held, already = await _claim_key(db, user, idempotency_key, "comment")
+        if already is not None:
+            return "Already posted under that idempotency key."
         try:
             thread = await conversations_service.for_task(
                 db, org, user, uuid.UUID(task_id), create=True
             )
-            await conversations_service.post(db, org, thread, user, body=body)
+            posted = await conversations_service.post(
+                db, org, thread, user, body=body, via=tok.via
+            )
+        except HTTPException as exc:
+            # Nothing was posted, so the key goes back — see `create_task`.
+            await _release_key(db, held)
+            # Services here say real things — "that comment is too long",
+            # "you can't comment on this" — and flattening all of them into
+            # the sentence below told somebody with a 10,001-character
+            # comment that their task did not exist.
+            raise _refusal(exc) from exc
         except Exception as exc:
+            await _release_key(db, held)
             raise Denied("No such task, or you can't comment on it.") from exc
-    return "Posted."
+        if held is not None:
+            await idempotency_service.record(db, held, posted.id)
+    return "Posted." if not tok.via else f"Posted, attributed to you via {tok.via}."
 
 
 @mcp.tool()
@@ -812,7 +1047,14 @@ async def tag_task(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+        except HTTPException as exc:
+            # Otherwise the one sentence saying why arrives as the bare
+            # string "Error executing tool …" — see `_refusal`.
+            raise _refusal(exc) from exc
         applied = await tags_service.get_or_create(db, org, user, name=tag)
         await tags_service.apply(db, tctx.task, applied)
         await tasks_service.announce(db, tctx.task, "tagged")
@@ -832,13 +1074,240 @@ async def untag_task(ctx: Context, organisation_id: str, task_id: str, tag: str)
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+        except HTTPException as exc:
+            # Otherwise the one sentence saying why arrives as the bare
+            # string "Error executing tool …" — see `_refusal`.
+            raise _refusal(exc) from exc
         existing = await tags_service.find_by_name(db, org, tag)
         if existing is None:
             raise Denied(f"No tag named {tag!r} in this organisation.")
         await tags_service.unapply(db, tctx.task, existing.id)
         await tasks_service.announce(db, tctx.task, "untagged")
     return f"Untagged [{tctx.task.id}] {tctx.task.title}: removed {existing.name!r}"
+
+
+@mcp.tool()
+async def add_dependency(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    depends_on_task_id: Annotated[
+        str,
+        Field(description="What it is waiting on. You have to be able to open that one too."),
+    ],
+) -> str:
+    """Record that one task is waiting on another. Reads left to right:
+    `task_id` depends on `depends_on_task_id`.
+
+    Use this instead of typing an id into a comment. It is what makes "what
+    is blocked, and on whom?" answerable by reading a task rather than by
+    reading its prose — `task` reports both directions, so the other task
+    learns it is blocking this one with nothing further to record.
+
+    **Informational, and there is deliberately no enforcement to find.**
+    Closing a task with open dependencies still works; the point is
+    visibility, not a gate. The graph does stay acyclic — an edge that would
+    close a loop is refused rather than quietly accepted. Needs write on the
+    task being edited.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        try:
+            other = uuid.UUID(depends_on_task_id)
+        except ValueError as exc:
+            raise Denied("That is not a task id.") from exc
+        try:
+            # Resolves the other task through `tasks_service.context_for`
+            # itself — rule 1 of `services/dependencies.py`, and the reason
+            # there is no second access check written here.
+            await dependencies_service.add_dependency(
+                db, tctx, org, user, depends_on_task_id=other
+            )
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+    return f"[{tctx.task.id}] {tctx.task.title} is now waiting on [{other}]."
+
+
+@mcp.tool()
+async def remove_dependency(
+    ctx: Context, organisation_id: str, task_id: str, depends_on_task_id: str
+) -> str:
+    """Stop recording that `task_id` is waiting on `depends_on_task_id`.
+
+    Named by the two tasks rather than by the link's own id, because those
+    are the two ids you already have. Needs write on the task being edited.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        try:
+            other = uuid.UUID(depends_on_task_id)
+        except ValueError as exc:
+            raise Denied("That is not a task id.") from exc
+        depends_on, _ = await dependencies_service.list_dependencies(db, org, user, tctx.task.id)
+        edge = next((e for e in depends_on if e.other_task_id == other), None)
+        if edge is None:
+            raise Denied("This task is not waiting on that one.")
+        try:
+            await dependencies_service.remove_dependency(db, tctx, user, edge.dependency_id)
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+    return f"[{tctx.task.id}] {tctx.task.title} is no longer waiting on [{other}]."
+
+
+@mcp.tool()
+async def add_checklist(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    title: Annotated[str, Field(description="e.g. 'Before we deploy'.")],
+    items: Annotated[
+        list[str] | None,
+        Field(description="Optional first items, in order. More later with add_checklist_item."),
+    ] = None,
+) -> str:
+    """Put a checklist on a task, with its items if you have them.
+
+    **Prefer this to writing the steps into a description.** An item has its
+    own state, so what is outstanding is something you can read back and
+    report precisely, and a person can tick one off from their phone without
+    editing prose. A list of steps in a description is none of those things.
+
+    A task can carry more than one — "packing list" and "before we ship" are
+    two lists, not two sections of one. Shared task content, not a personal
+    record: everyone who can see the task sees the same boxes, and anyone
+    with write can tick them. Needs write on the task.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+            checklist = await checklists_service.add_checklist(db, tctx.task, title=title)
+            added = [
+                # A blank line in a pasted list is not an item, and the
+                # service would 422 on it — losing every item after it as
+                # well as the blank one.
+                await checklists_service.add_item(db, checklist, text=text)
+                for text in (items or [])
+                if text.strip()
+            ]
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+        await tasks_service.announce(db, tctx.task, "checklist_added")
+    lines = [f"Added checklist {checklist.title!r} [{checklist.id}] to {tctx.task.title}."]
+    lines += [f"  [ ] {item.text}  [{item.id}]" for item in added]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def add_checklist_item(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    checklist_id: Annotated[str, Field(description="From `task` or from `add_checklist`.")],
+    text: str,
+) -> str:
+    """Add one item to a checklist that already exists. Needs write on the task."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+            # Scoped to this task, so a checklist id belonging to another one
+            # is a 404 rather than a cross-task write.
+            checklist = await checklists_service.get_checklist_or_404(
+                db, tctx.task.id, uuid.UUID(checklist_id)
+            )
+            item = await checklists_service.add_item(db, checklist, text=text)
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+        except ValueError as exc:
+            raise Denied("That is not a checklist id.") from exc
+        await tasks_service.announce(db, tctx.task, "checklist_item_added")
+    return f"Added to {checklist.title!r}: [ ] {item.text}  [{item.id}]"
+
+
+@mcp.tool()
+async def check_item(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    item_id: Annotated[str, Field(description="From `task`'s checklist section.")],
+    done: Annotated[bool, Field(description="False unticks it again.")] = True,
+) -> str:
+    """Tick a checklist item off, or untick it.
+
+    Found by id across every checklist on the task, so the id `task` printed
+    beside the item is the only one you need. Needs write on the task:
+    ticking a box changes content everybody shares, unlike logging your own
+    time against a task you can only read.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        try:
+            wanted = uuid.UUID(item_id)
+        except ValueError as exc:
+            raise Denied("That is not a checklist item id.") from exc
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+            # `for_task` eager-loads items, so this walk touches no lazy
+            # relationship — see `checklists.get_checklist_or_404`'s own
+            # docstring for what happens when one does.
+            checklists = await checklists_service.for_task(db, tctx.task.id)
+            found = next(
+                ((c, i) for c in checklists for i in c.items if i.id == wanted),
+                None,
+            )
+            if found is None:
+                raise Denied("No checklist item with that id on this task.")
+            checklist, item = found
+            item = await checklists_service.update_item(db, item, fields={"done": done})
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+        await tasks_service.announce(db, tctx.task, "checklist_item_toggled")
+        outstanding = sum(1 for i in checklist.items if i.done_at is None)
+    return (
+        f"{'Ticked' if done else 'Unticked'} {item.text!r} in {checklist.title!r}. "
+        f"{outstanding} left on that list."
+    )
 
 
 @mcp.tool()
@@ -886,7 +1355,14 @@ async def attach_file(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        try:
+            tctx.require(
+                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
+            )
+        except HTTPException as exc:
+            # Otherwise the one sentence saying why arrives as the bare
+            # string "Error executing tool …" — see `_refusal`.
+            raise _refusal(exc) from exc
 
         attachment, _upload_url = await attachments_service.create(
             db, user, filename=filename, content_type=content_type, task=tctx.task

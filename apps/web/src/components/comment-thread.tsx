@@ -18,6 +18,7 @@ import {
   type MentionPerson,
 } from "@/components/mention-textarea";
 import { Lightbox } from "@/components/lightbox";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
@@ -56,6 +57,9 @@ type Comment = {
   edited_at: string | null;
   deleted: boolean;
   mine: boolean;
+  // What posted it on the author's behalf — a token or connected app's own
+  // name. Null for anything typed here, which is nearly everything.
+  via: string | null;
 };
 
 type Thread = { messages: Comment[]; can_post: boolean; unread: number };
@@ -566,6 +570,15 @@ function CommentRow({
     <li className="space-y-1">
       <div className="flex items-baseline gap-2 rounded-md bg-muted/40 px-2 py-1">
         <span className="text-sm font-medium">{personName(comment.author)}</span>
+        {comment.via && (
+          // Attribution, not authorship: the comment IS this person's, posted
+          // through something acting for them. Outline rather than a status
+          // colour — status owns the only red and the only amber, and this is
+          // not a state the work is in.
+          <Badge variant="outline" className="font-normal">
+            via {comment.via}
+          </Badge>
+        )}
         <span className="font-mono text-xs text-muted-foreground">
           {ago(comment.created_at)}
           {comment.edited_at && " · edited"}

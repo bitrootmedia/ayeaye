@@ -70,6 +70,9 @@ class MessageOut(BaseModel):
     # shows a tombstone rather than a hole.
     deleted: bool
     mine: bool
+    # What posted it on the author's behalf, if anything — see
+    # `models/conversation.py`. None for anything typed in the web app.
+    via: str | None = None
 
 
 class AttachmentIn(BaseModel):
@@ -115,6 +118,7 @@ def _message_out(
         edited_at=message.edited_at.isoformat() if message.edited_at else None,
         deleted=message.deleted_at is not None,
         mine=message.user_id == me,
+        via=message.via,
     )
 
 

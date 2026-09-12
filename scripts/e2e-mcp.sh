@@ -176,6 +176,208 @@ CARGS=$(args organisation_id=$OID task_id=$TID "body=Ordered today $S")
 ok "commenting works"           "$(tool "$WRITE" comment "$CARGS" | text | grep -c "Posted")" "1"
 ok "…and it is a real comment"  "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$TID/comments | j "sum(1 for m in d['messages'] if m['body']=='Ordered today $S')")" "1"
 
+echo "== a task reads back its own state, not just its history"
+# The gap this closes, reported from a real day of agent-assisted work: an
+# assistant resuming a task got its title, status and a list of event
+# *kinds* — none of which say what was decided, what was corrected, or what
+# is waiting on a person. All of that lives in the comment thread, so a task
+# read without it looks like a task nobody has started, and the honest move
+# after that is to begin again.
+SECOND=$(post /tmp/ma.jar $B/api/organisations/$OID/tasks '{"title":"Order the zinc"}' | j "d['id']")
+TASKARGS=$(args organisation_id=$OID task_id=$TID)
+SECONDARGS=$(args organisation_id=$OID task_id=$SECOND)
+READBACK=$(tool "$WRITE" task "$TASKARGS" | text)
+ok "the comment comes back"            "$(echo "$READBACK" | grep -c "Ordered today $S")" "1"
+ok "…saying who wrote it"              "$(echo "$READBACK" | grep -c "$ALICE")" "1"
+ok "…under a heading that counts them" "$(echo "$READBACK" | grep -c 'comments (1, oldest first)')" "1"
+ok "history is still there"            "$(echo "$READBACK" | grep -c 'history (oldest first)')" "1"
+# Reading must not bring a thread into existence: `for_task` is called with
+# create=False, and a task nobody has commented on has no conversation row.
+ok "a task with no thread reads fine"  "$(tool "$WRITE" task "$SECONDARGS" | text | grep -c 'Order the zinc')" "1"
+ok "…and grew no comments section"     "$(tool "$WRITE" task "$SECONDARGS" | text | grep -c 'comments (')" "0"
+
+echo "== tasks can reference each other"
+# `task_dependencies` existed with no MCP tool, so an assistant expressing
+# "this is waiting on that" had to type a UUID into English prose on the
+# parent. Both directions read back, because the reverse query is free.
+DEPARGS=$(args organisation_id=$OID task_id=$TID depends_on_task_id=$SECOND)
+ok "add a dependency"               "$(tool "$WRITE" add_dependency "$DEPARGS" | text | grep -c 'is now waiting on')" "1"
+ok "it reads back on the task"      "$(tool "$WRITE" task "$TASKARGS" | text | grep -c "waiting on: \[$SECOND\]")" "1"
+ok "…with the other one's status"   "$(tool "$WRITE" task "$TASKARGS" | text | grep -c 'Order the zinc (status=todo, open)')" "1"
+ok "…and the far end says so too"   "$(tool "$WRITE" task "$SECONDARGS" | text | grep -c "blocking: \[$TID\]")" "1"
+# The refusals matter more than the happy path, and they only reach a client
+# at all because `Denied` is a `ToolError` and a service's HTTPException is
+# converted to one — otherwise every sentence below arrives as the bare
+# string "Error executing tool add_dependency".
+REVERSE=$(args organisation_id=$OID task_id=$SECOND depends_on_task_id=$TID)
+ok "a cycle is refused, and says why"  "$(tool "$WRITE" add_dependency "$REVERSE" | text | grep -ci 'cycle')" "1"
+SELFDEP=$(args organisation_id=$OID task_id=$TID depends_on_task_id=$TID)
+ok "…so is depending on itself"        "$(tool "$WRITE" add_dependency "$SELFDEP" | text | grep -ci 'cannot depend on itself')" "1"
+ok "…and the same edge twice"          "$(tool "$WRITE" add_dependency "$DEPARGS" | text | grep -ci 'already linked')" "1"
+ok "a task you can't see is 404-shaped" \
+  "$(tool "$WRITE" add_dependency "$(args organisation_id=$OID task_id=$TID depends_on_task_id=$(uuidgen | tr 'A-Z' 'a-z'))" | text | grep -ci 'not found')" "1"
+ok "a read-only token cannot link"     "$(tool "$READ" add_dependency "$DEPARGS" | text | grep -ci 'read-only')" "1"
+ok "remove it again"                   "$(tool "$WRITE" remove_dependency "$DEPARGS" | text | grep -c 'no longer waiting on')" "1"
+ok "…and it is gone from the task"     "$(tool "$WRITE" task "$TASKARGS" | text | grep -c 'waiting on:')" "0"
+ok "…removing it twice is refused"     "$(tool "$WRITE" remove_dependency "$DEPARGS" | text | grep -ci 'not waiting on that one')" "1"
+
+echo "== checklists, so progress is machine-readable"
+# The steps were a markdown list inside a description: nothing could tick an
+# item and nothing could be asked what was outstanding. `items` on create is
+# the ergonomic half — filing seven steps should be one call, not eight.
+CLARGS=$(python3 -c "
+import json, sys
+print(json.dumps({'organisation_id': sys.argv[1], 'task_id': sys.argv[2], 'title': 'Before we deploy',
+                  'items': ['Set the flag', 'Rename the healthcheck']}))" "$OID" "$TID")
+CLOUT=$(tool "$WRITE" add_checklist "$CLARGS" | text)
+ok "creates a list with its items"       "$(echo "$CLOUT" | grep -c 'Set the flag')" "1"
+CHECKLISTS=$B/api/organisations/$OID/tasks/$TID/checklists
+CLID=$(curl -s -b /tmp/ma.jar $CHECKLISTS | j "d[0]['id']")
+ITEM=$(curl -s -b /tmp/ma.jar $CHECKLISTS | j "d[0]['items'][0]['id']")
+ok "a blank line is not an item"         "$(curl -s -b /tmp/ma.jar $CHECKLISTS | j "len(d[0]['items'])")" "2"
+ok "it reads back on the task, unticked" "$(tool "$WRITE" task "$TASKARGS" | text | grep -c '\[ \] Set the flag')" "1"
+ok "…with the list's own progress"       "$(tool "$WRITE" task "$TASKARGS" | text | grep -c '0/2 done')" "1"
+TICK=$(python3 -c "
+import json, sys
+print(json.dumps({'organisation_id': sys.argv[1], 'task_id': sys.argv[2], 'item_id': sys.argv[3], 'done': True}))
+" "$OID" "$TID" "$ITEM")
+ok "ticking one reports what is left"    "$(tool "$WRITE" check_item "$TICK" | text | grep -c '1 left on that list')" "1"
+ok "…and the task shows it ticked"       "$(tool "$WRITE" task "$TASKARGS" | text | grep -c '\[x\] Set the flag')" "1"
+ADDITEM=$(args organisation_id=$OID task_id=$TID checklist_id=$CLID 'text=Back up first')
+ok "adding one more item"                "$(tool "$WRITE" add_checklist_item "$ADDITEM" | text | grep -c 'Back up first')" "1"
+ok "…counted in the list's progress"     "$(tool "$WRITE" task "$TASKARGS" | text | grep -c '1/3 done')" "1"
+ok "an item id from nowhere is refused"  "$(tool "$WRITE" check_item "$(args organisation_id=$OID task_id=$TID item_id=$SECOND)" | text | grep -ci 'no checklist item')" "1"
+ok "a checklist on another task too"     "$(tool "$WRITE" add_checklist_item "$(args organisation_id=$OID task_id=$SECOND checklist_id=$CLID text=nope)" | text | grep -ci 'not found')" "1"
+# Read-only is the token's scope here, not the task's level — Alice's own
+# read token against Alice's own task, so the only thing that differs is
+# what the credential is allowed to do.
+ok "a read-only token cannot tick"       "$(tool "$READ" check_item "$TICK" | text | grep -ci 'read-only')" "1"
+ok "…nor start a list"                   "$(tool "$READ" add_checklist "$CLARGS" | text | grep -ci 'read-only')" "1"
+ok "…and nothing changed"                "$(curl -s -b /tmp/ma.jar $CHECKLISTS | j "len(d)")" "1"
+
+echo "== a write says what acted on the person's behalf"
+# The friction this closes: everything an assistant wrote appeared to have
+# been written by its owner, and the workaround was a convention — "prefix
+# any comment with [Claude] so i know where it came from" — that only holds
+# as long as one model remembers it. `via` is the token's own name, carried
+# out of the verifier as RFC 8693's `act` claim.
+#
+# **Attribution, not authorship.** The comment is still Alice's: a token is
+# a person, which is this whole surface's one rule. `via` only says how the
+# words arrived.
+VIAARGS=$(args organisation_id=$OID task_id=$TID "body=Posted by an assistant $S")
+ok "posting says it was attributed" "$(tool "$WRITE" comment "$VIAARGS" | text | grep -c 'via Claude')" "1"
+COMMENTS=$B/api/organisations/$OID/tasks/$TID/comments
+ok "…and the API carries it"        "$(curl -s -b /tmp/ma.jar $COMMENTS | j "[m['via'] for m in d['messages'] if m['body']=='Posted by an assistant $S'][0]")" "Claude"
+ok "…while the author is still you" "$(curl -s -b /tmp/ma.jar $COMMENTS | j "[m['author']['email'] for m in d['messages'] if m['body']=='Posted by an assistant $S'][0]")" "$ALICE"
+# The web app sends no `via` at all, and a row written before this existed
+# holds NULL for the same reason — "a person typed it" is what NULL means,
+# which is why there was nothing to backfill.
+PLAIN=$(post /tmp/ma.jar $COMMENTS "{\"body\":\"Typed in the browser $S\"}")
+ok "a comment from the web app has none" \
+  "$(curl -s -b /tmp/ma.jar $COMMENTS | j "[m['via'] for m in d['messages'] if m['body']=='Typed in the browser $S'][0] is None")" "True"
+# Both read back on the task, one header each. Scoped with `grep -B1` to the
+# body it belongs to rather than counting "via Claude" across the whole
+# thread — every comment this suite posts goes through the same token, so a
+# bare count is a number that grows whenever a test above adds a comment.
+READOUT=$(tool "$WRITE" task "$TASKARGS" | text)
+ok "the assistant's own line names it" \
+  "$(echo "$READOUT" | grep -B1 "Posted by an assistant $S" | grep -c "$ALICE via Claude")" "1"
+ok "…and the browser's line does not" \
+  "$(echo "$READOUT" | grep -B1 "Typed in the browser $S" | grep -c ' via ')" "0"
+# The name is whatever the person called the credential, not a hardcoded
+# word — a second token proves the value is carried rather than invented.
+OTHERTOK=$(post /tmp/ma.jar $B/api/me/tokens '{"name":"Scripted nightly","scope":"write"}' | j "d['token']")
+OTHERARGS=$(args organisation_id=$OID task_id=$TID "body=From the nightly job $S")
+ok "a differently-named token says so" "$(tool "$OTHERTOK" comment "$OTHERARGS" | text | grep -c 'via Scripted nightly')" "1"
+
+echo "== retrying a write does not duplicate it"
+# Agents retry. A timeout says nothing about whether the task was created,
+# and the move that looks safest — call it again — is the one that files a
+# duplicate. Same key, same answer, one row.
+KEY="order-the-zinc-$S"
+IDEM=$(args organisation_id=$OID title="Fit the new anode $S" idempotency_key=$KEY)
+FIRST=$(tool "$WRITE" create_task "$IDEM" | text)
+SECOND_TRY=$(tool "$WRITE" create_task "$IDEM" | text)
+ok "the first call creates"           "$(echo "$FIRST" | grep -c "Fit the new anode $S")" "1"
+ok "the second says already created"  "$(echo "$SECOND_TRY" | grep -ci 'already created')" "1"
+ok "…naming the very same task"       "$(echo "$SECOND_TRY" | grep -c "$(echo "$FIRST" | sed 's/.*\[\(.*\)\].*/\1/')")" "1"
+ok "…and there is exactly one task"   "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks | j "sum(1 for t in d if t['title']=='Fit the new anode $S')")" "1"
+# Without a key the old behaviour is untouched: two calls, two tasks. Worth
+# asserting, because a key that silently applied to every call would make
+# "file two of these" impossible.
+NOKEY=$(args organisation_id=$OID title="Unkeyed twice $S")
+tool "$WRITE" create_task "$NOKEY" >/dev/null
+tool "$WRITE" create_task "$NOKEY" >/dev/null
+ok "no key still means no dedupe"     "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks | j "sum(1 for t in d if t['title']=='Unkeyed twice $S')")" "2"
+# A key is scoped to the person: two people using the same obvious string
+# must not collide, and Bob's own key must not resolve to Alice's task.
+CKEY="comment-$S"
+CIDEM=$(args organisation_id=$OID task_id=$TID "body=Only once please $S" idempotency_key=$CKEY)
+tool "$WRITE" comment "$CIDEM" >/dev/null
+ok "a retried comment says so"        "$(tool "$WRITE" comment "$CIDEM" | text | grep -ci 'already posted')" "1"
+ok "…and was posted exactly once"     "$(curl -s -b /tmp/ma.jar $COMMENTS | j "sum(1 for m in d['messages'] if m['body']=='Only once please $S')")" "1"
+# Reusing one key for a different operation is a caller bug. Answering it
+# with the first operation's id would be confidently wrong, which is worse
+# than a refusal that says what happened.
+ok "the same key on another tool is refused" \
+  "$(tool "$WRITE" create_task "$(args organisation_id=$OID title=nope idempotency_key=$CKEY)" | text | grep -ci "already used for 'comment'")" "1"
+
+# The two states a *claimed but unfinished* key can be in, which curl alone
+# cannot reach: the work is running right now, or the process died holding
+# the claim. Age is the only thing that tells them apart, so this stages a
+# bare claim and then ages it — the same "reach into the stack to move a
+# clock" move `e2e-reminders.sh` makes for its own sweep, and for the same
+# reason: five real minutes is not a test.
+#
+# `-e PYTHONPATH`: compose exec does not inherit the service's environment
+# block, and the app lives under /app/src.
+stage_claim(){ docker compose exec -T -e PYTHONPATH=/app/src api uv run python -c "
+import asyncio, sys
+from sqlalchemy import select, update
+from app.db import SessionLocal
+from app.models import User
+from app.models.idempotency import IdempotencyKey
+from app.services import idempotency
+
+async def main(email, key, age_seconds):
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.email == email))).scalar_one()
+        await idempotency.claim(db, user.id, key, 'create_task')
+        if int(age_seconds):
+            # Backdate the claim rather than waiting out STALE_AFTER.
+            await db.execute(
+                update(IdempotencyKey)
+                .where(IdempotencyKey.user_id == user.id, IdempotencyKey.key == key)
+                .values(created_at=__import__('datetime').datetime.now(
+                    __import__('datetime').UTC) - __import__('datetime').timedelta(seconds=int(age_seconds)))
+            )
+            await db.commit()
+
+asyncio.run(main(sys.argv[1], sys.argv[2], sys.argv[3]))
+" "$1" "$2" "$3" >/dev/null 2>&1; }
+
+# A call that fails hands its key straight back, rather than leaving the
+# caller locked out of their own corrected retry until STALE_AFTER.
+BADKEY="bad-then-good-$S"
+BAD=$(args organisation_id=$OID "title=Fixed on the second go $S" priority=enormous idempotency_key=$BADKEY)
+ok "a bad argument is refused, readably" \
+  "$(tool "$WRITE" create_task "$BAD" | text | grep -c 'priority must be one of')" "1"
+GOOD=$(args organisation_id=$OID "title=Fixed on the second go $S" priority=high idempotency_key=$BADKEY)
+ok "…and the same key still works"    "$(tool "$WRITE" create_task "$GOOD" | text | grep -c "Fixed on the second go $S")" "1"
+
+LIVE="live-claim-$S"
+stage_claim "$ALICE" "$LIVE" 0
+ok "a claim still running says so, not a duplicate" \
+  "$(tool "$WRITE" create_task "$(args organisation_id=$OID "title=Raced $S" idempotency_key=$LIVE)" | text | grep -ci 'already running')" "1"
+ok "…and created nothing"             "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks | j "sum(1 for t in d if t['title']=='Raced $S')")" "0"
+# Older than STALE_AFTER: the holder is a corpse, not a neighbour. Refusing
+# for all time would punish the caller for our own crash.
+DEAD="dead-claim-$S"
+stage_claim "$ALICE" "$DEAD" 600
+ok "an abandoned claim is taken over" \
+  "$(tool "$WRITE" create_task "$(args organisation_id=$OID "title=Recovered $S" idempotency_key=$DEAD)" | text | grep -c "Recovered $S")" "1"
+
 echo "== the lists a client needs to offer a choice"
 # `create_task` names a project by id and a person by email, which is fine for
 # an assistant reading prose and useless to anything drawing a dropdown — it
@@ -229,9 +431,13 @@ PLANNED=$(tool "$WRITE" create_task "$PLANNED_BODY" | text)
 PLANNED_ID=$(echo "$PLANNED" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
 ok "the task is created"        "$(echo "$PLANNED" | grep -c "Chase the surveyor")" "1"
 ok "…and it is in today"        "$(planned_in_bucket /tmp/ma.jar today "$PLANNED_ID")" "1"
-BADBUCKET=$(args organisation_id=$OID title=x planner_bucket=eventually)
+BADBUCKET=$(args organisation_id=$OID "title=Guessed the bucket $S" planner_bucket=eventually)
 REFUSED_BUCKET=$(tool "$WRITE" create_task "$BADBUCKET" | text)
 ok "a bucket that isn't one is refused" "$(echo "$REFUSED_BUCKET" | grep -ci "not a planner bucket")" "1"
+# The bucket is checked before anything is written. It used to be validated
+# after the task had been created, so a guessed name refused the call *and*
+# left the task behind — the worst of both.
+ok "…and leaves no task behind"         "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks | j "sum(1 for t in d if t['title']=='Guessed the bucket $S')")" "0"
 # A planner is one person's plan for their own week. Filing work for a
 # colleague must not put it on their board — the caller's is the only board
 # this argument can touch.
@@ -261,6 +467,26 @@ ok "same name different case reuses the tag, no twin created" \
 
 REFUSED=$(tool "$READ" tag_task "$TAGARGS")
 ok "a read-only token is refused" "$(echo "$REFUSED" | j "d['result']['isError']")" "True"
+
+# Write *scope*, read-only *access to the task* — a different refusal from
+# the one above, which never reaches `tctx.require` at all because
+# `_require_write` turns the credential away first. Until that `require` was
+# wrapped in `_refusal`, this one arrived as the bare string "Error
+# executing tool tag_task": a `tctx.require` raises an `HTTPException`,
+# which the SDK treats as a crash and whose text it deliberately withholds.
+#
+# **The "Error executing tool X:" prefix is on every refusal, including a
+# well-behaved one** — the SDK always writes it. So what distinguishes a
+# refusal that reached the client from one that didn't is whether the
+# sentence *after* the colon survived, which is why this asserts the whole
+# string rather than the absence of the prefix.
+MEMBER_ID=$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/members | j "[m['user_id'] for m in d if m['email']=='$MEMBER'][0]")
+GRANTBODY="{\"user_id\":\"$MEMBER_ID\",\"level\":\"read\"}"
+post /tmp/ma.jar $B/api/organisations/$OID/tasks/$TID/access "$GRANTBODY" >/dev/null
+MEMWRITE=$(post /tmp/md.jar $B/api/me/tokens '{"name":"Member write","scope":"write"}' | j "d['token']")
+MEMREFUSED=$(tool "$MEMWRITE" tag_task "$TAGARGS" | text)
+ok "read-only access to the task refuses too" \
+  "$(echo "$MEMREFUSED" | grep -c 'tag_task: you have read-only access to this task')" "1"
 
 TASKARGS=$(args organisation_id=$OID task_id=$TID)
 SHOWN=$(tool "$WRITE" task "$TASKARGS" | text)

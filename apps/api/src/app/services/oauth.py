@@ -503,7 +503,18 @@ class OAuthTokenVerifier(TokenVerifier):
                     return None
                 user, pat = found
                 return AccessToken(
-                    token=token, client_id="pat", scopes=[pat.scope], subject=str(user.id)
+                    token=token,
+                    client_id="pat",
+                    scopes=[pat.scope],
+                    subject=str(user.id),
+                    # RFC 8693's `act`: the party acting *on behalf of* the
+                    # subject. The token's own name is what somebody typed on
+                    # the account screen ("Claude"), and carrying it here is
+                    # what lets a comment posted over MCP say so instead of
+                    # appearing to have been typed by its owner. `claims` is
+                    # the SDK's own field for exactly this, so nothing has to
+                    # be subclassed or smuggled through `client_id`.
+                    claims={"act": {"name": pat.name}},
                 )
 
             if not token.startswith(ACCESS_TOKEN_PREFIX):
@@ -511,14 +522,18 @@ class OAuthTokenVerifier(TokenVerifier):
             now = datetime.now(UTC)
             row = (
                 await db.execute(
-                    select(OAuthAccessToken, OAuthGrant)
+                    select(OAuthAccessToken, OAuthGrant, OAuthClient)
                     .join(OAuthGrant, OAuthGrant.id == OAuthAccessToken.grant_id)
+                    # The client is joined only for its display name, which
+                    # rides out as the `act` claim below — see the personal
+                    # access token branch for what that is for.
+                    .join(OAuthClient, OAuthClient.id == OAuthGrant.client_id)
                     .where(OAuthAccessToken.access_token_hash == hash_token(token))
                 )
             ).first()
             if row is None:
                 return None
-            access_row, grant = row
+            access_row, grant, client = row
             if access_row.access_token_expires_at < now:
                 return None
             if access_row.last_used_at is None or now - access_row.last_used_at > TOUCH_EVERY:
@@ -530,4 +545,5 @@ class OAuthTokenVerifier(TokenVerifier):
                 scopes=access_row.scope.split(),
                 expires_at=int(access_row.access_token_expires_at.timestamp()),
                 subject=str(grant.user_id),
+                claims={"act": {"name": client.client_name}},
             )
