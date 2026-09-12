@@ -6,9 +6,11 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Deps only: no --reload watcher, no dev extras.
-COPY pyproject.toml ./
-RUN uv sync --no-install-project --no-dev
+# Deps only: no --reload watcher, no dev extras. `--frozen` plus the lockfile
+# so a deployed image is the dependency tree this repo actually pinned — see
+# the note in Dockerfile.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
 COPY alembic.ini ./
@@ -18,6 +20,12 @@ EXPOSE 8000
 
 # Two workers for throughput. Not published to the host — Caddy reaches it on
 # the internal network.
-CMD ["uv", "run", "uvicorn", "app.main:app", \
+# `--no-sync`: run what the image already installed, and never reach for the
+# network at boot. Without it `uv run` re-syncs the project environment every
+# time a container starts — which pulled the *dev* dependencies straight back
+# into an image built with `--no-dev`, and meant a production container could
+# not start at all on a host that could not reach PyPI. A deploy that needs
+# the internet to boot is a deploy that is down when PyPI is.
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--workers", "2", "--app-dir", "src"]

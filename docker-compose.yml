@@ -68,7 +68,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.prod
     restart: "no"
-    command: uv run alembic upgrade head
+    command: uv run --no-sync alembic upgrade head
     environment:
       DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
     depends_on:
@@ -138,7 +138,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.prod
     restart: unless-stopped
-    command: uv run taskiq worker app.tasks:broker
+    command: uv run --no-sync taskiq worker app.tasks:broker
     environment:
       DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
       REDIS_URL: redis://redis:6379/0
@@ -188,7 +188,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.prod
     restart: unless-stopped
-    command: uv run taskiq scheduler app.tasks:scheduler
+    command: uv run --no-sync taskiq scheduler app.tasks:scheduler
     environment:
       DATABASE_URL: ${DATABASE_URL:?missing .env — run ./scripts/setup.sh first}
       REDIS_URL: redis://redis:6379/0

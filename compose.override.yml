@@ -80,7 +80,7 @@ services:
       # thrown away.
       - ./apps/api/alembic:/app/alembic
       - ./apps/api/alembic.ini:/app/alembic.ini
-    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir src
+    command: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir src
 
   worker:
     image: ayeayecaptain-worker-dev
@@ -93,7 +93,7 @@ services:
       SMTP_START_TLS: "false"
     volumes:
       - ./apps/api/src:/app/src
-    command: uv run taskiq worker --reload app.tasks:broker
+    command: uv run --no-sync taskiq worker --reload app.tasks:broker
 
   # Its own image tag for the same reason as every other service that swaps
   # its Dockerfile here — a shared tag means a prod build followed by a dev

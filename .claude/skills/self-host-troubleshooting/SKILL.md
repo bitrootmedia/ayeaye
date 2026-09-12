@@ -208,6 +208,59 @@ region goes. `scripts/setup-interactive.sh` detects a `digitaloceanspaces.com`
 endpoint and sets both correctly rather than asking; `diagnose.sh` checks both
 independently of that, in case someone configured `.env` by hand.
 
+## The image has to be the thing that runs
+
+Two faults, found together, both of which made a deployed API something
+other than what this repo pins. Neither showed up as a failure until
+somebody went looking, which is what makes them worth writing down.
+
+**The API images never used `uv.lock`.** Both Dockerfiles copied
+`pyproject.toml` alone and ran a bare `uv sync`, so the resolver ran fresh
+against loose constraints (`mcp>=2.0.0`, and so on) at *build* time and the
+committed lockfile was never consulted by any image. Measured before the
+fix: the running container differed from `uv.lock` in **22 packages**,
+including `nh3` (the HTML sanitiser behind `services/richtext.py` — the
+"client is never trusted" boundary), `cryptography`, `pydantic` and `mcp`.
+Two self-hosters building a month apart get different dependency trees, and
+a transitive break arrives with no repo change to blame. `apps/web` had
+always done this correctly — `COPY package.json pnpm-lock.yaml` plus
+`pnpm install --frozen-lockfile` — so the fix was the API catching up:
+`COPY pyproject.toml uv.lock ./` and `uv sync --frozen`.
+
+**And `uv run` re-synced at container start, which is worse.** The CMD was
+`uv run uvicorn …`; `uv run` syncs the project environment before running
+anything, so every container start re-resolved, hit the network, and
+installed **the dev dependencies** straight back into an image built with
+`--no-dev`. The consequence to remember: **a production container could not
+start at all on a host that could not reach PyPI.** Proved with
+`docker run --network none`, where it died fetching `pluggy` — a transitive
+dependency of `pytest`, in a production image. A deploy that needs the
+internet to boot is a deploy that is down whenever PyPI is.
+
+`--no-sync` on every `uv run` that starts a long-lived process is the fix —
+the Dockerfile CMDs, and the `command:` lines for `migrate`, `worker` and
+`scheduler` in `docker-compose.yml` and `compose.override.yml`. Run what the
+image already installed; never reach for the network at boot.
+
+**How to check either of these has not come back.** The drift:
+
+```bash
+docker compose exec -T api uv run --no-sync python -c \
+  "import importlib.metadata as m; print(m.version('mcp'))"
+grep -A2 '^name = "mcp"' apps/api/uv.lock     # must agree
+```
+
+The boot:
+
+```bash
+docker compose -f docker-compose.yml build api
+docker run --rm --network none ayeayecaptain-api    # must reach "Uvicorn running"
+```
+
+The second one is the sharper test, and it is the one to run after any
+change to a Dockerfile or a `command:` — it fails loudly and immediately,
+where the drift is silent for months.
+
 ## A Caddy restart is not always a Caddy reload
 
 `docker compose restart caddy` is not reliably enough to pick up an edited

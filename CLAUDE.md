@@ -4558,6 +4558,16 @@ Read these before starting Phase 6.
   local production build followed by a dev `up` starts nginx where Caddy
   expects Vite. HTTP 502, every container healthy. Any service that swaps its
   Dockerfile in the override needs an `image:` line too.
+- **The API images are built from `uv.lock`, and `uv run` must carry
+  `--no-sync`.** Both were wrong at once: the Dockerfiles copied
+  `pyproject.toml` without the lockfile (so `uv sync` resolved fresh at build
+  time — 22 packages drifted, `nh3` and `cryptography` among them), and the
+  CMD's bare `uv run` re-synced at *container start*, pulling the dev
+  dependencies back into an image built `--no-dev` and leaving a production
+  container unable to boot without reaching PyPI. `apps/web` had always got
+  this right. The `self-host-troubleshooting` skill has the detail and the
+  two commands that check it hasn't come back; the short version is that
+  `docker run --network none ayeayecaptain-api` must reach "Uvicorn running".
 - **`init.sql` runs only on an empty data directory.** Change it after the
   first boot and it is silently skipped; `docker compose down -v` first.
 - **Backups must be `pg_dumpall`.** SuperTokens keeps identity in its own
