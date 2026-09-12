@@ -40,6 +40,7 @@ row so a follow-up call can address it.
 
 import base64
 import binascii
+import functools
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
@@ -109,7 +110,16 @@ mcp = MCPServer(
         "high, normal, low, very_low.\n\n"
         "A knowledge-base article is born a private draft that only its "
         "owner can see — `publish_article` is what makes it visible to "
-        "anyone the book is shared with."
+        "anyone the book is shared with.\n\n"
+        "**Recording is yours; deciding is theirs.** Comments, checklist "
+        "items, dependencies, time and notes describe what you found, and "
+        "you can write them freely. Closing a task, moving its status, or "
+        "putting it on a named person's plate are statements a colleague "
+        "will act on, so make them when you were asked to and otherwise say "
+        "what you think in a comment and let somebody press the button. "
+        "Nothing here enforces that — it is a working habit, and the reason "
+        "it is written down is so it does not depend on which assistant is "
+        "reading."
     ),
     token_verifier=token_verifier,
     auth=AuthSettings(
@@ -286,6 +296,53 @@ async def _release_key(db, held) -> None:
         await idempotency_service.release(db, held)
 
 
+def _refusing(fn):
+    """Wrap a tool so a service's `HTTPException` cannot escape as a crash.
+
+    An `HTTPException` reaching the SDK is an *unhandled* exception, and its
+    text is withheld on purpose — so "only the owner can close a task",
+    "priority must be one of …" and "that comment is too long" all arrived as
+    the bare `Error executing tool <name>`, with the one sentence that says
+    what to do about it discarded. Converting it per tool worked and was
+    forgettable: the five tools that had it were the five somebody had
+    happened to touch.
+
+    This only ever sees what a tool did *not* handle. A tool that catches
+    first — every reader's deliberate "No such task, or you can't see it",
+    which must not confirm that a task exists — still wins, because its own
+    `except` runs inside this one.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except HTTPException as exc:
+            raise _refusal(exc) from exc
+
+    return wrapper
+
+
+def tool():
+    """`@mcp.tool()`, plus `_refusing`. **Use this, never `@mcp.tool()`
+    directly** — `tests/test_mcp_tools.py` fails the build if a bare one
+    appears, the same way `test_task_registry.py` fails it for a taskiq
+    handler nobody imported. A rule you have to remember is a rule that gets
+    forgotten by whoever writes the next tool, which is exactly how the
+    refusal text went missing from most of this module in the first place.
+
+    Deliberately not the SDK's own middleware chain, which would need no
+    per-tool decoration at all: it is documented as expected to change before
+    v2 is final, and the tool layer converts an exception before middleware
+    would see it anyway.
+    """
+
+    def decorate(fn):
+        return mcp.tool()(_refusing(fn))
+
+    return decorate
+
+
 def _refusal(exc: HTTPException) -> Denied:
     """A service's `HTTPException` as a refusal the model can actually read.
 
@@ -302,7 +359,7 @@ def _refusal(exc: HTTPException) -> Denied:
 # --- reading ---------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 async def organisations(ctx: Context) -> str:
     """List the organisations you belong to. Start here: most other tools need
     an organisation id."""
@@ -314,7 +371,7 @@ async def organisations(ctx: Context) -> str:
     return "\n".join(f"[{org.id}] {org.name} (you are {role})" for org, role in rows)
 
 
-@mcp.tool()
+@tool()
 async def list_projects(
     ctx: Context,
     organisation_id: Annotated[str, Field(description="From `organisations`.")],
@@ -340,7 +397,7 @@ async def list_projects(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def list_members(
     ctx: Context,
     organisation_id: Annotated[str, Field(description="From `organisations`.")],
@@ -369,7 +426,7 @@ async def list_members(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def list_tasks(
     ctx: Context,
     organisation_id: Annotated[str, Field(description="From `organisations`.")],
@@ -415,7 +472,7 @@ async def list_tasks(
     return header + "\n" + "\n".join(_one_line(task, names) for task, _ in rows)
 
 
-@mcp.tool()
+@tool()
 async def search(
     ctx: Context,
     organisation_id: str,
@@ -439,7 +496,7 @@ async def search(
     )
 
 
-@mcp.tool()
+@tool()
 async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Everything about one task: what it says, what it is waiting on, its
     checklists, its files, its comments and its history.
@@ -535,7 +592,7 @@ async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def task_versions(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Earlier versions of a task's title and description, newest first.
 
@@ -573,7 +630,7 @@ async def task_versions(ctx: Context, organisation_id: str, task_id: str) -> str
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def activity(
     ctx: Context,
     organisation_id: str,
@@ -615,7 +672,7 @@ async def activity(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def my_reminders(ctx: Context) -> str:
     """Your reminders, across every organisation. Yours alone — nobody else's
     are visible to anybody."""
@@ -633,7 +690,7 @@ async def my_reminders(ctx: Context) -> str:
     )
 
 
-@mcp.tool()
+@tool()
 async def notifications(
     ctx: Context,
     unread_only: bool = True,
@@ -675,7 +732,7 @@ def _book_line(book, level: str) -> str:
     return " | ".join(bits)
 
 
-@mcp.tool()
+@tool()
 async def list_books(
     ctx: Context,
     organisation_id: str,
@@ -694,7 +751,7 @@ async def list_books(
     return "\n".join(_book_line(book, level) for book, level in rows)
 
 
-@mcp.tool()
+@tool()
 async def list_articles(ctx: Context, organisation_id: str, book_id: str) -> str:
     """Articles in one book — the table of contents. Your own private drafts
     are included; anyone else's simply don't appear."""
@@ -716,7 +773,7 @@ async def list_articles(ctx: Context, organisation_id: str, book_id: str) -> str
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def read_article(ctx: Context, organisation_id: str, article_id: str) -> str:
     """Everything about one article: its current text, and whether it's
     published."""
@@ -745,7 +802,7 @@ async def read_article(ctx: Context, organisation_id: str, article_id: str) -> s
 # --- writing ------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 async def create_task(
     ctx: Context,
     organisation_id: str,
@@ -870,7 +927,7 @@ async def create_task(
     return f"Created [{created.id}] {created.title}"
 
 
-@mcp.tool()
+@tool()
 async def update_task(
     ctx: Context,
     organisation_id: str,
@@ -906,7 +963,20 @@ async def update_task(
         Field(description="Who is being asked to act. Pass an empty string to clear it."),
     ] = None,
 ) -> str:
-    """Change a task. Only the fields you pass are touched."""
+    """Change a task. Only the fields you pass are touched.
+
+    **Ask before moving `status`, `owner_email` or `action_required_email`
+    unless you were told to.** These three say something about the work that
+    a colleague is relying on: a status is somebody's answer to "where is
+    this", and the other two put a task on a named person's plate and notify
+    them. Recording what you found — a comment, a checklist item ticked, a
+    dependency — is yours to do freely; declaring that the work has moved on,
+    or handing it to somebody, is the person's call and cheap to ask about.
+
+    `title`, `description`, `priority`, `due_on` and `project_id` sit in
+    between: fine to correct when that is plainly what was asked for, worth
+    confirming when you are inferring it.
+    """
     user, tok = await _caller(ctx)
     _require_write(tok)
     fields: dict = {}
@@ -944,12 +1014,19 @@ async def update_task(
     return f"Updated [{updated.id}] {updated.title}"
 
 
-@mcp.tool()
+@tool()
 async def close_task(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Close a task. Only the owner — or an organisation admin — may; status
     and open/closed are separate fields, so a task can be closed from any
     status. Everyone else sees the identical refusal the web app's own
-    missing button implies."""
+    missing button implies.
+
+    **Don't close anything you were not asked to close.** Closing is the one
+    action here that ends a piece of work rather than describing it, it is
+    the owner's judgement rather than an observation, and "it looks finished
+    to me" is exactly the inference to put to a person instead. If you
+    believe something is done, say so in a comment and let them press it.
+    """
     user, tok = await _caller(ctx)
     _require_write(tok)
     async with SessionLocal() as db:
@@ -962,9 +1039,11 @@ async def close_task(ctx: Context, organisation_id: str, task_id: str) -> str:
     return f"Closed [{task.id}] {task.title}"
 
 
-@mcp.tool()
+@tool()
 async def reopen_task(ctx: Context, organisation_id: str, task_id: str) -> str:
-    """Reopen a closed task. Same owner-or-admin rule as closing."""
+    """Reopen a closed task. Same owner-or-admin rule as closing, and the
+    same restraint: somebody decided this was finished, so reopening it is
+    a thing to be asked to do rather than to conclude."""
     user, tok = await _caller(ctx)
     _require_write(tok)
     async with SessionLocal() as db:
@@ -977,7 +1056,7 @@ async def reopen_task(ctx: Context, organisation_id: str, task_id: str) -> str:
     return f"Reopened [{task.id}] {task.title}"
 
 
-@mcp.tool()
+@tool()
 async def comment(
     ctx: Context,
     organisation_id: str,
@@ -1029,7 +1108,7 @@ async def comment(
     return "Posted." if not tok.via else f"Posted, attributed to you via {tok.via}."
 
 
-@mcp.tool()
+@tool()
 async def tag_task(
     ctx: Context,
     organisation_id: str,
@@ -1047,14 +1126,7 @@ async def tag_task(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-        except HTTPException as exc:
-            # Otherwise the one sentence saying why arrives as the bare
-            # string "Error executing tool …" — see `_refusal`.
-            raise _refusal(exc) from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
         applied = await tags_service.get_or_create(db, org, user, name=tag)
         await tags_service.apply(db, tctx.task, applied)
         await tasks_service.announce(db, tctx.task, "tagged")
@@ -1062,7 +1134,7 @@ async def tag_task(
     return f"Tagged [{tctx.task.id}] {tctx.task.title}: " + ", ".join(t.name for t in current)
 
 
-@mcp.tool()
+@tool()
 async def untag_task(ctx: Context, organisation_id: str, task_id: str, tag: str) -> str:
     """Take a tag off a task, by name. The tag itself survives — it's shared
     vocabulary — only this one tasking of it goes. Needs write on the task."""
@@ -1074,14 +1146,7 @@ async def untag_task(ctx: Context, organisation_id: str, task_id: str, tag: str)
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-        except HTTPException as exc:
-            # Otherwise the one sentence saying why arrives as the bare
-            # string "Error executing tool …" — see `_refusal`.
-            raise _refusal(exc) from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
         existing = await tags_service.find_by_name(db, org, tag)
         if existing is None:
             raise Denied(f"No tag named {tag!r} in this organisation.")
@@ -1090,7 +1155,7 @@ async def untag_task(ctx: Context, organisation_id: str, task_id: str, tag: str)
     return f"Untagged [{tctx.task.id}] {tctx.task.title}: removed {existing.name!r}"
 
 
-@mcp.tool()
+@tool()
 async def add_dependency(
     ctx: Context,
     organisation_id: str,
@@ -1126,19 +1191,14 @@ async def add_dependency(
             other = uuid.UUID(depends_on_task_id)
         except ValueError as exc:
             raise Denied("That is not a task id.") from exc
-        try:
-            # Resolves the other task through `tasks_service.context_for`
-            # itself — rule 1 of `services/dependencies.py`, and the reason
-            # there is no second access check written here.
-            await dependencies_service.add_dependency(
-                db, tctx, org, user, depends_on_task_id=other
-            )
-        except HTTPException as exc:
-            raise _refusal(exc) from exc
+        # Resolves the other task through `tasks_service.context_for` itself —
+        # rule 1 of `services/dependencies.py`, and the reason there is no
+        # second access check written here.
+        await dependencies_service.add_dependency(db, tctx, org, user, depends_on_task_id=other)
     return f"[{tctx.task.id}] {tctx.task.title} is now waiting on [{other}]."
 
 
-@mcp.tool()
+@tool()
 async def remove_dependency(
     ctx: Context, organisation_id: str, task_id: str, depends_on_task_id: str
 ) -> str:
@@ -1163,14 +1223,11 @@ async def remove_dependency(
         edge = next((e for e in depends_on if e.other_task_id == other), None)
         if edge is None:
             raise Denied("This task is not waiting on that one.")
-        try:
-            await dependencies_service.remove_dependency(db, tctx, user, edge.dependency_id)
-        except HTTPException as exc:
-            raise _refusal(exc) from exc
+        await dependencies_service.remove_dependency(db, tctx, user, edge.dependency_id)
     return f"[{tctx.task.id}] {tctx.task.title} is no longer waiting on [{other}]."
 
 
-@mcp.tool()
+@tool()
 async def add_checklist(
     ctx: Context,
     organisation_id: str,
@@ -1201,28 +1258,23 @@ async def add_checklist(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-            checklist = await checklists_service.add_checklist(db, tctx.task, title=title)
-            added = [
-                # A blank line in a pasted list is not an item, and the
-                # service would 422 on it — losing every item after it as
-                # well as the blank one.
-                await checklists_service.add_item(db, checklist, text=text)
-                for text in (items or [])
-                if text.strip()
-            ]
-        except HTTPException as exc:
-            raise _refusal(exc) from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        checklist = await checklists_service.add_checklist(db, tctx.task, title=title)
+        added = [
+            # A blank line in a pasted list is not an item, and the service
+            # would 422 on it — losing every item after it as well as the
+            # blank one.
+            await checklists_service.add_item(db, checklist, text=text)
+            for text in (items or [])
+            if text.strip()
+        ]
         await tasks_service.announce(db, tctx.task, "checklist_added")
     lines = [f"Added checklist {checklist.title!r} [{checklist.id}] to {tctx.task.title}."]
     lines += [f"  [ ] {item.text}  [{item.id}]" for item in added]
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def add_checklist_item(
     ctx: Context,
     organisation_id: str,
@@ -1239,25 +1291,20 @@ async def add_checklist_item(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
         try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-            # Scoped to this task, so a checklist id belonging to another one
-            # is a 404 rather than a cross-task write.
-            checklist = await checklists_service.get_checklist_or_404(
-                db, tctx.task.id, uuid.UUID(checklist_id)
-            )
-            item = await checklists_service.add_item(db, checklist, text=text)
-        except HTTPException as exc:
-            raise _refusal(exc) from exc
+            wanted = uuid.UUID(checklist_id)
         except ValueError as exc:
             raise Denied("That is not a checklist id.") from exc
+        # Scoped to this task, so a checklist id belonging to another one is a
+        # 404 rather than a cross-task write.
+        checklist = await checklists_service.get_checklist_or_404(db, tctx.task.id, wanted)
+        item = await checklists_service.add_item(db, checklist, text=text)
         await tasks_service.announce(db, tctx.task, "checklist_item_added")
     return f"Added to {checklist.title!r}: [ ] {item.text}  [{item.id}]"
 
 
-@mcp.tool()
+@tool()
 async def check_item(
     ctx: Context,
     organisation_id: str,
@@ -1284,24 +1331,16 @@ async def check_item(
             wanted = uuid.UUID(item_id)
         except ValueError as exc:
             raise Denied("That is not a checklist item id.") from exc
-        try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-            # `for_task` eager-loads items, so this walk touches no lazy
-            # relationship — see `checklists.get_checklist_or_404`'s own
-            # docstring for what happens when one does.
-            checklists = await checklists_service.for_task(db, tctx.task.id)
-            found = next(
-                ((c, i) for c in checklists for i in c.items if i.id == wanted),
-                None,
-            )
-            if found is None:
-                raise Denied("No checklist item with that id on this task.")
-            checklist, item = found
-            item = await checklists_service.update_item(db, item, fields={"done": done})
-        except HTTPException as exc:
-            raise _refusal(exc) from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        # `for_task` eager-loads items, so this walk touches no lazy
+        # relationship — see `checklists.get_checklist_or_404`'s own docstring
+        # for what happens when one does.
+        checklists = await checklists_service.for_task(db, tctx.task.id)
+        found = next(((c, i) for c in checklists for i in c.items if i.id == wanted), None)
+        if found is None:
+            raise Denied("No checklist item with that id on this task.")
+        checklist, item = found
+        item = await checklists_service.update_item(db, item, fields={"done": done})
         await tasks_service.announce(db, tctx.task, "checklist_item_toggled")
         outstanding = sum(1 for i in checklist.items if i.done_at is None)
     return (
@@ -1310,7 +1349,7 @@ async def check_item(
     )
 
 
-@mcp.tool()
+@tool()
 async def attach_file(
     ctx: Context,
     organisation_id: str,
@@ -1355,14 +1394,7 @@ async def attach_file(
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        try:
-            tctx.require(
-                tasks_service.can_edit(tctx.level), "you have read-only access to this task"
-            )
-        except HTTPException as exc:
-            # Otherwise the one sentence saying why arrives as the bare
-            # string "Error executing tool …" — see `_refusal`.
-            raise _refusal(exc) from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
 
         attachment, _upload_url = await attachments_service.create(
             db, user, filename=filename, content_type=content_type, task=tctx.task
@@ -1380,7 +1412,7 @@ async def attach_file(
     )
 
 
-@mcp.tool()
+@tool()
 async def create_book(
     ctx: Context,
     organisation_id: str,
@@ -1400,7 +1432,7 @@ async def create_book(
     return f"Created [{bctx.book.id}] {bctx.book.name}"
 
 
-@mcp.tool()
+@tool()
 async def create_article(
     ctx: Context,
     organisation_id: str,
@@ -1425,7 +1457,7 @@ async def create_article(
     )
 
 
-@mcp.tool()
+@tool()
 async def edit_article(
     ctx: Context,
     organisation_id: str,
@@ -1472,7 +1504,7 @@ async def edit_article(
     return f"Saved [{actx.article.id}] {saved.title or 'Untitled'}"
 
 
-@mcp.tool()
+@tool()
 async def publish_article(ctx: Context, organisation_id: str, article_id: str) -> str:
     """Publish an article — the only thing that makes it visible to anyone
     the book is shared with. Owner-only, the same `can_hide`-shaped rule a
@@ -1489,7 +1521,7 @@ async def publish_article(ctx: Context, organisation_id: str, article_id: str) -
     return f"Published [{actx.article.id}]"
 
 
-@mcp.tool()
+@tool()
 async def unpublish_article(ctx: Context, organisation_id: str, article_id: str) -> str:
     """Make a published article a private draft again — back to only you.
     Owner-only."""
@@ -1505,7 +1537,7 @@ async def unpublish_article(ctx: Context, organisation_id: str, article_id: str)
     return f"Made [{actx.article.id}] private again"
 
 
-@mcp.tool()
+@tool()
 async def attach_article_file(
     ctx: Context,
     organisation_id: str,
@@ -1561,7 +1593,7 @@ async def attach_article_file(
     )
 
 
-@mcp.tool()
+@tool()
 async def create_reminder(
     ctx: Context,
     organisation_id: str,
@@ -1598,7 +1630,7 @@ async def create_reminder(
     return f"Reminder set: {row.title} for {row.remind_on}"
 
 
-@mcp.tool()
+@tool()
 async def update_reminder(
     ctx: Context,
     reminder_id: str,
@@ -1635,7 +1667,7 @@ async def update_reminder(
     return f"Updated reminder: {what} for {updated.remind_on}"
 
 
-@mcp.tool()
+@tool()
 async def changelog(
     ctx: Context,
     organisation_id: str,
@@ -1676,7 +1708,7 @@ async def changelog(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 async def record_change(
     ctx: Context,
     organisation_id: str,
@@ -1725,7 +1757,7 @@ async def record_change(
     return f"Recorded [{entry.id}] {entry.happened_on}: {' '.join(entry.description.split())[:160]}"
 
 
-@mcp.tool()
+@tool()
 async def create_spark(
     ctx: Context,
     body: Annotated[str, Field(description="One field. A thought, a link, a note to self.")],
@@ -1756,7 +1788,7 @@ async def create_spark(
     return f"Saved [{row.id}] {row.body.splitlines()[0][:120]}"
 
 
-@mcp.tool()
+@tool()
 async def start_timer(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Start timing this task, as you. Starting stops whatever timer you
     already had running elsewhere — switching tasks is the normal case, not
@@ -1776,7 +1808,7 @@ async def start_timer(ctx: Context, organisation_id: str, task_id: str) -> str:
     return line
 
 
-@mcp.tool()
+@tool()
 async def running_timer(ctx: Context) -> str:
     """What you are timing right now, in any organisation, or nothing.
 
@@ -1811,7 +1843,7 @@ async def running_timer(ctx: Context) -> str:
     return " | ".join(bits)
 
 
-@mcp.tool()
+@tool()
 async def stop_timer(ctx: Context) -> str:
     """Stop whatever timer is currently running, in any organisation.
     Idempotent — nothing running is not an error."""
@@ -1822,7 +1854,7 @@ async def stop_timer(ctx: Context) -> str:
     return f"Stopped timer on [{entry.task_id}]" if entry else "Nothing was running."
 
 
-@mcp.tool()
+@tool()
 async def log_time(
     ctx: Context,
     organisation_id: str,
@@ -1859,32 +1891,23 @@ def _require_write(principal: _Principal) -> None:
 
 
 async def _member_by_email(db, org, email: str | None) -> uuid.UUID | None:
-    """Resolve a colleague's email to their id, refusing outsiders.
+    """A person by the address somebody said out loud, or a refusal naming it.
+
+    Only people who have actually joined: an outstanding invitation is not a
+    member, so offering one would be offering a choice every write tool then
+    turns down.
 
     Deliberately not "invite them if they're missing": an assistant quietly
     adding people to an organisation is not a thing anybody asked for.
     """
     if not email:
         return None
-    from sqlalchemy import select
-
-    from app.models import OrganisationMember
-    from app.models.organisation import STATUS_ACTIVE
-
-    row = (
-        await db.execute(
-            select(User.id)
-            .join(OrganisationMember, OrganisationMember.user_id == User.id)
-            .where(
-                User.email == email.strip().lower(),
-                OrganisationMember.organisation_id == org.organisation.id,
-                OrganisationMember.status == STATUS_ACTIVE,
-            )
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        raise Denied(f"{email} is not a member of that organisation.")
-    return row
+    found = await organisations_service.active_member_id_by_email(
+        db, org.organisation.id, email
+    )
+    if found is None:
+        raise Denied(f"{email} is not a member of this organisation.")
+    return found
 
 
 __all__ = ["mcp"]

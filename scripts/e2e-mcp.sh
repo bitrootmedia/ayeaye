@@ -499,6 +499,44 @@ BOGUSARGS=$(args organisation_id=$OID task_id=$TID tag=NoSuchTag)
 BOGUS=$(tool "$WRITE" untag_task "$BOGUSARGS")
 ok "untagging a name that was never applied is refused" "$(echo "$BOGUS" | j "d['result']['isError']")" "True"
 
+echo "== closing, and the refusal a non-owner has to be able to read"
+# `close_task`/`reopen_task` shipped with no assertions at all. The refusal
+# is the half that matters: `set_open` answers 403 rather than 404 on
+# purpose — a non-owner can *see* the task, so pretending it does not exist
+# would be the wrong lie — and that sentence only reaches a client because
+# every tool now goes through `@tool()`, which converts a service's
+# HTTPException into a `ToolError`. Without it the caller is told
+# "Error executing tool close_task" and nothing else.
+CLOSEME=$(post /tmp/ma.jar $B/api/organisations/$OID/tasks "{\"title\":\"Haul out the boat $S\"}" | j "d['id']")
+CLOSEARGS=$(args organisation_id=$OID task_id=$CLOSEME)
+ok "the owner closes it"              "$(tool "$WRITE" close_task "$CLOSEARGS" | text | grep -c "Closed")" "1"
+ok "…and it really is closed"         "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$CLOSEME | j "d['is_open']")" "False"
+# Status and open/closed are two fields: closing is not a transition to a
+# 'done' status, and the status it was in survives.
+ok "…with its status untouched"       "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$CLOSEME | j "d['status']")" "todo"
+ok "the owner reopens it"             "$(tool "$WRITE" reopen_task "$CLOSEARGS" | text | grep -c "Reopened")" "1"
+ok "…and it is open again"            "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$CLOSEME | j "d['is_open']")" "True"
+# A colleague who can see the task but does not own it. Granting write on
+# the task is the point: editing it is allowed, closing it is not, which is
+# the whole distinction `can_close` draws and the one a bare "you can't do
+# that" would hide.
+CLOSE_GRANT="{\"user_id\":\"$MEMBER_ID\",\"level\":\"write\"}"
+post /tmp/ma.jar $B/api/organisations/$OID/tasks/$CLOSEME/access "$CLOSE_GRANT" >/dev/null
+NONOWNER=$(tool "$MEMWRITE" close_task "$CLOSEARGS" | text)
+ok "a non-owner with write cannot close" "$(echo "$NONOWNER" | grep -ci 'owner')" "1"
+ok "…and is told why, not just that"     "$(echo "$NONOWNER" | grep -vc 'Error executing tool close_task$')" "1"
+ok "…and the task is still open"         "$(curl -s -b /tmp/ma.jar $B/api/organisations/$OID/tasks/$CLOSEME | j "d['is_open']")" "True"
+ok "…while they really can edit it"      "$(tool "$MEMWRITE" update_task "$(args organisation_id=$OID task_id=$CLOSEME priority=high)" | text | grep -c 'Updated')" "1"
+# A stranger gets 404-shaped, not 403: they cannot see it at all.
+ok "a stranger sees no such task"        "$(tool "$BOBTOK" close_task "$CLOSEARGS" | text | grep -ci 'no such')" "1"
+
+echo "== a refusal keeps the sentence that says what to do"
+# The rule `tests/test_mcp_tools.py` pins structurally, proved here through
+# the real transport for the tools most likely to be handed bad input.
+ok "a bad status names the real ones"  "$(tool "$WRITE" update_task "$(args organisation_id=$OID task_id=$TID status=nearly)" | text | grep -c 'status must be one of')" "1"
+ok "a bad priority names the real ones" "$(tool "$WRITE" update_task "$(args organisation_id=$OID task_id=$TID priority=enormous)" | text | grep -c 'priority must be one of')" "1"
+ok "an unknown person is named"        "$(tool "$WRITE" update_task "$(args organisation_id=$OID task_id=$TID owner_email=nobody@example.com)" | text | grep -c 'not a member')" "1"
+
 echo "== the notification inbox"
 # The count the menu bar badge is drawn from. Not organisation-scoped, on
 # purpose — it is the same number the bell in the web app shows.

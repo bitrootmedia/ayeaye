@@ -230,6 +230,36 @@ async def list_for_user(db: AsyncSession, user: User) -> list[tuple[Organisation
     return [(org, role) for org, role in rows]
 
 
+async def active_member_id_by_email(
+    db: AsyncSession, org_id: uuid.UUID, email: str
+) -> uuid.UUID | None:
+    """The user id behind an email address, if they have actually joined.
+
+    Returns None for a stranger, for somebody with an outstanding invitation,
+    and for a disabled membership — all three are "not a member" as far as
+    anything that wants to hand them work is concerned, and an invitation in
+    particular would otherwise let a caller assign a task to somebody who
+    cannot yet see it.
+
+    Lives here rather than in its one caller (`app/mcp/server.py`, which
+    names people by email because that is what a person says out loud)
+    because "is this address an active member" is a membership question, and
+    that module is not allowed to write its own queries — see its docstring's
+    one rule, and `tests/test_mcp_tools.py`.
+    """
+    return (
+        await db.execute(
+            select(User.id)
+            .join(OrganisationMember, OrganisationMember.user_id == User.id)
+            .where(
+                User.email == email.strip().lower(),
+                OrganisationMember.organisation_id == org_id,
+                OrganisationMember.status == STATUS_ACTIVE,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def list_members(
     db: AsyncSession, org_id: uuid.UUID
 ) -> list[tuple[OrganisationMember, User | None, User | None]]:

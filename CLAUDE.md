@@ -1878,6 +1878,68 @@ UUID), so "that comment is too long" and "priority must be one of …" reach
 the caller who can act on them.
 
 
+**Every tool is registered with `@tool()`, never a bare `@mcp.tool()`, and a
+test fails the build if one appears.** `_refusing` converts an escaping
+`HTTPException` into a `Denied`; doing that per tool worked and was
+forgettable, which is not a character flaw but a design one — the five tools
+that had it were the five somebody had happened to touch, and the other
+thirty-six silently discarded the sentence that says what to do. `close_task`
+was the worst of them: `set_open` answers **403 rather than 404** precisely so
+a non-owner is told they can see the task but may not close it, and that whole
+distinction arrived as `Error executing tool close_task`.
+
+- **It only ever sees what a tool did not handle.** A reader's deliberate
+  "No such task, or you can't see it" — which must not confirm that a task
+  exists — still wins, because its own `except` runs inside this one. So no
+  existing handler needed changing, and eight hand-written `except
+  HTTPException` blocks could come *out*. The two that remain
+  (`create_task`, `comment`) are the two that also hand an idempotency key
+  back.
+- **Deliberately not the SDK's middleware chain**, which would need no
+  per-tool decoration at all: it is documented as expected to change before
+  v2 is final, and the tool layer converts an exception before middleware
+  would see it. `tests/test_mcp_tools.py` is the cheaper, version-proof
+  version of the same guarantee.
+
+**`tests/test_mcp_tools.py` also pins the module's one rule, and immediately
+caught it being broken.** The docstring has always said "there is
+deliberately not a single `select()` in it"; there was one —
+`_member_by_email` had grown its own join against `organisation_members`, a
+second answer to "is this address an active member". It now lives in
+`organisations.active_member_id_by_email`. The test is an **AST walk, not a
+grep**, because both obvious false positives are real: the module's own
+docstring argues about `select()` at length, and `_caller` does a
+`db.get(User, …)` — a primary-key fetch of the caller's own row, with no
+WHERE clause to get an access rule wrong in.
+
+**The line is *building* a statement, not executing one.** `my_reminders`
+runs `reminders_service.mine_stmt(...)`, exactly as the routers do; the
+access rule is the service's. What must not happen in this module is the
+WHERE clause being written here.
+
+**What an agent may do on its own is stated in the descriptions, because
+there is nowhere else to put it.** The field report that prompted all of
+this noted the author wouldn't have moved a status, set a due date or closed
+anything unasked — and that *their own judgement* was the only thing
+enforcing it, so a different model would draw the line elsewhere. A
+propose/accept tier is the heavyweight answer (every mutation grows a
+proposal path, a review surface and a notification kind); this codebase
+already has evidence the cheap one works, since `planner_bucket`'s
+description does exactly this job and was singled out as the best-written
+one on the surface.
+
+So the server `instructions` carry the principle once — *recording is yours,
+deciding is theirs*: comments, checklist items, dependencies, time and notes
+describe what you found and can be written freely; closing a task, moving
+its status, or putting it on a named person's plate are statements a
+colleague acts on. `update_task` names the three fields that qualify
+(`status`, `owner_email`, `action_required_email`) and explicitly places
+`title`/`description`/`priority`/`due_on`/`project_id` in between, and
+`close_task` says to comment instead when a task merely *looks* finished.
+**Nothing enforces any of it, and the text says so** — pretending otherwise
+would be the worse failure, since a client can ignore every word.
+
+
 Four things cost real time here, all of them non-obvious:
 
 - **There are two classes called `Context` in the SDK.** The tool decorator
