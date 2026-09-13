@@ -17,6 +17,10 @@
 # organisation — three claims that are each one missing line away from being
 # false, and none of which a unit test can see.
 #
+# One section here closes registration for the whole installation and opens
+# it again at the end — it is installation-wide state, not this run's, so
+# don't run this suite alongside another one that signs accounts up.
+#
 # Creates real accounts and leaves them behind. Dev stacks only.
 set -u
 B=http://localhost
@@ -29,6 +33,10 @@ signup(){ curl -s -c "$1" -o /dev/null -H 'Content-Type: application/json' -H 'r
   -d "{\"formFields\":[{\"id\":\"email\",\"value\":\"$2\"},{\"id\":\"password\",\"value\":\"Testpass123\"}]}"; }
 signin_status(){ curl -s -H 'Content-Type: application/json' -H 'rid: emailpassword' \
   -H 'st-auth-mode: cookie' -X POST $B/api/auth/signin \
+  -d "{\"formFields\":[{\"id\":\"email\",\"value\":\"$1\"},{\"id\":\"password\",\"value\":\"Testpass123\"}]}" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))"; }
+signup_status(){ curl -s -H 'Content-Type: application/json' -H 'rid: emailpassword' \
+  -H 'st-auth-mode: cookie' -X POST $B/api/auth/signup \
   -d "{\"formFields\":[{\"id\":\"email\",\"value\":\"$1\"},{\"id\":\"password\",\"value\":\"Testpass123\"}]}" \
   | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))"; }
 code(){ curl -s -o /dev/null -w '%{http_code}' "$@"; }
@@ -154,6 +162,40 @@ SELF=$(curl -s -b /tmp/inst-b.jar $B/api/me | j "d['id']")
 SUSPEND_SELF='{"suspended":true}'
 ok "you can't suspend yourself"   "$(code -b /tmp/inst-b.jar -X POST -H 'Content-Type: application/json' -d "$SUSPEND_SELF" $B/api/instance/users/$SELF/suspended)" "400"
 ok "…and are still an admin"      "$(code -b /tmp/inst-b.jar $B/api/instance/overview)"         "200"
+
+echo "the front door: the headline, and whether registration is open"
+# Reading these is public, because the landing page is rendered for somebody
+# with no session at all. Writing is the panel's.
+ok "readable with no session"     "$(code $B/api/public/settings)"                             "200"
+ok "open by default"              "$(curl -s $B/api/public/settings | j "d['signups_enabled']")" "True"
+ok "and no headline set"          "$(curl -s $B/api/public/settings | j "d['landing_headline'] is None")" "True"
+HEADLINE="{\"landing_headline\":\"Acme, internally $S\"}"
+ok "an admin can set one"         "$(code -b /tmp/inst-b.jar -X PUT -H 'Content-Type: application/json' -d "$HEADLINE" $B/api/instance/settings)" "200"
+ok "…and the front door says it"  "$(curl -s $B/api/public/settings | j "d['landing_headline']")" "Acme, internally $S"
+# Blank clears it rather than storing "". There is deliberately no state
+# where the landing page has no heading at all — see models/instance_settings.py.
+BLANK='{"landing_headline":"   "}'
+curl -s -o /dev/null -b /tmp/inst-b.jar -X PUT -H 'Content-Type: application/json' -d "$BLANK" $B/api/instance/settings
+ok "blank clears it to the default" "$(curl -s $B/api/public/settings | j "d['landing_headline'] is None")" "True"
+# The same 404 the rest of this surface gives: writing the front door is not
+# a wider door into the panel.
+ok "a plain account cannot write" "$(code -b /tmp/inst-a2.jar -X PUT -H 'Content-Type: application/json' -d "$HEADLINE" $B/api/instance/settings)" "404"
+
+echo "closing registration, without shutting out the people you invited"
+./scripts/instance.sh close-signups >/dev/null 2>&1
+ok "the front door says closed"   "$(curl -s $B/api/public/settings | j "d['signups_enabled']")" "False"
+STRANGER=inst-str$S@example.com
+ok "a stranger is refused"        "$(signup_status $STRANGER)"                     "SIGN_UP_NOT_ALLOWED"
+ok "…and no account was made"     "$(signin_status $STRANGER)"                        "WRONG_CREDENTIALS_ERROR"
+# The whole point of being able to close it: an invitation still works. The
+# address is what gets through, so this is a real tightening of the invite
+# link's usual "whoever holds the token joins" — see signup_allowed_for.
+INVITED=inst-inv$S@example.com
+post /tmp/inst-a2.jar $B/api/organisations/$OID/invites "{\"email\":\"$INVITED\",\"role\":\"member\"}" >/dev/null
+ok "an invited address gets in"   "$(signup_status $INVITED)"                                   "OK"
+./scripts/instance.sh open-signups >/dev/null 2>&1
+ok "reopening lets strangers in"  "$(signup_status $STRANGER)"                                  "OK"
+ok "the CLI agrees with the panel" "$(./scripts/instance.sh settings | grep -c 'registration    open')" "1"
 
 echo "revoking takes the panel away on the next request"
 ./scripts/instance.sh revoke-admin "$BB" >/dev/null 2>&1

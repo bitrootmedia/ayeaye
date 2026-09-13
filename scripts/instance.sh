@@ -13,6 +13,11 @@
 #   ./scripts/instance.sh grant-admin <email|id> [--note "..."]
 #   ./scripts/instance.sh revoke-admin <email|id>
 #
+#   ./scripts/instance.sh settings
+#   ./scripts/instance.sh headline "Acme, internally"     # or with no argument to clear
+#   ./scripts/instance.sh open-signups
+#   ./scripts/instance.sh close-signups
+#
 # There is a screen for this now — /instance in the web app, for anybody
 # holding an instance_admins row — and this shell tool is the other front
 # door onto the same code. What stayed shell-only is the part that matters:
@@ -28,6 +33,13 @@
 #
 # Metadata only. Counts, dates and names — never a task title, a comment, a
 # private note or a file. See services/instance.py for why.
+
+# The front door — the landing page's headline and whether a stranger may
+# create an account — is the one thing here that changes what somebody who
+# isn't signed in sees. Both are also in the panel; `close-signups` does not
+# shut out people who were invited by name, which is the point of being able
+# to close it at all. The switch is enforced in security/authn.py, not by the
+# buttons the landing page hides.
 #
 # `suspend` blocks sign-in and revokes every live session. `suspend-org`
 # locks an organisation for everybody in it. Both are non-destructive and

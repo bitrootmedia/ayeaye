@@ -237,6 +237,36 @@ async def _set_admin(args: argparse.Namespace, *, grant: bool) -> None:
             )
 
 
+async def _settings() -> None:
+    async with SessionLocal() as db:
+        row = await instance_service.settings(db)
+    headline = row.landing_headline or "— (the product's own name)"
+    print(f"  headline        {headline}")
+    print(f"  registration    {'open' if row.signups_enabled else 'invitation only'}")
+    if not row.signups_enabled:
+        print("                  invited addresses can still create an account")
+
+
+async def _set_headline(args: argparse.Namespace) -> None:
+    async with SessionLocal() as db:
+        row = await instance_service.update_settings(db, landing_headline=args.text)
+    print(
+        f"the landing page now says {row.landing_headline!r}"
+        if row.landing_headline
+        else "the landing page is back to the product's own name"
+    )
+
+
+async def _set_signups(args: argparse.Namespace, *, enabled: bool) -> None:
+    async with SessionLocal() as db:
+        await instance_service.update_settings(db, signups_enabled=enabled)
+    if enabled:
+        print("registration is open — anybody can create an account")
+    else:
+        print("registration is closed — only invited addresses can create an account")
+        print("invite people from People inside an organisation; the link still works")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="instance", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -272,6 +302,19 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("revoke-admin", help="take the instance panel away")
     p.add_argument("who", help="email address or user id")
 
+    sub.add_parser("settings", help="the front door: headline, and whether signup is open")
+
+    p = sub.add_parser("headline", help="what the landing page says above the buttons")
+    p.add_argument(
+        "text",
+        nargs="?",
+        default="",
+        help="leave it out to clear it, back to the product's own name",
+    )
+
+    sub.add_parser("open-signups", help="let anybody create an account")
+    sub.add_parser("close-signups", help="invitation only — an invited address still can")
+
     args = parser.parse_args(argv)
     if args.command == "stats":
         asyncio.run(_stats())
@@ -287,6 +330,14 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_suspend_org(args, suspended=True))
     elif args.command == "restore-org":
         asyncio.run(_suspend_org(args, suspended=False))
+    elif args.command == "settings":
+        asyncio.run(_settings())
+    elif args.command == "headline":
+        asyncio.run(_set_headline(args))
+    elif args.command == "open-signups":
+        asyncio.run(_set_signups(args, enabled=True))
+    elif args.command == "close-signups":
+        asyncio.run(_set_signups(args, enabled=False))
     elif args.command == "admins":
         asyncio.run(_admins())
     elif args.command == "grant-admin":

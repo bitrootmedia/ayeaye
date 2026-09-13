@@ -17,7 +17,10 @@ from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConf
 from supertokens_python.recipe import emailpassword, emailverification, session
 from supertokens_python.recipe.emailpassword import InputFormField, InputSignUpFeature
 from supertokens_python.recipe.emailpassword.constants import FORM_FIELD_PASSWORD_ID
-from supertokens_python.recipe.emailpassword.interfaces import SignInPostNotAllowedResponse
+from supertokens_python.recipe.emailpassword.interfaces import (
+    SignInPostNotAllowedResponse,
+    SignUpPostNotAllowedResponse,
+)
 from supertokens_python.recipe.session import SessionContainer
 from supertokens_python.recipe.session.claim_base_classes.boolean_claim import BooleanClaim
 from supertokens_python.recipe.session.framework.fastapi import verify_session
@@ -195,6 +198,30 @@ def _override_emailpassword_apis(original):
         api_options,
         user_context,
     ):
+        """Refuse if registration is closed and nobody invited this address.
+
+        The operator's switch lives in `instance_settings`, and
+        `services/instance.py::signup_allowed_for` is the one place the rule
+        is written — an invitation already waiting for the address gets
+        through a closed door, because otherwise closing it would close it on
+        the very people who were let in by name.
+
+        Checked *before* the account is created rather than cleaned up
+        afterwards, and shaped like `sign_in_post`'s suspension refusal
+        directly below: a typed `NotAllowed` response carrying a sentence the
+        person can act on, rather than a generic failure they will read as a
+        bug and email about. The landing page hides its Create account
+        buttons when the door is shut, but that is a courtesy — this is the
+        gate, and a POST straight at `/api/auth/signup` meets it too.
+        """
+        email = next((f.value for f in form_fields if f.id == "email"), None)
+        if email and not await _signup_is_allowed(email):
+            return SignUpPostNotAllowedResponse(
+                reason=(
+                    "This installation is invitation only. "
+                    "Ask an administrator to invite you, then follow the link they send."
+                )
+            )
         response = await original_sign_up_post(
             form_fields,
             tenant_id,
@@ -283,6 +310,34 @@ def _override_emailpassword_apis(original):
     original.sign_up_post = sign_up_post
     original.sign_in_post = sign_in_post
     return original
+
+
+async def _signup_is_allowed(email: str) -> bool:
+    """One boolean, its own short-lived session — the same shape as
+    `_account_is_suspended` below, and for the same reasons: imported inside
+    the function because `app.db` pulls in the engine while `main.py` is
+    still assembling the app, and never raising.
+
+    **The safe direction here is the opposite one.** A database hiccup makes
+    the suspension check let a sign-in proceed, because locking the whole
+    instance out would be worse than one suspended account slipping through
+    to a `CurrentUser` that refuses it anyway. There is no such second line
+    of defence for registration, so a failure here falls back to *open* only
+    because that is the default state of an installation and refusing every
+    sign-up on a transient error would look exactly like the product being
+    broken. The rule this protects is an operator's preference, not a
+    security boundary — a closed door keeps strangers out of a list of
+    organisation names they still cannot see the contents of.
+    """
+    from app.db import SessionLocal
+    from app.services import instance as instance_service
+
+    try:
+        async with SessionLocal() as db:
+            return await instance_service.signup_allowed_for(db, email)
+    except Exception:
+        logger.warning("could not check whether signups are open", exc_info=True)
+        return True
 
 
 async def _account_is_suspended(email: str) -> bool:

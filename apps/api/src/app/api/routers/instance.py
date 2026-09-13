@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentInstanceAdmin, DbSession
 from app.models import Organisation, User
+from app.models.instance_settings import MAX_HEADLINE
 from app.services import instance as instance_service
 
 router = APIRouter(prefix="/instance", tags=["instance"])
@@ -85,6 +86,24 @@ class InstanceOrganisationOut(BaseModel):
     tasks: int
     suspended_at: datetime | None
     suspended_reason: str | None
+
+
+class SettingsOut(BaseModel):
+    landing_headline: str | None
+    signups_enabled: bool
+
+
+class SettingsIn(BaseModel):
+    """Both optional, and the two `None`s mean different things.
+
+    Omitting `signups_enabled` leaves it alone. Sending `landing_headline`
+    as `null` — or as blank — *clears* it, which is how an operator asks for
+    the product's own name back; there is deliberately no way to store an
+    empty heading. The service is where that is decided, not here.
+    """
+
+    landing_headline: str | None = Field(default=None, max_length=MAX_HEADLINE)
+    signups_enabled: bool | None = None
 
 
 class SuspendIn(BaseModel):
@@ -255,4 +274,37 @@ async def set_organisation_suspended(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no such organisation")
     await instance_service.set_organisation_suspended(
         db, organisation, suspended=body.suspended, reason=body.reason
+    )
+
+
+@router.put("/settings", response_model=SettingsOut)
+async def update_settings(body: SettingsIn, _: CurrentInstanceAdmin, db: DbSession):
+    """The front door: what the landing page says, and whether a stranger may
+    create an account.
+
+    **Reading these is public** — `GET /api/public/settings`, because the
+    landing page is reached with no session at all. Only writing is an
+    operator's, and the panel reads the public route rather than this module
+    growing a `GET` that returns the identical two fields; a second route
+    with the same answer is a second thing to keep in step.
+
+    **This is the only route on this surface that changes what somebody who
+    is not signed in sees**, which is worth noticing next to the three rules
+    at the top of this module. It stays within them: it appoints nobody,
+    reads nobody's content, and closing registration takes no access away
+    from anyone who already has an account. The gate it moves is enforced in
+    `security/authn.py`, not by the buttons the frontend hides.
+
+    Unlike the two suspension routes this returns a body: the settings *are*
+    the whole answer, so there is no richer list row the caller would rather
+    have, and echoing what was stored is what lets the panel show a cleared
+    headline falling back to the default.
+    """
+    row = await instance_service.update_settings(
+        db,
+        landing_headline=body.landing_headline,
+        signups_enabled=body.signups_enabled,
+    )
+    return SettingsOut(
+        landing_headline=row.landing_headline, signups_enabled=row.signups_enabled
     )

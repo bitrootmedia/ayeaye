@@ -22,6 +22,7 @@ from app.api.routers import (
     organisations,
     personal_notes,
     planner,
+    public,
     reminders,
     sparks,
     structure,
@@ -121,6 +122,11 @@ api_router.include_router(invites.router)
 # Data exports — a ZIP built in the worker, one directory per task. Every
 # read filters on the requester; see services/exports.py.
 api_router.include_router(exports.router)
+
+# The front door's own two facts — the headline and whether registration is
+# open — for the landing page, which is reached by people with no session at
+# all. The only unauthenticated route here besides the invite preview.
+api_router.include_router(public.router)
 
 # The instance operator's panel — who is on this installation, and stopping
 # abuse. Not organisation-scoped and not a role: an `instance_admins` row,

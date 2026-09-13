@@ -1,4 +1,10 @@
-import { BuildingIcon, ServerCogIcon, ShieldCheckIcon, UsersIcon } from "lucide-react";
+import {
+  BuildingIcon,
+  DoorOpenIcon,
+  ServerCogIcon,
+  ShieldCheckIcon,
+  UsersIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 
@@ -7,7 +13,7 @@ import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -21,9 +27,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { useToastManager } from "@/components/ui/toast";
+import { BRAND } from "@/lib/brand";
 import { ago } from "@/lib/format";
 import { lastView, rememberView } from "@/lib/view-preference";
-import type { InstanceOrganisation, InstanceTotals, InstanceUser } from "@/lib/types";
+import type {
+  InstanceOrganisation,
+  InstanceSettings,
+  InstanceTotals,
+  InstanceUser,
+} from "@/lib/types";
 
 const PAGE = 50;
 
@@ -104,6 +116,8 @@ export default function Instance() {
 
       {totals && <Overview totals={totals} />}
 
+      <FrontDoor />
+
       <div className="flex gap-2">
         <Button
           size="sm"
@@ -178,6 +192,130 @@ function Overview({ totals }: { totals: InstanceTotals }) {
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * The front door: what the landing page says, and whether a stranger may
+ * create an account.
+ *
+ * **The one control on this screen that changes what somebody who isn't
+ * signed in sees.** It stays inside the panel's three rules all the same: it
+ * appoints nobody, reads nobody's content, and closing registration takes no
+ * access away from anybody who already has an account.
+ *
+ * Reading is the *public* route, not an `/instance` one — the landing page
+ * is rendered with no session at all, so there is already an endpoint
+ * answering exactly this, and a second one returning the same two fields
+ * would be a second thing to keep in step. Writing is the panel's.
+ *
+ * The heading is saved on an explicit press rather than debounced as you
+ * type: this is the first thing every visitor to the installation reads, and
+ * autosaving half a sentence onto the front door is not a thing to do on
+ * somebody's behalf.
+ */
+function FrontDoor() {
+  const toast = useToastManager();
+  const [settings, setSettings] = useState<InstanceSettings | null>(null);
+  const [headline, setHeadline] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void api<InstanceSettings>("/public/settings")
+      .then((value) => {
+        setSettings(value);
+        setHeadline(value.landing_headline ?? "");
+      })
+      .catch(() => setSettings(null));
+  }, []);
+
+  const save = async (body: Partial<InstanceSettings>) => {
+    setSaving(true);
+    try {
+      const next = await api<InstanceSettings>("/instance/settings", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      setSettings(next);
+      // From the answer, not from the draft: blank is stored as NULL, so
+      // echoing what the server kept is what shows the default coming back
+      // rather than leaving an empty box that looks unsaved.
+      setHeadline(next.landing_headline ?? "");
+      return next;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <DoorOpenIcon className="size-4" />
+          Front door
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="space-y-2">
+          <Label htmlFor="landing-headline">Landing page heading</Label>
+          <div className="flex gap-2">
+            <Input
+              id="landing-headline"
+              value={headline}
+              maxLength={120}
+              placeholder={BRAND.name}
+              onChange={(e) => setHeadline(e.target.value)}
+            />
+            <Button
+              variant="outline"
+              disabled={saving || headline === (settings.landing_headline ?? "")}
+              onClick={async () => {
+                const next = await save({ landing_headline: headline });
+                toast.add({
+                  title: next.landing_headline
+                    ? "The landing page heading was changed"
+                    : "The landing page is back to the default heading",
+                });
+              }}
+            >
+              Save
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            What people see above the buttons at <code className="font-mono">/</code>. Leave it
+            empty for {BRAND.name}.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={settings.signups_enabled}
+              disabled={saving}
+              onChange={async (e) => {
+                const open = e.target.checked;
+                await save({ signups_enabled: open });
+                toast.add({
+                  title: open
+                    ? "Anybody can create an account"
+                    : "This installation is now invitation only",
+                });
+              }}
+            />
+            Let anybody create an account
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Turn this off and the Create account buttons disappear from the front page, and the
+            server refuses a sign-up from an address nobody has invited. People you invite by
+            email can still create their account and join &mdash; that is what stops closing
+            the door shutting out the people you let in.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

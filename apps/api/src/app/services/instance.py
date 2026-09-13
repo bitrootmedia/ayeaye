@@ -63,13 +63,15 @@ looked for is people generating volume.
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     InstanceAdmin,
+    InstanceSettings,
     LoginEvent,
     Message,
     Organisation,
@@ -79,9 +81,14 @@ from app.models import (
     TimeEntry,
     User,
 )
-from app.models.organisation import STATUS_ACTIVE
+from app.models.instance_settings import MAX_HEADLINE
+from app.models.organisation import STATUS_ACTIVE, STATUS_INVITED
 
 logger = logging.getLogger("app.services.instance")
+
+#: "not given", so `update_settings` can tell "leave the headline alone"
+#: from "clear it" — None is a real value here, meaning the default.
+_UNSET: str = object()  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -534,7 +541,99 @@ async def revoke_admin(db: AsyncSession, user: User) -> bool:
     return bool(result.rowcount)
 
 
+# --- the front door ---------------------------------------------------------
+
+
+async def settings(db: AsyncSession) -> InstanceSettings:
+    """The installation's own settings, creating the single row on first read.
+
+    Create-on-read rather than seeded by a migration: a migration would have
+    to invent the defaults a second time, and the day one of them changes
+    there would be two answers — the column default and whatever was written
+    into every existing installation. Here the row is written from the column
+    defaults themselves, so there is exactly one.
+
+    The race is real (two first requests arriving together) and handled by
+    the database: `uq_instance_settings_singleton` makes the second INSERT
+    fail, and the retry reads the row the first one committed. A `try` around
+    the insert rather than a lock, because this is read on every visit to the
+    landing page and a lock there would be a lock on the front door.
+    """
+    row = (await db.execute(select(InstanceSettings).limit(1))).scalar_one_or_none()
+    if row is not None:
+        return row
+    try:
+        row = InstanceSettings()
+        db.add(row)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        row = (await db.execute(select(InstanceSettings).limit(1))).scalar_one()
+        return row
+    await db.refresh(row)
+    return row
+
+
+async def update_settings(
+    db: AsyncSession,
+    *,
+    landing_headline: str | None = _UNSET,
+    signups_enabled: bool | None = None,
+) -> InstanceSettings:
+    """Change what the operator decided. Only the arguments given are touched.
+
+    An empty or whitespace-only headline stores NULL, not `""` — clearing the
+    field is how an operator asks for the product's own name back, and a
+    stored empty string would render a landing page with no heading at all.
+    """
+    row = await settings(db)
+    if landing_headline is not _UNSET:
+        cleaned = (landing_headline or "").strip()
+        row.landing_headline = cleaned[:MAX_HEADLINE] or None
+    if signups_enabled is not None:
+        row.signups_enabled = signups_enabled
+    row.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def signup_allowed_for(db: AsyncSession, email: str) -> bool:
+    """Whether this address may create an account. **The one place that rule
+    is written down**, called by `security/authn.py`'s `sign_up_post`
+    override — the frontend hiding a button is a courtesy, never the gate.
+
+    Open installation: always yes. Closed: yes only where an invitation is
+    already waiting for that address, because otherwise closing the door
+    would close it on the people the operator explicitly let in — an invited
+    stranger has no account yet, so "sign up" is the only route they have.
+
+    **The consequence worth knowing.** An invite *link* is normally bearer
+    authority — `services/invites.py` says so plainly: whoever holds the
+    token joins, regardless of the address it was addressed to. With signups
+    closed that stops being true for somebody who has no account yet, since
+    they must get past this check first and it matches on the address. That
+    is a tightening rather than a bug: an operator who closes registration is
+    asking for exactly "only the people I named", and somebody who already
+    has an account still joins by link the old way.
+    """
+    row = await settings(db)
+    if row.signups_enabled:
+        return True
+    return bool(
+        (
+            await db.execute(
+                select(OrganisationMember.id).where(
+                    OrganisationMember.status == STATUS_INVITED,
+                    func.lower(OrganisationMember.invited_email) == email.strip().lower(),
+                )
+            )
+        ).first()
+    )
+
+
 __all__ = [
+    "MAX_HEADLINE",
     "OrganisationRow",
     "Totals",
     "UserRow",

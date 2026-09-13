@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # The product name, in one place on this side. The frontend twin of this is
     # apps/web/src/lib/brand.ts.
-    brand_name: str = "ayeayecaptain"
+    brand_name: str = "AyeAyeCaptain"
 
     # --- where we are ------------------------------------------------------
     # ONE origin for everything: the SPA, the API, the auth routes and object

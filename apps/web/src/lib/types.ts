@@ -949,6 +949,17 @@ export type Bookmark = {
  * this on the web at all.
  * ------------------------------------------------------------------------ */
 
+/** The front door, as the operator set it. Read publicly by the landing page
+ *  (`GET /api/public/settings`, no session — a stranger is who renders it);
+ *  written from the panel and from `scripts/instance.sh`. */
+export type InstanceSettings = {
+  /** NULL when nothing was set, which is deliberately not the same as "" —
+   *  clearing the field is how an operator asks for the product's own name
+   *  back, and there is no state where the landing page has no heading. */
+  landing_headline: string | null;
+  signups_enabled: boolean;
+};
+
 export type InstanceTotals = {
   users: number;
   disabled_users: number;

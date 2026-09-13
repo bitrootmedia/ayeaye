@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Static HTML, read before any JS runs, so it can't come from brand.ts.
          One of the two places outside that file carrying the product name. -->
-    <title>ayeayecaptain</title>
+    <title>AyeAyeCaptain</title>
+    <!-- The wordmark's own tile. SVG rather than a .ico: it is the same
+         drawing the app renders rather than a second, rasterised copy of it
+         that quietly stops matching. `public/` is copied verbatim into the
+         build, so this is one file and no pipeline. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
     <div id="root"></div>

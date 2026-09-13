@@ -12,6 +12,7 @@ from app.models.conversation import (
 from app.models.export import Export
 from app.models.idempotency import IdempotencyKey
 from app.models.instance_admin import InstanceAdmin
+from app.models.instance_settings import InstanceSettings
 from app.models.knowledge_base import Article, ArticleRevision, Book, BookMember
 from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
@@ -59,6 +60,7 @@ __all__ = [
     "Export",
     "IdempotencyKey",
     "InstanceAdmin",
+    "InstanceSettings",
     "LoginEvent",
     "MfaBackupCode",
     "MfaTotpDevice",

@@ -1,6 +1,7 @@
 import {
   BellIcon,
   BookmarkIcon,
+  BotIcon,
   CalendarDaysIcon,
   CalendarIcon,
   CircleDotIcon,
@@ -48,6 +49,7 @@ const SECTIONS: Section[] = [
   { id: "security", title: "Two-factor authentication", icon: ShieldCheckIcon },
   { id: "export", title: "Taking your data out", icon: PackageIcon },
   { id: "api", title: "Your own assistant, and the API", icon: KeyRoundIcon },
+  { id: "agent-queue", title: "Handing work to an assistant", icon: BotIcon },
   { id: "shortcuts", title: "Keyboard shortcuts", icon: CommandIcon },
   { id: "admin", title: "Running this installation", icon: ServerCogIcon },
 ];
@@ -247,6 +249,18 @@ export default function Help() {
               other. Drag a task into a bucket, or do it by keyboard. It&rsquo;s personal:
               putting a task in your Today doesn&rsquo;t move it for anyone else.
             </p>
+            <p>
+              An organisation <strong>admin</strong> can pick another member at the top of
+              this screen and arrange <em>their</em> board — which is how you queue a day&rsquo;s
+              work for somebody, in the order you want it done. It never widens what they can
+              see: a task they don&rsquo;t have access to can&rsquo;t be put on their board,
+              and one they lose access to drops off it. That same override is how you hand a
+              list of work to an assistant — see{" "}
+              <a href="#agent-queue" className="underline underline-offset-2">
+                Handing work to an assistant
+              </a>
+              .
+            </p>
           </Section>
 
           <Section id="calendar" title="Calendar & reminders">
@@ -397,6 +411,63 @@ export default function Help() {
             </p>
           </Section>
 
+          <Section id="agent-queue" title="Handing work to an assistant">
+            <p>
+              An assistant can work through a list of tasks on its own, in an order you set,
+              commenting on each as it goes — rather than being told what to do one
+              conversation at a time. There&rsquo;s no separate queue to set up:{" "}
+              <strong>an assistant&rsquo;s planner is its queue</strong>, and you fill it the
+              same way you&rsquo;d arrange anyone&rsquo;s.
+            </p>
+            <p>
+              <strong>Give the assistant its own account.</strong> Sign it up like a person
+              (a{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                you+claude@…
+              </code>{" "}
+              address is fine), invite it from <strong>People</strong>, and open the invite
+              link while signed in as it. Then, still as it, make a <strong>read/write</strong>{" "}
+              token under Account → Access tokens and give that to the assistant. Its own
+              account is what makes its comments say who wrote them, keeps its plate separate
+              from yours, and lets you take its access away in one click without touching
+              your own.
+            </p>
+            <p>
+              <strong>Queue the work.</strong> Create the tasks, then go to{" "}
+              <strong>Planner</strong>, choose the assistant at the top of the screen, and drag
+              the tasks into its buckets — Today first, in the order you want them done.
+              Position is the order; nothing else is. Setting{" "}
+              <strong>Action required</strong> to the assistant on each task is worth doing
+              too: it&rsquo;s what lets the assistant open a task you haven&rsquo;t shared any
+              other way, and it&rsquo;s what tells you the work is back when it clears.
+            </p>
+            <p>
+              <strong>What it does with them.</strong> It asks for the top of its board, works
+              the task, writes what it found in the comments, takes it off its own board and
+              hands it back to you — usually by moving the status to <strong>Review</strong>{" "}
+              and putting Action required back on you, which lands in your inbox. It
+              won&rsquo;t close anything: closing is the owner&rsquo;s call, and an assistant
+              that thinks something is finished is expected to say so in a comment and let you
+              press the button.
+            </p>
+            <p>
+              You can queue for <strong>more than one</strong> assistant — each gets its own
+              account, its own token and its own board, and they never see each other&rsquo;s.
+              What isn&rsquo;t defended against is two sessions sharing <em>one</em> account
+              and board: nothing stops them both starting the same task, so give each one its
+              own account.
+            </p>
+            <p className="text-muted-foreground">
+              An assistant reads its queue with the{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">next_task</code>{" "}
+              and{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">my_planner</code>{" "}
+              tools, and clears finished work with{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">unplan_task</code>.
+              Nothing needs configuring for those — connecting the token is the whole setup.
+            </p>
+          </Section>
+
           <Section id="shortcuts" title="Keyboard shortcuts">
             <ul className="list-disc space-y-1 pl-5">
               <li>
@@ -424,6 +495,16 @@ export default function Help() {
               organisation. It doesn&rsquo;t appear for anybody else.
             </p>
             <p>
+              <strong>The front page is yours.</strong> Under <strong>Front door</strong> in
+              that panel, the heading people see at{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">/</code> is
+              whatever you type &mdash; leave it empty and it&rsquo;s the product&rsquo;s own
+              name. The same card closes registration: the Create account buttons disappear
+              from the front page and the server turns away a sign-up from an address nobody
+              has invited. People you invite by email can still create their account and join,
+              so closing the door doesn&rsquo;t shut out the people you let in.
+            </p>
+            <p>
               <strong>Being handed that panel is done from a shell, never from the panel
               itself.</strong> That&rsquo;s deliberate: a screen that could appoint its own
               successors would turn one stolen session into a permanent one. The same
@@ -441,7 +522,10 @@ export default function Help() {
 ./scripts/instance.sh suspend someone@example.com --reason "why"
 ./scripts/instance.sh restore someone@example.com
 ./scripts/instance.sh suspend-org their-slug --reason "why"
-./scripts/instance.sh restore-org their-slug`}
+./scripts/instance.sh restore-org their-slug
+
+./scripts/instance.sh headline "Ops, at Acme"   # or no argument, to clear it
+./scripts/instance.sh close-signups             # and open-signups`}
             </pre>
             <p>
               Suspending an account blocks sign-in and ends any session already open.

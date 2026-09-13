@@ -431,7 +431,25 @@ a command too, for when a terminal is easier to reach than a browser:
 ./scripts/instance.sh restore them@example.com
 ./scripts/instance.sh suspend-org their-slug --reason "spam"
 ./scripts/instance.sh restore-org their-slug
+
+./scripts/instance.sh settings                # the front door, as it stands
+./scripts/instance.sh headline "Ops, at Acme" # or with no argument, to clear it
+./scripts/instance.sh open-signups
+./scripts/instance.sh close-signups
 ```
+
+**The front page is yours.** The heading above the buttons at `/` is whatever
+you set — leave it empty and it is the product's own name. There is no
+tagline, no feature list and no pitch baked into the build, because this is
+your installation and not a shop window.
+
+**Closing registration does not shut out the people you invited.** With
+`close-signups`, the Create account buttons disappear from the front page and
+the server refuses a sign-up from an address nobody has invited — but anybody
+you invited by email can still create their account and join, which is what
+makes an invitation-only installation usable rather than a locked door with
+you on the wrong side of it. Both of these are also in the Instance panel,
+under **Front door**.
 
 **Suspending is reversible and deletes nothing.** A suspended *account* can't
 sign in, and any session it has open ends immediately. A suspended
