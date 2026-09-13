@@ -108,6 +108,13 @@ mcp = MCPServer(
         "Open/closed is a separate field: a task can be closed at any status, "
         "and there is no 'done' status. Priorities run critical, urgent, "
         "high, normal, low, very_low.\n\n"
+        "**Your planner is a queue somebody can hand you.** `next_task` "
+        "returns the top of your own planner board in full, `my_planner` "
+        "shows the whole board, and `plan_task`/`unplan_task` move work on "
+        "and off it. Work queued for you arrives by somebody arranging that "
+        "board, so working down it in order — and leaving what you found in "
+        "each task's comments as you go — is the loop those tools are "
+        "for.\n\n"
         "A knowledge-base article is born a private draft that only its "
         "owner can see — `publish_article` is what makes it visible to "
         "anyone the book is shared with.\n\n"
@@ -210,6 +217,22 @@ async def _org(db, user: User, organisation_id: str):
         # 404-not-403 all the way out here too: a refusal must not confirm
         # that an organisation exists.
         raise Denied("No such organisation, or you are not a member of it.") from exc
+
+
+def _as_task_id(task_id: str) -> uuid.UUID:
+    """A task id, or a refusal that doesn't confirm one exists — the same job
+    `_org` does for an organisation id.
+
+    Tools that resolve a task through `context_for` get this for free inside
+    their own `except`; the planner ones address a task by id without reading
+    it first, and a malformed string would otherwise leave the module as a
+    `ValueError` — an *unhandled* exception, which reaches the caller as the
+    bare `Error executing tool …` with nothing to act on. See `Denied`.
+    """
+    try:
+        return uuid.UUID(task_id)
+    except ValueError as exc:
+        raise Denied("No such task, or you can't see it.") from exc
 
 
 async def _project_names(db, org, user: User) -> dict:
@@ -496,6 +519,91 @@ async def search(
     )
 
 
+async def _task_detail(db, org, user: User, tctx) -> str:
+    """One task, rendered in full: what it says, what it is waiting on,
+    its checklists, its files, its comments and its history.
+
+    Split out of the `task` tool so `next_task` can hand back the same
+    thing without a second, drifting copy of it — the top of a planner is
+    the task somebody is about to start, and giving it a thinner answer
+    than an explicit read would be the wrong half to save tokens on.
+    """
+    t = tctx.task
+    events = await tasks_service.list_events(db, t.id)
+    tags = (await tags_service.for_tasks(db, [t.id])).get(t.id, [])
+    depends_on, blocks = await dependencies_service.list_dependencies(db, org, user, t.id)
+    checklists = await checklists_service.for_task(db, t.id)
+    # `create=False`, the default: *reading* a task must not bring a
+    # thread into existence. `conversation` is None until somebody
+    # comments, and both readers below take that.
+    thread = await conversations_service.for_task(db, org, user, t.id)
+    messages = await conversations_service.list_messages(db, thread.conversation)
+    files = await attachments_service.for_task(
+        db, t, thread.conversation.id if thread.conversation else None
+    )
+
+    lines = [
+        f"{t.title}  [{t.id}]",
+        f"status={t.status} priority={t.priority} "
+        f"{'closed' if t.closed_at else 'open'} your access={tctx.level}",
+    ]
+    if t.due_on:
+        lines.append(f"due {t.due_on}")
+    if tags:
+        lines.append("tags: " + ", ".join(tag.name for tag in tags))
+    if t.description:
+        # The stripped column, so the model reads prose rather than markup.
+        lines.append("\n" + (t.description_text or "").strip())
+
+    if depends_on or blocks:
+        lines.append("")
+        lines += [f"waiting on: {_edge_line(e)}" for e in depends_on]
+        lines += [f"blocking: {_edge_line(e)}" for e in blocks]
+
+    for checklist in checklists:
+        done = sum(1 for item in checklist.items if item.done_at)
+        lines.append(
+            f"\nchecklist {checklist.title} "
+            f"[{checklist.id}] — {done}/{len(checklist.items)} done"
+        )
+        lines += [
+            f"  [{'x' if item.done_at else ' '}] {item.text}  [{item.id}]"
+            for item in checklist.items
+        ]
+
+    # A removed comment has had its body cleared by `remove()`, so there
+    # is nothing of the person's own words left to read back — left out
+    # entirely rather than shown as a tombstone, the same call
+    # `conversations.for_tasks` makes for the data export.
+    live = [(m, u) for m, u in messages if m.deleted_at is None]
+    if live:
+        shown = live[-MAX_THREAD:]
+        counted = (
+            f"the last {len(shown)} of {len(live)}"
+            if len(shown) < len(live)
+            else f"{len(live)}"
+        )
+        lines.append(f"\ncomments ({counted}, oldest first):")
+        for message, author in shown:
+            who = author.email if author else "someone since removed"
+            # Attribution, not authorship — see `models/conversation.py`.
+            # Worth reading back so an assistant can tell its own earlier
+            # notes from what a colleague actually typed.
+            via = f" via {message.via}" if message.via else ""
+            edited = " (edited)" if message.edited_at else ""
+            lines.append(f"  {message.created_at:%Y-%m-%d %H:%M} {who}{via}{edited}:")
+            lines += [f"    {line}" for line in message.body.strip().splitlines()]
+
+    if files:
+        lines.append("\nfiles:")
+        lines += [f"  {f.filename} ({f.content_type}, {f.size_bytes} bytes)" for f in files]
+
+    if events:
+        lines.append("\nhistory (oldest first):")
+        lines += [f"  {e.created_at:%Y-%m-%d %H:%M} {e.kind}" for e, _ in events[-20:]]
+    return "\n".join(lines)
+
+
 @tool()
 async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Everything about one task: what it says, what it is waiting on, its
@@ -516,80 +624,120 @@ async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
             tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
-        t = tctx.task
-        events = await tasks_service.list_events(db, t.id)
-        tags = (await tags_service.for_tasks(db, [t.id])).get(t.id, [])
-        depends_on, blocks = await dependencies_service.list_dependencies(db, org, user, t.id)
-        checklists = await checklists_service.for_task(db, t.id)
-        # `create=False`, the default: *reading* a task must not bring a
-        # thread into existence. `conversation` is None until somebody
-        # comments, and both readers below take that.
-        thread = await conversations_service.for_task(db, org, user, t.id)
-        messages = await conversations_service.list_messages(db, thread.conversation)
-        files = await attachments_service.for_task(
-            db, t, thread.conversation.id if thread.conversation else None
+        return await _task_detail(db, org, user, tctx)
+
+
+@tool()
+async def my_planner(
+    ctx: Context,
+    organisation_id: Annotated[str, Field(description="From `organisations`.")],
+) -> str:
+    """Your planner board: what you have planned, in the order you plan to do
+    it — Today, Tomorrow, This week, Next week, Someday, and manual order
+    inside each bucket.
+
+    **Yours alone.** An organisation admin can arrange somebody else's board
+    from the web app, and that is how work gets queued *for* a person; this
+    tool reads only the caller's, because a plan is one person's own week and
+    reading a colleague's over MCP is not something anybody asked for.
+
+    Closed tasks drop out, and so does anything you have since lost access to
+    — the board is filtered on read rather than tidied up on write, so a task
+    that leaves your reach simply stops appearing.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        rows = (
+            await db.execute(
+                planner_service.buckets_stmt(
+                    target_user_id=user.id, org_id=org.organisation.id, org_role=org.role
+                )
+            )
+        ).all()
+        pool = (
+            await db.execute(
+                planner_service.pool_stmt(
+                    target_user_id=user.id, org_id=org.organisation.id, org_role=org.role
+                )
+            )
+        ).all()
+        names = await _project_names(db, org, user)
+
+    planned: dict[str, list] = {}
+    for entry, t in rows:
+        planned.setdefault(entry.bucket, []).append(t)
+    # Walking PLANNER_BUCKETS rather than trusting the rows' own order: the
+    # statement already ranks them, and reading it here too means the answer
+    # cannot be silently re-spelled alphabetically by a future change to it.
+    lines: list[str] = []
+    for bucket in PLANNER_BUCKETS:
+        tasks = planned.get(bucket)
+        if not tasks:
+            continue
+        lines.append(f"{bucket} ({len(tasks)}):")
+        lines += [f"  {_one_line(t, names)}" for t in tasks]
+    if not lines:
+        lines.append("Nothing on your planner.")
+    if pool:
+        # Said out loud because an empty board otherwise reads as an empty
+        # organisation. The pool is every open task you can see and have not
+        # planned — the Planner screen's left-hand tray.
+        lines.append(
+            f"\n{len(pool)} open task(s) you have not planned. "
+            "`list_tasks` shows them; `plan_task` queues one."
         )
-
-        lines = [
-            f"{t.title}  [{t.id}]",
-            f"status={t.status} priority={t.priority} "
-            f"{'closed' if t.closed_at else 'open'} your access={tctx.level}",
-        ]
-        if t.due_on:
-            lines.append(f"due {t.due_on}")
-        if tags:
-            lines.append("tags: " + ", ".join(tag.name for tag in tags))
-        if t.description:
-            # The stripped column, so the model reads prose rather than markup.
-            lines.append("\n" + (t.description_text or "").strip())
-
-        if depends_on or blocks:
-            lines.append("")
-            lines += [f"waiting on: {_edge_line(e)}" for e in depends_on]
-            lines += [f"blocking: {_edge_line(e)}" for e in blocks]
-
-        for checklist in checklists:
-            done = sum(1 for item in checklist.items if item.done_at)
-            lines.append(
-                f"\nchecklist {checklist.title} "
-                f"[{checklist.id}] — {done}/{len(checklist.items)} done"
-            )
-            lines += [
-                f"  [{'x' if item.done_at else ' '}] {item.text}  [{item.id}]"
-                for item in checklist.items
-            ]
-
-        # A removed comment has had its body cleared by `remove()`, so there
-        # is nothing of the person's own words left to read back — left out
-        # entirely rather than shown as a tombstone, the same call
-        # `conversations.for_tasks` makes for the data export.
-        live = [(m, u) for m, u in messages if m.deleted_at is None]
-        if live:
-            shown = live[-MAX_THREAD:]
-            counted = (
-                f"the last {len(shown)} of {len(live)}"
-                if len(shown) < len(live)
-                else f"{len(live)}"
-            )
-            lines.append(f"\ncomments ({counted}, oldest first):")
-            for message, author in shown:
-                who = author.email if author else "someone since removed"
-                # Attribution, not authorship — see `models/conversation.py`.
-                # Worth reading back so an assistant can tell its own earlier
-                # notes from what a colleague actually typed.
-                via = f" via {message.via}" if message.via else ""
-                edited = " (edited)" if message.edited_at else ""
-                lines.append(f"  {message.created_at:%Y-%m-%d %H:%M} {who}{via}{edited}:")
-                lines += [f"    {line}" for line in message.body.strip().splitlines()]
-
-        if files:
-            lines.append("\nfiles:")
-            lines += [f"  {f.filename} ({f.content_type}, {f.size_bytes} bytes)" for f in files]
-
-        if events:
-            lines.append("\nhistory (oldest first):")
-            lines += [f"  {e.created_at:%Y-%m-%d %H:%M} {e.kind}" for e, _ in events[-20:]]
     return "\n".join(lines)
+
+
+@tool()
+async def next_task(
+    ctx: Context,
+    organisation_id: Annotated[str, Field(description="From `organisations`.")],
+) -> str:
+    """The next thing to work on: the top of your own planner, in full —
+    description, checklists, dependencies, files and the comment thread.
+
+    **This is the feed.** Somebody arranges the board — you, or an
+    organisation admin doing it on your behalf — and this hands back the top
+    of it: Today first, then Tomorrow, This week, Next week, Someday, and the
+    manual order inside each. There is no separate queue anywhere in this
+    product, which is the point: a planner entry *is* what queued means here
+    and its position is the order, so the board somebody dragged into shape
+    and what this returns cannot drift apart.
+
+    **It does not step over work already `in_progress`.** A run that stopped
+    halfway leaves exactly that, and reading the thread and carrying on is
+    the honest next move — starting something else strands it. The status is
+    on the second line and the whole thread is below it.
+
+    **Finishing has an order, and it is not the obvious one.** Say what you
+    did in a `comment` first, then `unplan_task` to take it off the board,
+    and hand the work back *last*: moving `action_required_email` away from
+    yourself can be the only thing that was letting you see the task at all,
+    so anything you try after that may find it gone. Closing it is somebody
+    else's decision either way — see `close_task`.
+    """
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        row = (
+            await db.execute(
+                planner_service.next_stmt(
+                    target_user_id=user.id, org_id=org.organisation.id, org_role=org.role
+                )
+            )
+        ).first()
+        if row is None:
+            return (
+                "Nothing on your planner. Somebody queues work by dropping it "
+                "into one of your buckets, or you can plan something yourself "
+                "with `plan_task` — `list_tasks` shows what there is."
+            )
+        entry, found = row
+        tctx = await tasks_service.context_for(db, org, found.id, user)
+        detail = await _task_detail(db, org, user, tctx)
+    return f"Next on your planner ({entry.bucket}):\n\n{detail}"
 
 
 @tool()
@@ -1054,6 +1202,70 @@ async def reopen_task(ctx: Context, organisation_id: str, task_id: str) -> str:
             raise Denied("No such task, or you can't see it.") from exc
         task = await tasks_service.set_open(db, tctx, org, user, closed=False)
     return f"Reopened [{task.id}] {task.title}"
+
+
+@tool()
+async def plan_task(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    bucket: Annotated[str, Field(description=f"One of: {', '.join(PLANNER_BUCKETS)}.")],
+) -> str:
+    """Put a task on your own planner board, or move it between buckets.
+    Appended to the end of the bucket it lands in.
+
+    **Your board, never a colleague's** — the same rule as `planner_bucket`
+    on `create_task`. A planner is one person's plan for their own week, and
+    putting work onto somebody else's is done deliberately, from the web app,
+    by an organisation admin who meant to.
+
+    Planning something changes nothing about the task and notifies nobody: it
+    is you saying when you intend to get to it, which is why it asks no
+    permission from the owner beyond being able to see the task at all.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    # Checked before the org is even resolved, for the same reason
+    # `create_task` checks it before writing anything: a guessed bucket name
+    # should cost a refusal and nothing else.
+    if bucket not in PLANNER_BUCKETS:
+        raise Denied(f"{bucket!r} is not a planner bucket. One of: {', '.join(PLANNER_BUCKETS)}.")
+    tid = _as_task_id(task_id)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        entry, planned = await planner_service.place(
+            db,
+            target_user_id=user.id,
+            target_org_role=org.role,
+            org_id=org.organisation.id,
+            task_id=tid,
+            bucket=bucket,
+        )
+    return f"Planned [{planned.id}] {planned.title} — {entry.bucket}"
+
+
+@tool()
+async def unplan_task(ctx: Context, organisation_id: str, task_id: str) -> str:
+    """Take a task off your own planner, back to the pool. The task itself is
+    untouched — this is how finished work leaves the feed without anybody
+    pretending it is closed, which is a separate decision and the owner's.
+
+    Idempotent: unplanning something that was never planned is a quiet
+    success rather than an error. And it deliberately needs no access to the
+    task — handing work back can take away the one route you had into it, and
+    being unable to clear your own board afterwards would leave the queue
+    stuck on a task you can no longer read.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    tid = _as_task_id(task_id)
+    async with SessionLocal() as db:
+        # Membership, not task access: this only ever deletes the caller's own
+        # row, but a stranger should still be told "no such organisation"
+        # rather than handed a cheerful success.
+        await _org(db, user, organisation_id)
+        await planner_service.remove(db, target_user_id=user.id, task_id=tid)
+    return "Off your planner."
 
 
 @tool()

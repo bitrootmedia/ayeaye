@@ -38,6 +38,15 @@ BUCKET_NEXT_WEEK = "next_week"
 BUCKET_SOMEDAY = "someday"
 BUCKETS = (BUCKET_TODAY, BUCKET_TOMORROW, BUCKET_THIS_WEEK, BUCKET_NEXT_WEEK, BUCKET_SOMEDAY)
 
+# The only place that order is written down, exactly as STATUS_RANK and
+# PRIORITY_RANK are in models/task.py. `bucket` is a plain string column, so
+# anything ordering by it directly gets next_week, someday, this_week, today,
+# tomorrow — alphabetical, and silently the wrong answer for a board whose
+# whole meaning is decreasing urgency. The Planner screen never noticed
+# because it re-buckets the rows into a dict keyed by BUCKETS; a caller that
+# reads them in order (services/planner.py::next_stmt) would.
+BUCKET_RANK = {name: i for i, name in enumerate(BUCKETS)}
+
 
 class PlannerEntry(Base):
     __tablename__ = "planner_entries"

@@ -29,12 +29,13 @@ import uuid
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import Select, exists, func, select
+from sqlalchemy import Select, case, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OrganisationMember, PlannerEntry, Task, User
 from app.models.organisation import STATUS_ACTIVE
+from app.models.planner import BUCKET_RANK
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -125,8 +126,35 @@ def buckets_stmt(*, target_user_id: uuid.UUID, org_id: uuid.UUID, org_role: str)
             Task.closed_at.is_(None),
             Task.id.in_(visible),
         )
-        .order_by(PlannerEntry.bucket, PlannerEntry.position, PlannerEntry.id)
+        # `BUCKET_RANK`, never the column: `bucket` is a string, and ordering
+        # by it spells the buckets alphabetically instead of ranking them by
+        # urgency. The same `case(RANK, value=column)` shape `access.py` uses
+        # for status and priority, and for the same reason.
+        .order_by(
+            case(BUCKET_RANK, value=PlannerEntry.bucket),
+            PlannerEntry.position,
+            PlannerEntry.id,
+        )
     )
+
+
+def next_stmt(*, target_user_id: uuid.UUID, org_id: uuid.UUID, org_role: str) -> Select:
+    """The top of somebody's planner: one row, or none.
+
+    `buckets_stmt` bounded to one, which is the whole implementation — the
+    order it already resolves (Today first, then manual position inside the
+    bucket) *is* "what to do next", and a second definition of that here is
+    a second answer that can disagree with the board somebody arranged.
+
+    **Nothing is skipped, including a task already `in_progress`.** A queue
+    that steps over what it has already started is a queue that starts the
+    same work twice and strands the first attempt half-done; the caller is
+    told the status and can read the thread to pick it back up. There is no
+    lease and no claim — running two workers off one person's planner is
+    not something this defends against, and the honest place to say so is
+    here rather than in a lock that only half works.
+    """
+    return buckets_stmt(target_user_id=target_user_id, org_id=org_id, org_role=org_role).limit(1)
 
 
 # --- writes ------------------------------------------------------------------
