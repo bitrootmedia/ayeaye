@@ -1,5 +1,5 @@
 import { InboxIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useOutletContext, useParams } from "react-router-dom";
 
 import { api, apiWithHeaders } from "@/api";
@@ -26,7 +26,7 @@ import {
   TASK_PRIORITIES,
   canEdit,
   personName,
-  type Member,
+  type Person,
   type Task,
   type TaskPriority,
 } from "@/lib/types";
@@ -64,7 +64,13 @@ export default function Triage() {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [total, setTotal] = useState(0);
   const [limit, setLimit] = useState(PAGE);
-  const [members, setMembers] = useState<Member[]>([]);
+  // Who each row can be handed to, keyed by task id and fetched the moment
+  // its picker opens. Deliberately not the organisation's roster: asking
+  // somebody to act on a task they can't open is a nudge they can do nothing
+  // with, and the queue's rows are a mixture of projects and loose tasks, so
+  // there is no one answer for the screen — only one per row. Absent means
+  // "not fetched yet", which is why the picker says so while it loads.
+  const [candidates, setCandidates] = useState<Record<string, PickerItem[]>>({});
   // Which row is mid-save. Keyed by task id rather than a single boolean:
   // assigning one task must not freeze the picker on every other row.
   const [saving, setSaving] = useState<string | null>(null);
@@ -82,25 +88,39 @@ export default function Triage() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    if (!orgId) return;
-    void api<Member[]>(`/organisations/${orgId}/members`).then(setMembers);
-  }, [orgId]);
-
-  // The email is the hint line, and it's searched as well as shown — two
-  // people called Jan is the ordinary case, not the edge one. Same shape as
-  // the task screen's own picker, deliberately: one control that behaves the
-  // same wherever you meet it.
-  const people: PickerItem[] = useMemo(
-    () =>
-      members
-        .filter((m) => m.status === "active" && m.user_id)
-        .map((m) => ({
-          value: m.user_id!,
-          label: m.display_name || m.email || "Unknown",
-          hint: m.display_name ? (m.email ?? undefined) : undefined,
-        })),
-    [members],
+  /**
+   * One request, when a picker opens. Fetched per open rather than once per
+   * row on load: a hundred rows would be a hundred requests for lists nobody
+   * looked at, and refetching an already-loaded one costs a request at the
+   * exact moment the answer matters — somebody was just shared in while the
+   * queue sat on screen.
+   *
+   * The email is the hint line, and it's searched as well as shown — two
+   * people called Jan is the ordinary case, not the edge one. Same shape as
+   * the task screen's own picker, deliberately: one control that behaves the
+   * same wherever you meet it.
+   */
+  const loadCandidates = useCallback(
+    (taskId: string) => {
+      if (!orgId) return;
+      void api<Person[]>(`/organisations/${orgId}/tasks/${taskId}/mentionable`)
+        .then((found) =>
+          setCandidates((current) => ({
+            ...current,
+            [taskId]: found.map((p) => ({
+              value: p.id,
+              label: p.display_name || p.email || "Unknown",
+              hint: p.display_name ? (p.email ?? undefined) : undefined,
+            })),
+          })),
+        )
+        // An empty list rather than a stuck "Loading…": nobody to ask is the
+        // honest reading of "we don't know who". In practice the genuine
+        // empty case can't happen — you can see the row, so you're in your
+        // own answer — which is why the message points at sharing.
+        .catch(() => setCandidates((current) => ({ ...current, [taskId]: [] })));
+    },
+    [orgId],
   );
 
   /**
@@ -151,7 +171,7 @@ export default function Triage() {
         method: "PATCH",
         body: JSON.stringify({ action_required_user_id: userId }),
       });
-      const name = people.find((p) => p.value === userId)?.label ?? "them";
+      const name = candidates[task.id]?.find((p) => p.value === userId)?.label ?? "them";
       // Gone from the queue, not greyed out in it — see the component note.
       setTasks((current) => (current ?? []).filter((t) => t.id !== task.id));
       setTotal((n) => Math.max(0, n - 1));
@@ -252,11 +272,17 @@ export default function Triage() {
                       {canEdit(task.access) ? (
                         <EntityPicker
                           ariaLabel={`Action required for ${task.title}`}
-                          items={people}
+                          items={candidates[task.id] ?? []}
                           value={null}
                           onChange={(v) => void assign(task, v)}
+                          onOpen={() => loadCandidates(task.id)}
                           placeholder="Nobody"
                           searchPlaceholder="Find a person…"
+                          emptyMessage={
+                            candidates[task.id]
+                              ? "Nobody to ask yet — share the task first."
+                              : "Loading…"
+                          }
                           disabled={saving === task.id}
                         />
                       ) : (

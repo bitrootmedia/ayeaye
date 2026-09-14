@@ -1457,6 +1457,15 @@ async def task_mentionable(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUse
     people with teams expanded: a different question about the same rule. See
     `services/mentions.py`.
 
+    **The action-required pickers read this too** — the task screen's field,
+    the comment composer's switch, and each row in Triage. Same question:
+    asking somebody to act on a task they can't open is a nudge they can do
+    nothing with, exactly as mentioning them would be. The name stayed
+    `mentionable` rather than growing a second route with the same body.
+    Note this constrains only what a *person is offered*: `PATCH /tasks/{id}`
+    still accepts any member, because being named carries its own access
+    (`access.effective_task_level`) and an integration relies on it.
+
     `read` is enough to fetch it, the same bar as commenting at all — naming a
     colleague is a contribution, not a change to the work.
     """

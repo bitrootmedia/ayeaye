@@ -1,6 +1,13 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-import { createOrg, createTask, inviteMember, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createProject,
+  createTask,
+  inviteMember,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * Triage: open tasks nobody has been asked to act on.
@@ -39,8 +46,17 @@ test.describe("Triage", () => {
     const link = await inviteMember(page, orgId, mateEmail);
     await acceptInvite(await otherPerson(browser, mateEmail), link);
 
-    await createTask(page, orgId, "Order new warps");
-    await createTask(page, orgId, "Book the lift-out");
+    // The work lives in a project they can see. Each row's picker offers
+    // only the people who can see *that* task, so a queue of loose tasks
+    // could only ever be handed back to the person already looking at it.
+    await createProject(page, orgId, "Winter refit");
+    await page.getByLabel("Share with").click();
+    await page.getByRole("option", { name: mateEmail }).click();
+    await page.getByRole("button", { name: "Share" }).click();
+    await expect(page.getByText(`Shared with ${mateEmail}`)).toBeVisible();
+
+    await createTask(page, orgId, "Order new warps", "Winter refit");
+    await createTask(page, orgId, "Book the lift-out", "Winter refit");
 
     await page.goto(`/orgs/${orgId}/triage`);
     await expect(page.getByRole("link", { name: "Order new warps" })).toBeVisible();

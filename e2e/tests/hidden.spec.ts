@@ -115,6 +115,13 @@ test.describe("a hidden task", () => {
 
     await createTask(page, orgId, "Needs Bob");
     await openTask(page, orgId, "Needs Bob");
+    // Shared with him first: the action-required picker only offers people
+    // who can already see the task.
+    await page.getByLabel("Share with").click();
+    await page.getByRole("option", { name: bob }).click();
+    await page.getByRole("button", { name: "Share" }).click();
+    await expect(page.getByText(`Shared with ${bob}`)).toBeVisible();
+
     await page.getByRole("button", { name: "Action required", exact: true }).click();
     await page.getByRole("option", { name: bob }).click();
     await expect(page.getByRole("heading", { name: /notified/ })).toBeVisible();

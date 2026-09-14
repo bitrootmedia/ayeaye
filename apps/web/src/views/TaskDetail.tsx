@@ -69,6 +69,7 @@ import {
   canEdit,
   personName,
   type Member,
+  type Person,
   type PlannerBucket,
   type Project,
   type Task,
@@ -119,6 +120,11 @@ export default function TaskDetail() {
   const [accessInfo, setAccessInfo] = useState<TaskAccess | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  // Everyone who can already see this task, teams expanded — the same list
+  // the comment composer resolves @-mentions against, and for the same
+  // reason: asking somebody to act on a task is a notification about work
+  // they have to be able to open.
+  const [viewers, setViewers] = useState<Person[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [gone, setGone] = useState(false);
@@ -186,18 +192,23 @@ export default function TaskDetail() {
     try {
       const t = await api<Task>(`/organisations/${orgId}/tasks/${taskId}`);
       setTask(t);
-      const [acc, evs, ms, ps, tms] = await Promise.all([
+      const [acc, evs, ms, ps, tms, vs] = await Promise.all([
         api<TaskAccess>(`/organisations/${orgId}/tasks/${taskId}/access`),
         api<TaskEvent[]>(`/organisations/${orgId}/tasks/${taskId}/events`),
         api<Member[]>(`/organisations/${orgId}/members`),
         api<Project[]>(`/organisations/${orgId}/projects`),
         api<Team[]>(`/organisations/${orgId}/teams`),
+        api<Person[]>(`/organisations/${orgId}/tasks/${taskId}/mentionable`),
       ]);
       setAccessInfo(acc);
       setEvents(evs);
       setMembers(ms);
       setProjects(ps);
       setTeams(tms);
+      // Refetched by the same `load()` as everything else, so sharing the
+      // task — or its project — puts the new person in the picker without a
+      // reload, and revoking takes them out of it.
+      setViewers(vs);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setGone(true);
     }
@@ -339,13 +350,26 @@ export default function TaskDetail() {
 
   // The email is the hint line, and it's searched as well as shown — two
   // people called Jan is the ordinary case, not the edge one.
+  const asItem = (p: { id: string; display_name: string | null; email: string | null }) => ({
+    value: p.id,
+    label: p.display_name || p.email || "Unknown",
+    hint: p.display_name ? (p.email ?? undefined) : undefined,
+  });
+
+  // The organisation's roster. Owner is chosen from this: handing a task to
+  // a colleague is how it *becomes* theirs, and `owner` is a route in by
+  // itself, so the list can't be the people who can already see it without
+  // making "give this to somebody new" impossible.
   const people: PickerItem[] = members
     .filter((m) => m.status === "active" && m.user_id)
-    .map((m) => ({
-      value: m.user_id!,
-      label: m.display_name || m.email || "Unknown",
-      hint: m.display_name ? (m.email ?? undefined) : undefined,
-    }));
+    .map((m) => asItem({ id: m.user_id!, display_name: m.display_name, email: m.email }));
+
+  // Action-required is the other way round: it says "this is waiting on
+  // you", and offering somebody who can't open the task is offering a nudge
+  // they can't act on. So the list is exactly who can see *this* task —
+  // never the roster. Sharing it with them first is the way to widen it,
+  // and the Who-can-see-this card right below is where that happens.
+  const viewerItems: PickerItem[] = viewers.map(asItem);
 
   // Held in a variable for the same reason `commentThread` is: it now
   // renders in whichever column the thread ended up in, and that is decided
@@ -390,7 +414,7 @@ export default function TaskDetail() {
       // Write access to switch it, same bar as the sidebar's own Action
       // required field — a read-only viewer can still comment, just not
       // reassign the task while doing it.
-      actionRequiredCandidates={editable ? people : undefined}
+      canAssignActionRequired={editable}
     />
   );
 
@@ -696,11 +720,11 @@ export default function TaskDetail() {
               </Field>
               <Field
                 label="Action required"
-                help="At most one person, notified the moment you set it. Clearing it is not a close."
+                help="At most one person, and only somebody who can already see this task — share it with them first to widen the list. Notified the moment you set it; clearing it is not a close."
               >
                 <EntityPicker
                   ariaLabel="Action required"
-                  items={people}
+                  items={viewerItems}
                   value={task.action_required?.id ?? null}
                   disabled={!editable}
                   placeholder="Nobody"

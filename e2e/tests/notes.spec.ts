@@ -46,9 +46,16 @@ test.describe("private notes", () => {
     const them = await otherPerson(browser, bob);
     await acceptInvite(them, link);
 
-    // Alice owns it and asks Bob to act, which is how he can open it at all.
+    // Alice owns it, shares the one task with Bob — which is how he can open
+    // it at all, and what puts him in the action-required picker — and then
+    // asks him to act.
     await createTask(page, orgId, "Shared work");
     await openTask(page, orgId, "Shared work");
+    await page.getByLabel("Share with").click();
+    await page.getByRole("option", { name: bob }).click();
+    await page.getByRole("button", { name: "Share" }).click();
+    await expect(page.getByText(`Shared with ${bob}`)).toBeVisible();
+
     await page.getByRole("button", { name: "Action required", exact: true }).click();
     await page.getByRole("option", { name: bob }).click();
     await expect(page.getByRole("heading", { name: /notified/ })).toBeVisible();

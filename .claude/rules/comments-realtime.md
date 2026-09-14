@@ -40,10 +40,18 @@ trap wearing the shape of a feature. `comment_on_task` runs
 makes, so the transition-only notify rule and the `task_events` row are the
 same code, not a second implementation of them) **before** it posts the
 comment, deliberately: if a read-only commenter somehow reaches this — the
-UI's own gate is `people.length > 1` on write access, but the server does not
+UI's own gate is write access plus more than one candidate, but the server does not
 trust that — the whole request 403s and nothing posts, rather than leaving a
 comment that claims a reassignment its own request body couldn't make good
 on.
+
+**The composer's switch lists `mentionable`, the same people it resolves
+@-names against.** Two questions with one answer — you can only ask somebody
+to act on a task they can open, which is the identical bar naming them in the
+thread has — so `CommentThread` takes a boolean `canAssignActionRequired`
+(write access, decided by the caller) and builds the picker out of the list
+it has already fetched, rather than being handed candidates. See `tasks.md`
+for why that scoping is the picker's rule and not the API's.
 
 **A comment can say what posted it, without changing whose it is.**
 `messages.via` holds the name of the credential that wrote it — attribution,

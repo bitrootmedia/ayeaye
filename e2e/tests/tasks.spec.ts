@@ -108,8 +108,23 @@ test.describe("only the owner closes", () => {
   });
 });
 
+/** Share the task that's on screen with one person, at the default level.
+ *  The task screen's own access card, not the project's — a loose task has
+ *  no project to share. */
+async function shareThisTask(page: Page, email: string) {
+  await page.getByLabel("Share with").click();
+  await page.getByRole("option", { name: email }).click();
+  await page.getByRole("button", { name: "Share" }).click();
+  await expect(page.getByText(`Shared with ${email}`)).toBeVisible();
+}
+
 test.describe("action required", () => {
-  test("naming someone notifies them and lets them in", async ({ page, browser }) => {
+  test("only offers people who can already see this task", async ({ page, browser }) => {
+    // The picker is the whole rule: "this is waiting on you" said to
+    // somebody who can't open the task is a nudge they can do nothing with.
+    // So the list is who can see *this* task, never the organisation's
+    // roster — and sharing it is how you widen the list, which is the same
+    // card, two inches further down the same column.
     const owner = uniqueEmail("own");
     const helper = uniqueEmail("hlp");
     await signUp(page, owner);
@@ -118,7 +133,7 @@ test.describe("action required", () => {
     const them = await otherPerson(browser, helper);
     await acceptInvite(them, link);
 
-    // A loose task: nothing but the action-required flag can let them in.
+    // A loose task: the helper has no route in at all.
     await createTask(page, orgId, "Check the rigging");
     await openTask(page, orgId, "Check the rigging");
 
@@ -128,11 +143,17 @@ test.describe("action required", () => {
     // Exact: the comment composer also has a "Switch action required with
     // this comment" trigger, and role-name matching is substring by default.
     await page.getByRole("button", { name: "Action required", exact: true }).click();
+    await expect(page.getByRole("option", { name: helper })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await shareThisTask(page, helper);
+
+    // Now they're offered, and naming them still does everything it did:
+    // read becomes write, and they're told.
+    await page.getByRole("button", { name: "Action required", exact: true }).click();
     await page.getByRole("option", { name: helper }).click();
     await expect(page.getByText("They've been notified")).toBeVisible();
 
-    // Being asked to act carries its own access — you cannot ask someone to
-    // act on something they can't open.
     await them.goto(`/orgs/${orgId}/tasks`);
     await expect(them.getByText("Check the rigging")).toBeVisible();
 
@@ -154,6 +175,8 @@ test.describe("action required", () => {
 
     await createTask(page, orgId, "Hoist the sails");
     await openTask(page, orgId, "Hoist the sails");
+    // Shared first: the picker only offers people who can see the task.
+    await shareThisTask(page, helper);
     // Exact: the comment composer also has a "Switch action required with
     // this comment" trigger, and role-name matching is substring by default.
     await page.getByRole("button", { name: "Action required", exact: true }).click();

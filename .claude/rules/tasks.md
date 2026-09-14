@@ -43,6 +43,35 @@ it, so pretending it doesn't exist would be the wrong lie. `can_close` is
 resolved server-side and sent on every task, so the UI hides the button rather
 than showing one that 403s.
 
+**The picker only offers people who can already see the task, and that is a
+UI rule rather than an API one.** `TaskDetail.tsx`'s Action-required field,
+the comment composer's "with this comment" switch and every row in Triage
+all list `GET /tasks/{id}/mentionable` — `services/mentions.py::for_task`,
+"everyone who can see this task, teams expanded" — never the organisation's
+roster. Saying "this is waiting on you" to somebody who can't open the task
+is a nudge they can do nothing with, and it is the same question the mention
+picker two inches below already answers, so it is the same list rather than
+a second one. Widening it is sharing: the Who-can-see-this card is in the
+same column, and `AccessPanel`'s `onChanged={load}` refetches the candidates
+with everything else, so a person shared in appears in the picker without a
+reload.
+
+**The API and MCP are deliberately *not* restricted to match.** Being named
+still carries its own access (`effective_task_level`'s action-required
+route), so `PATCH /tasks/{id}` will still hand a loose task to somebody with
+no other way in — that route is what makes the assignment openable at all,
+and an integration acting on a person's behalf keeps it. What changed is
+only which names a human is offered. The two `e2e-tasks.sh` assertions that
+exercise the permissive path stay exactly as they were; the browser suite
+(`tasks.spec.ts`, "only offers people who can already see this task") is
+what pins the picker, because a picker's contents is precisely the thing an
+HTTP suite cannot see.
+
+**Owner is the exception, and stays the whole roster.** Handing a task to a
+colleague is how it *becomes* theirs, and `owner` is a route in by itself —
+scoping that list to people who can already see it would make "give this to
+somebody new" impossible.
+
 **Action-required notifies on the transition.** `should_notify_action_required`
 is the whole rule: same person again → nothing, clearing → nothing, yourself →
 nothing. Every save resubmits the whole form, so a naive `if incoming: send`
@@ -234,6 +263,15 @@ again on every save. The picker is an ordinary `EntityPicker` (`placeholder`
 **and** nothing else — there is no clearing row, because clearing is what
 every row here already is), absent rather than disabled for a read-only
 viewer, the same "don't show a control that 403s" rule as `can_close`.
+
+**Its candidates are fetched per row, when the picker opens.** The queue
+mixes projects and loose tasks, so "who can be asked" has no one answer for
+the screen — only one per row, and a hundred rows fetched on load would be a
+hundred requests for lists nobody looked at. `EntityPicker` grew an `onOpen`
+for this (and an `emptyMessage`, so a list that is empty because it is still
+loading doesn't claim nothing matches a filter nobody typed); it fires on
+every open rather than the first, which is what makes a person shared in
+while the queue sat on screen appear without a reload.
 
 **Assigning notifies exactly as it does from the task screen**, because it's
 the same `PATCH /tasks/{id}` — `should_notify_action_required` is not

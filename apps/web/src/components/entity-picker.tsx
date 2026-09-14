@@ -53,6 +53,8 @@ export function EntityPicker({
   disabled,
   id,
   ariaLabel,
+  onOpen,
+  emptyMessage,
 }: {
   items: PickerItem[];
   value: string | null;
@@ -64,6 +66,15 @@ export function EntityPicker({
   disabled?: boolean;
   id?: string;
   ariaLabel?: string;
+  /** Fired each time the list opens, for a caller whose items are worth
+   *  fetching only once somebody actually asks for them — a row in a long
+   *  table, say. Called on every open rather than the first: whether the
+   *  answer is still good is the caller's question, not this component's. */
+  onOpen?: () => void;
+  /** What an empty list says. The default assumes emptiness means the filter
+   *  excluded everything, which is wrong when there was nothing to begin
+   *  with — a list still loading, or one legitimately holding nobody. */
+  emptyMessage?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -96,6 +107,7 @@ export function EntityPicker({
         if (next) {
           setQuery("");
           setActive(0);
+          onOpen?.();
         }
       }}
     >
@@ -204,7 +216,9 @@ export function EntityPicker({
               ))}
               {filtered.length === 0 && (
                 <p className="px-2 py-4 text-center text-sm text-muted-foreground">
-                  Nothing matches &ldquo;{query.trim()}&rdquo;.
+                  {query.trim()
+                    ? `Nothing matches “${query.trim()}”.`
+                    : (emptyMessage ?? "Nothing to choose from.")}
                 </p>
               )}
             </div>

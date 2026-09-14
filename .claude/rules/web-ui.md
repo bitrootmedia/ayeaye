@@ -227,6 +227,13 @@ engine" decision at the top of this file) to gate on even if it wanted to.
   (the same primitives `DropdownMenuContent` already uses) — for free, that
   also fixes the picker running off the bottom of the viewport on a short
   screen, which the old version never handled either.
+- **`onOpen` is how a picker whose list is worth fetching lazily gets it.**
+  It fires on every open, not the first — whether an already-loaded answer is
+  still good is the caller's question, not the component's — and Triage uses
+  it to ask, per row, who can be asked to act on *that* task. Its companion
+  `emptyMessage` exists because the empty state used to assume emptiness
+  meant "the filter excluded everything", and rendered `Nothing matches “”.`
+  at a list that was simply still loading.
 - **Base UI's own dismissal replaced two hand-rolled `document` listeners,
   and correctly, not just more concisely.** The picker used to bind its own
   `mousedown` (click-away) and capture-phase `keydown` (Escape, stopped

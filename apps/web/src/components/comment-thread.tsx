@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, api } from "@/api";
-import { EntityPicker, type PickerItem } from "@/components/entity-picker";
+import { EntityPicker } from "@/components/entity-picker";
 import {
   MentionTextarea,
   MentionedText,
@@ -85,7 +85,7 @@ export function CommentThread({
   anchor,
   anchorId,
   onChanged,
-  actionRequiredCandidates,
+  canAssignActionRequired,
 }: {
   orgId: string;
   anchor: "tasks" | "projects";
@@ -93,11 +93,13 @@ export function CommentThread({
   /** Fired when the thread actually moves. A comment can carry a file, and
    *  the task's Files panel shows those — so it has to hear about it. */
   onChanged?: () => void;
-  /** Task threads only — a project has no action-required to switch. Passed
-   *  only when the caller has write access on the task; its presence (and
-   *  needing more than one candidate to be worth offering a switch at all)
-   *  is what decides whether the picker renders, not a prop of its own. */
-  actionRequiredCandidates?: PickerItem[];
+  /** Task threads only — a project has no action-required to switch. Set
+   *  when the caller has write access on the task. Who it can be switched
+   *  *to* isn't passed: it is `mentionable` below, the people who can see
+   *  this task, which this component already fetches for @-mentions. Two
+   *  questions, one answer — you can only ask somebody to act on a task
+   *  they can open, which is the same bar naming them in the thread has. */
+  canAssignActionRequired?: boolean;
 }) {
   const toast = useToastManager();
   const [thread, setThread] = useState<Thread | null>(null);
@@ -457,7 +459,7 @@ export function CommentThread({
             {/* Only worth offering when there's someone to switch to besides
                 the one person who's currently on it — a picker with one
                 option is a control that does nothing. */}
-            {actionRequiredCandidates && actionRequiredCandidates.length > 1 && (
+            {canAssignActionRequired && mentionable.length > 1 && (
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-xs text-muted-foreground">
                   With this comment, action required:
@@ -465,7 +467,11 @@ export function CommentThread({
                 <div className="w-44">
                   <EntityPicker
                     ariaLabel="Switch action required with this comment"
-                    items={actionRequiredCandidates}
+                    items={mentionable.map((p) => ({
+                      value: p.id,
+                      label: p.name,
+                      hint: p.hint,
+                    }))}
                     value={actionRequired || null}
                     placeholder="No change"
                     emptyLabel="No change"

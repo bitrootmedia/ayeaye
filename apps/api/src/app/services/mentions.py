@@ -2,11 +2,14 @@
 
 Two halves, and the first is what makes the second safe.
 
-**Who can be mentioned is exactly who can see the task.** Not the
-organisation's roster: mentioning somebody who can't open the thing would
-either notify them about a task they can't read — a title outside the access
-model, the thing `services/notifications.py` exists to avoid — or silently
-notify nobody, which is worse than no feature at all.
+**Who can be mentioned is exactly who can see the task** — and, because it
+is the same question with the same answer, who the action-required pickers
+offer. Not the organisation's roster: mentioning somebody who can't open the
+thing would either notify them about a task they can't read — a title outside
+the access model, the thing `services/notifications.py` exists to avoid — or
+silently notify nobody, which is worse than no feature at all. Asking them to
+act on it would be the second of those, which is why `for_task` now answers
+both.
 
 That set is computed by applying `access.effective_task_level` — the **Python**
 statement of rule 2, the one `tests/test_access_matrix.py` proves over the
