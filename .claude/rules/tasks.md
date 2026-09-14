@@ -93,6 +93,19 @@ more entry in the closed `NOTIFICATION_KINDS` set (another CHECK-constraint
 migration, following 0019/0028's own pattern), and needed no frontend
 change — `Notifications.tsx` already renders every kind uniformly.
 
+**The dates live in their own Schedule card, directly above Reminders.**
+`due_on`, `estimated_start_on` and `estimated_hours` used to sit at the
+bottom of the Status card, which made Status five questions long and buried
+the due date under two pickers and a planner bucket. They read together —
+by when, from when, for how long — and a reminder is what you set once
+you've answered them, so the card sits immediately above the one that does
+that. `RecurrenceControl` moved with them rather than staying in Status: it
+only renders once the task *has* a due date to anchor the cadence to, so in
+Status it was a control whose precondition had moved two cards away. Status
+keeps the three switches it is actually opened for — where it stands, who
+it's waiting on, how urgent — plus Planner, which is a state the task is in
+for you rather than a date.
+
 **`estimated_start_on` and `estimated_hours` are purely informational.**
 Both optional, both on the task screen, and neither feeds anything else —
 not the access model, not the board, not a sweep, the way `due_on` does.

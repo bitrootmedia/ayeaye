@@ -697,10 +697,13 @@ export default function TaskDetail() {
               <CardTitle>Status</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* The four switches somebody actually comes to this panel for,
-                  in the order they're asked about — where it stands, who it's
-                  waiting on, how urgent, and by when. Owner and Project are
-                  assignment, not status, and live in their own card below. */}
+              {/* The three switches somebody actually comes to this panel
+                  for, in the order they're asked about — where it stands,
+                  who it's waiting on, how urgent. Owner and Project are
+                  assignment, and the dates — with the repeat that hangs off
+                  them — are Schedule; both have their own card below.
+                  Planner stays because it is a state the task is in for you,
+                  not a date. */}
               <Field
                 label="Status"
                 help="Status and open/closed are separate — a task can be closed at any status."
@@ -757,16 +760,6 @@ export default function TaskDetail() {
                   }
                 />
               </Field>
-              <div className="space-y-2">
-                <Label htmlFor="due">Due</Label>
-                <Input
-                  id="due"
-                  type="date"
-                  disabled={!editable}
-                  value={task.due_on ?? ""}
-                  onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
-                />
-              </div>
               <Field
                 label="Planner"
                 help="Yours alone — which bucket it sits in on your own Planner board."
@@ -784,42 +777,6 @@ export default function TaskDetail() {
                   onChange={(v) => setPlanner(v as PlannerBucket | null)}
                 />
               </Field>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-2">
-                  <Label htmlFor="estimated-start">Est. start</Label>
-                  <Input
-                    id="estimated-start"
-                    type="date"
-                    disabled={!editable}
-                    value={task.estimated_start_on ?? ""}
-                    onChange={(e) =>
-                      patch(
-                        { estimated_start_on: e.target.value || null },
-                        "Estimated start updated",
-                      )
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="estimated-hours">Est. hours</Label>
-                  <Input
-                    id="estimated-hours"
-                    type="number"
-                    min={0}
-                    max={9999.9}
-                    step={0.1}
-                    disabled={!editable}
-                    value={task.estimated_hours ?? ""}
-                    onChange={(e) =>
-                      patch(
-                        { estimated_hours: e.target.value === "" ? null : Number(e.target.value) },
-                        "Estimated hours updated",
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              <RecurrenceControl orgId={org.id} task={task} editable={editable} onChanged={load} />
             </CardContent>
           </Card>
 
@@ -877,6 +834,76 @@ export default function TaskDetail() {
                   }
                 />
               </Field>
+            </CardContent>
+          </Card>
+
+          {/* Its own card, directly above Reminders: the three questions
+              about *when* read together — by when, from when, for how long —
+              and a reminder is the thing you set once you've answered them.
+              Only `due_on` drives anything (the deadline sweep, and what a
+              reminder is usually about); the two estimates are informational,
+              which is why they share a row below it rather than sitting
+              alongside as equals. */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Schedule</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="due">Due</Label>
+                <Input
+                  id="due"
+                  type="date"
+                  disabled={!editable}
+                  value={task.due_on ?? ""}
+                  onChange={(e) => patch({ due_on: e.target.value || null }, "Due date updated")}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <Label htmlFor="estimated-start">Est. start</Label>
+                  <Input
+                    id="estimated-start"
+                    type="date"
+                    disabled={!editable}
+                    value={task.estimated_start_on ?? ""}
+                    onChange={(e) =>
+                      patch(
+                        { estimated_start_on: e.target.value || null },
+                        "Estimated start updated",
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="estimated-hours">Est. hours</Label>
+                  <Input
+                    id="estimated-hours"
+                    type="number"
+                    min={0}
+                    max={9999.9}
+                    step={0.1}
+                    disabled={!editable}
+                    value={task.estimated_hours ?? ""}
+                    onChange={(e) =>
+                      patch(
+                        { estimated_hours: e.target.value === "" ? null : Number(e.target.value) },
+                        "Estimated hours updated",
+                      )
+                    }
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Only the due date drives anything — the deadline nudge, the overdue badge on
+                your dashboard, and where it lands in the calendar. The estimates are
+                informational.
+              </p>
+              {/* Moved here with the due date it is anchored to: it only
+                  renders once there *is* one ("Needs a due date to anchor
+                  the cadence to"), so in Status it was a control whose
+                  precondition lived two cards away. */}
+              <RecurrenceControl orgId={org.id} task={task} editable={editable} onChanged={load} />
             </CardContent>
           </Card>
 
