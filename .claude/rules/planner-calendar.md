@@ -73,7 +73,14 @@ per-row lookup's cost for a field only one screen renders. Setting it goes
 through the planner's own `PUT`/`DELETE`, not `PATCH /tasks/{id}` — a
 bucket assignment isn't a task field the way status or due date are, it's
 personal to whoever's looking, the identical "yours alone" bar pinning
-already clears. The task screen's picker (`views/TaskDetail.tsx`) is an
+already clears. **The one exception is creating a task**, where
+`TaskCreate.planner_bucket` places it on the creator's own planner in the
+same request — the New task dialog offers the bucket, and a create followed
+by a separate `PUT` could leave a task existing having lost the bucket
+chosen for it. Still not the planner's rule leaking into tasks: the router
+composes `planner_service.place()` after `tasks_service.create()`, there is
+no `?user_id=` (it is always the creator's own board), and `TaskUpdate`
+still has no such field. The task screen's picker (`views/TaskDetail.tsx`) is an
 ordinary `EntityPicker`, matching CLAUDE.md's own "short fixed lists use it
 too" rule for Status and Priority, with **both** `placeholder` and
 `emptyLabel` set to `"Not planned"` — matching Action Required's identical

@@ -50,6 +50,19 @@ echo "== the pool"
 TID=$(post /tmp/pc.jar $B/api/organisations/$OID/tasks "{\"title\":\"Order the antifoul $S\"}" | j "d['id']")
 ok "a new open task lands in Carol's pool" "$(in_pool /tmp/pc.jar "" "$TID")" "1"
 
+echo "== planned as it's created"
+# One request, not a create followed by a PUT: the New task dialog offers the
+# bucket, so a task can't exist having lost the bucket somebody chose for it.
+BORN=$(post /tmp/pc.jar $B/api/organisations/$OID/tasks "{\"title\":\"Born in today $S\",\"planner_bucket\":\"today\"}")
+BORN_ID=$(echo "$BORN" | j "d['id']")
+ok "the create response says so"  "$(echo "$BORN" | j "d['planner_bucket']")" "today"
+ok "…and it really is in today"   "$(in_bucket /tmp/pc.jar "" "today" "$BORN_ID")" "1"
+ok "…so it never hit the pool"    "$(in_pool /tmp/pc.jar "" "$BORN_ID")" "0"
+ok "…on the creator's planner, nobody else's" "$(in_bucket /tmp/pa.jar "" "today" "$BORN_ID")" "0"
+ok "an unknown bucket is refused" \
+  "$(code -b /tmp/pc.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks -d "{\"title\":\"Nope $S\",\"planner_bucket\":\"yesterday\"}")" "422"
+curl -s -o /dev/null -b /tmp/pc.jar -X DELETE $B/api/organisations/$OID/planner/$BORN_ID
+
 echo "== placing, moving, never duplicating"
 ok "place into today"           "$(put /tmp/pc.jar $B/api/organisations/$OID/planner/$TID '{"bucket":"today","position":1000}' | j "d['bucket']")" "today"
 ok "…and it leaves the pool"    "$(in_pool /tmp/pc.jar "" "$TID")" "0"

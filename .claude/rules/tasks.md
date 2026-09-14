@@ -118,9 +118,28 @@ carrying a binary float's own rounding noise (`2.1` becoming
 `2.100000000000000088817841970012523...`) into a column someone will read
 back and expect to match what they typed. Deliberately *not* on
 `NewTaskDialog`: that dialog doesn't even capture `due_on` today, by design
-— title/description/status/priority/project only, so a quick add stays
+— title/description/priority/planner/project only, so a quick add stays
 quick — and adding two more optional fields there would be the wrong kind
 of inconsistency to introduce for two fields with no urgency behind them.
+
+**The New task dialog asks where it goes on your planner, and no longer
+asks for a status.** Status was five spellings of "I haven't started",
+offered at the one moment the answer can't be anything else — a new task is
+`todo`, which is the server's default anyway — and a form that asks a
+question with one right answer teaches people to tab straight past it.
+Planner took its place in the same two-column row: "do I want this on my
+own board, and when" is a real question at exactly that moment, and the
+alternative was creating the task and then finding it again on the planner.
+It rides on `TaskCreate.planner_bucket` — **one request, not a create
+followed by a `PUT /planner/{id}`**, so a task can't end up existing having
+lost the bucket somebody chose for it. The router composes
+`planner_service.place()` after `tasks_service.create()` rather than
+`create()` growing planner knowledge: a planner entry is the caller's
+private arrangement *of* a task, never a property of it, which is also why
+there is no `planner_bucket` on `TaskUpdate` — moving between buckets is
+the planner's own endpoint. Pinned at both layers:
+`scripts/e2e-planner.sh`'s "planned as it's created" block, and
+`planner.spec.ts`'s dialog test for the half only a browser can see.
 
 **"Depends on" is informational, and there is no enforcement to find.**
 `task_dependencies` (`models/task_dependency.py`, `services/dependencies.py`)

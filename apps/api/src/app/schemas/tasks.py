@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.models.task import PRIORITIES, STATUSES
 from app.models.task_series import INTERVAL_UNITS
+from app.schemas.planner import BUCKET_PATTERN
 from app.schemas.structure import LEVEL_PATTERN, GrantOut, PersonOut
 
 STATUS_PATTERN = f"^({'|'.join(STATUSES)})$"
@@ -34,6 +35,13 @@ class TaskCreate(BaseModel):
     due_on: date | None = None
     estimated_start_on: date | None = None
     estimated_hours: float | None = Field(default=None, ge=0, le=9999.9)
+    # Where it lands on the **creator's own** planner, and only theirs: a
+    # planner entry belongs to whoever is looking, so there is no "whose" to
+    # pass here the way `PUT /planner/{task_id}` takes a `?user_id=`. Omit it
+    # for the pool, which is where every task starts. Not on `TaskUpdate`:
+    # moving a task between buckets is a drag on the planner board, and that
+    # is the planner's own endpoint, not a task edit.
+    planner_bucket: str | None = Field(default=None, pattern=BUCKET_PATTERN)
 
 
 class TaskUpdate(BaseModel):

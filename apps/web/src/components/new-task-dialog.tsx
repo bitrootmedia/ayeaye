@@ -20,15 +20,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
 import {
+  PLANNER_BUCKETS,
+  PLANNER_BUCKET_LABEL,
   PRIORITY_LABEL,
-  STATUS_LABEL,
   TASK_PRIORITIES,
-  TASK_STATUSES,
+  type PlannerBucket,
   type Project,
   type SearchHit,
   type Task,
   type TaskPriority,
-  type TaskStatus,
 } from "@/lib/types";
 
 /** How long to wait after a keystroke before checking for duplicates — same
@@ -87,8 +87,11 @@ export function NewTaskDialog({
   const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<TaskStatus>("todo");
   const [priority, setPriority] = useState<TaskPriority>("normal");
+  // Null is the pool, which is where every task starts — the planner is
+  // yours and private, so this is "do I want this on my own board today",
+  // asked at the one moment you already know the answer.
+  const [plannerBucket, setPlannerBucket] = useState<PlannerBucket | null>(null);
   const [projectId, setProjectId] = useState<string | null>(defaultProject || null);
   const [busy, setBusy] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -158,23 +161,26 @@ export function NewTaskDialog({
   const projectItems: PickerItem[] = projects
     .filter((p) => p.access !== "read" && !p.archived)
     .map((p) => ({ value: p.id, label: p.name, hint: p.project_group_name ?? undefined }));
-  const statusItems: PickerItem[] = TASK_STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }));
   const priorityItems: PickerItem[] = TASK_PRIORITIES.map((p) => ({
     value: p,
     label: PRIORITY_LABEL[p],
     icon: <PriorityGlyph priority={p} />,
   }));
+  const plannerItems: PickerItem[] = PLANNER_BUCKETS.map((b) => ({
+    value: b,
+    label: PLANNER_BUCKET_LABEL[b],
+  }));
 
   // Title or description carrying typed prose is what's actually at risk of
-  // being lost — status/priority/project are one click to redo and aren't
+  // being lost — priority/planner/project are one click to redo and aren't
   // what "unsaved changes" means to whoever typed this.
   const dirty = title.trim() !== "" || description.trim() !== "";
 
   const reset = useCallback(() => {
     setTitle("");
     setDescription("");
-    setStatus("todo");
     setPriority("normal");
+    setPlannerBucket(null);
     setProjectId(defaultProject || null);
     setSimilar(null);
   }, [defaultProject]);
@@ -206,9 +212,12 @@ export function NewTaskDialog({
         body: JSON.stringify({
           title: title.trim(),
           description: description.trim() || null,
-          status,
           priority,
           project_id: projectId,
+          // One request, not a create followed by a planner PUT: the server
+          // places it on the caller's own planner in the same call, so a
+          // task can never exist having lost the bucket you chose for it.
+          planner_bucket: plannerBucket,
         }),
       });
       reset();
@@ -331,18 +340,13 @@ export function NewTaskDialog({
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            {/* No Status picker: a new task is always To do. It was five
+                spellings of "I haven't started", offered at the one moment
+                the answer can't be anything else — and a form that asks a
+                question with one right answer trains people to skip past
+                it. Change it on the task screen, which is where the work
+                actually moves. */}
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="task-status">Status</Label>
-                <EntityPicker
-                  id="task-status"
-                  ariaLabel="Status"
-                  items={statusItems}
-                  value={status}
-                  searchPlaceholder="Filter…"
-                  onChange={(v) => v && setStatus(v as TaskStatus)}
-                />
-              </div>
               <div className="space-y-2">
                 <Label htmlFor="task-priority">Priority</Label>
                 <EntityPicker
@@ -352,6 +356,19 @@ export function NewTaskDialog({
                   value={priority}
                   searchPlaceholder="Filter…"
                   onChange={(v) => v && setPriority(v as TaskPriority)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="task-planner">Planner</Label>
+                <EntityPicker
+                  id="task-planner"
+                  ariaLabel="Planner"
+                  items={plannerItems}
+                  value={plannerBucket}
+                  placeholder="Not planned"
+                  emptyLabel="Not planned"
+                  searchPlaceholder="Filter…"
+                  onChange={(v) => setPlannerBucket(v as PlannerBucket | null)}
                 />
               </div>
             </div>

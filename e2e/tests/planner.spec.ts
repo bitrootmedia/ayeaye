@@ -40,6 +40,37 @@ test.describe("the planner", () => {
     );
   });
 
+  test("the New task dialog can plan it as it's created", async ({ page }) => {
+    // One request does both — see `scripts/e2e-planner.sh`'s own "planned as
+    // it's created" block for the server half. What only a browser shows is
+    // that the dialog no longer asks for a Status it can't meaningfully
+    // answer, and asks where the task goes on your own board instead.
+    await signUp(page, uniqueEmail("plnew"));
+    const orgId = await createOrg(page, `Planner ${Date.now()}`);
+
+    await page.goto(`/orgs/${orgId}/tasks`);
+    await page.getByRole("button", { name: "New task" }).first().click();
+    // Scoped with the slot, not getByRole("dialog"): a toast is also a
+    // role="dialog" here (see `.claude/rules/browser-tests.md`).
+    const dialog = page.locator('[data-slot="dialog-content"]');
+    await dialog.getByLabel("Title").fill("Grease the winches");
+    // A new task is always To do, so the dialog doesn't ask.
+    await expect(dialog.getByLabel("Status")).toHaveCount(0);
+
+    await dialog.getByLabel("Planner").click();
+    await page.getByRole("option", { name: "Today", exact: true }).click();
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByRole("link", { name: /Grease the winches/ })).toBeVisible();
+
+    await page.goto(`/orgs/${orgId}/planner`);
+    await expect(
+      page.getByRole("region", { name: "Today" }).getByText("Grease the winches"),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Not planned yet" }).getByText("Grease the winches"),
+    ).toHaveCount(0);
+  });
+
   test("the title opens the task, without picking it up", async ({ page }) => {
     await signUp(page, uniqueEmail("pl"));
     const orgId = await createOrg(page, `Planner ${Date.now()}`);

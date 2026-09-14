@@ -70,6 +70,7 @@ from app.services import dependencies as dependencies_service
 from app.services import mentions as mentions_service
 from app.services import notes as notes_service
 from app.services import pins as pins_service
+from app.services import planner as planner_service
 from app.services import projects as projects_service
 from app.services import recurrence as recurrence_service
 from app.services import richtext
@@ -503,10 +504,25 @@ async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: 
         estimated_start_on=body.estimated_start_on,
         estimated_hours=body.estimated_hours,
     )
+    if body.planner_bucket:
+        # Composed here rather than inside `tasks_service.create`: a planner
+        # entry is the *caller's* private arrangement of a task, not a
+        # property of the task, and it is the same `place()` the planner
+        # board and the task screen's own picker call. Always the creator's
+        # own planner — there is no `?user_id=` on creating a task.
+        await planner_service.place(
+            db,
+            target_user_id=user.id,
+            target_org_role=ctx.role,
+            org_id=ctx.organisation.id,
+            task_id=task.id,
+            bucket=body.planner_bucket,
+        )
     people = await _people(db, [task])
     names = await _project_names(db, ctx.organisation.id)
     tags = await _tags_for(db, [task])
     images = await _image_urls(db, [task])
+    planner_buckets = await _planner_bucket_for(db, [task], user)
     return _task_out(
         task,
         access_service.LEVEL_OWNER if task.owner_user_id == user.id else "write",
@@ -515,6 +531,7 @@ async def create_task(body: TaskCreate, ctx: CurrentOrg, user: CurrentUser, db: 
         is_owner=task.owner_user_id == user.id,
         tags=tags,
         image_urls=images,
+        planner_buckets=planner_buckets,
     )
 
 
