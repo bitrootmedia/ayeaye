@@ -555,6 +555,46 @@ ok "a stranger's inbox is their own"   "$(tool "$BOBTOK" notifications '{}' | te
 # A read-only token must be able to read this: a status light is exactly what
 # somebody should be able to point a read credential at.
 ok "a read-only token can read it"     "$(tool "$MEMTOK" notifications '{}' | text | grep -c 'unread')" "1"
+# The row carries what an inbox you can act on needs: where it goes and how
+# old it is. Parsed by the menu bar app's Notifications tab, so the shape is a
+# contract — a reworded row leaves that tab unable to open anything, silently.
+ADMIN_ROW=$(echo "$ADMIN_INBOX" | grep 'Look at the shackle')
+ok "…with the title where every other row has it" \
+  "$(echo "$ADMIN_ROW" | cut -d'|' -f2 | grep -c 'Look at the shackle')" "1"
+ok "…and a labelled kind"              "$(echo "$ADMIN_ROW" | grep -c 'kind=task_action_required')" "1"
+ok "…and a link to the thing"          "$(echo "$ADMIN_ROW" | grep -c "link=/orgs/$OID/tasks/")" "1"
+ok "…and when it happened"             "$(echo "$ADMIN_ROW" | grep -cE 'at=[0-9]{4}-[0-9]{2}-[0-9]{2}T')" "1"
+
+echo "== closing a notification"
+# The write half of the inbox, added for the menu bar app's Notifications tab:
+# the count is only useful if the thing that shows it can also put it down.
+NID=$(echo "$ADMIN_ROW" | sed -n 's/^\[\([^]]*\)\].*/\1/p')
+# The admin's own *write* token: everything above reads their inbox with a
+# read-only one, which is the right credential for a badge and the wrong one
+# for putting it down. Both are the same person, so the pair also says the
+# refusals below are about scope rather than about whose inbox it is.
+ADMWRITE=$(post /tmp/mc.jar $B/api/me/tokens '{"name":"Admin write","scope":"write"}' | j "d['token']")
+BEFORE=$(tool "$ADMTOK" notifications '{}' | text | head -1 | grep -oE '^[0-9]+')
+MARKED=$(tool "$ADMWRITE" mark_notification_read "$(args notification_id=$NID)" | text)
+ok "marking one read names it"         "$(echo "$MARKED" | grep -c 'Look at the shackle')" "1"
+ok "…and says what is left"            "$(echo "$MARKED" | grep -c "$((BEFORE-1)) unread left")" "1"
+ok "…and it really is read"            "$(tool "$ADMTOK" notifications "{\"unread_only\":false}" | text | grep "$NID" | grep -c 'read$')" "1"
+ok "…and out of the unread list"       "$(tool "$ADMTOK" notifications '{}' | text | grep -c "$NID")" "0"
+# Idempotent, and says so rather than pretending it did something.
+ok "marking it again changes nothing"  "$(tool "$ADMWRITE" mark_notification_read "$(args notification_id=$NID)" | text | grep -c 'Already read')" "1"
+# Somebody else's inbox is not addressable, and the refusal is the same one a
+# made-up id gets: it must not confirm that a stranger's notification exists.
+ok "a stranger cannot mark it read"    "$(tool "$BOBTOK" mark_notification_read "$(args notification_id=$NID)" | text | grep -ci 'not in your inbox')" "1"
+ok "…and nor can a nonsense id"        "$(tool "$ADMWRITE" mark_notification_read "$(args notification_id=not-a-uuid)" | text | grep -ci 'not in your inbox')" "1"
+ok "a read-only token cannot close one" "$(tool "$ADMTOK" mark_notification_read "$(args notification_id=$NID)" | text | grep -ci 'read-only')" "1"
+# And the whole inbox at once, which is the button the menu bar tab puts at
+# the bottom of the list.
+tool "$WRITE" create_task "$(args organisation_id=$OID "title=And the other shackle" action_required_email=$ADMIN)" >/dev/null
+ok "there is something unread again"   "$(tool "$ADMTOK" notifications '{}' | text | grep -cE '^[1-9][0-9]* unread:')" "1"
+ok "marking all read says how many"    "$(tool "$ADMWRITE" mark_all_notifications_read '{}' | text | grep -cE 'Marked [0-9]+ notification')" "1"
+ok "…and the inbox is empty"           "$(tool "$ADMTOK" notifications '{}' | text | grep -c '^0 unread')" "1"
+ok "…and doing it again says nothing was unread" "$(tool "$ADMWRITE" mark_all_notifications_read '{}' | text | grep -c 'Nothing was unread')" "1"
+ok "a read-only token cannot clear it" "$(tool "$ADMTOK" mark_all_notifications_read '{}' | text | grep -ci 'read-only')" "1"
 
 echo "== capturing a spark"
 # The other thing the menu bar box can file. No organisation argument at all

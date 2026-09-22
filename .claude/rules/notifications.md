@@ -265,3 +265,14 @@ exactly 300.
   accessible name concatenates the row's own text with the nested button's
   `aria-label`. Scoped to the real `<button>` tag instead of a role query
   when this needed testing.
+- **The inbox got MCP write tools, and still no MCP delete.**
+  `mark_notification_read` and `mark_all_notifications_read` cover the tick
+  and the page-level button above; `delete` stays REST-and-web-only. The
+  reason is not squeamishness about a DELETE over MCP — it is that an
+  assistant, or a menu bar popover with no undo, deciding a record of what
+  happened is not worth keeping is a different act from a person clicking a
+  trash can while looking at it. `services/notifications.mark_read` now
+  returns `(row, was_unread)` rather than `None` so the tool can name what it
+  ticked and refuse to claim a change it didn't make; `mark_all_read` returns
+  how many it cleared. Both are ignored by the routers, which 204 either way
+  and reload the list.

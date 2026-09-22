@@ -866,7 +866,17 @@ async def notifications(
         return header + "." if unread == 0 else header + ", none listed."
     lines = [header + ":"]
     for row in rows:
-        bits = [f"[{row.id}]", row.kind, row.title]
+        # `[id] | title | key=value…`, the shape every other list in this
+        # module speaks — the kind used to sit unlabelled in the title's
+        # place, which made this the one row here you had to know the format
+        # of to read. `at` and `link` were added for the menu bar app's
+        # Notifications tab: an inbox you can act on has to say how old a
+        # thing is and where it goes, and a link recovered by parsing ids
+        # back out of a title would be a second answer that can disagree
+        # with the first.
+        bits = [f"[{row.id}]", row.title, f"kind={row.kind}", f"at={row.created_at.isoformat()}"]
+        if row.link_path:
+            bits.append(f"link={row.link_path}")
         if row.read_at:
             bits.append("read")
         lines.append(" | ".join(bits))
@@ -2091,6 +2101,78 @@ async def log_time(
         except Exception as exc:
             raise Denied("No such task, or you can't see it.") from exc
     return f"Logged {minutes}m on [{entry.task_id}]"
+
+
+def _as_notification_id(notification_id: str) -> uuid.UUID:
+    """A notification id, or a refusal — the same job `_as_task_id` does, and
+    for the same reason: a malformed string would otherwise leave the module
+    as an unhandled `ValueError` and reach the caller as a bare
+    `Error executing tool …` with nothing to act on."""
+    try:
+        return uuid.UUID(notification_id)
+    except ValueError as exc:
+        raise Denied("No such notification. It is not in your inbox.") from exc
+
+
+@tool()
+async def mark_notification_read(ctx: Context, notification_id: str) -> str:
+    """Mark one notification in your own inbox as read — the tick in the web
+    app's own list, and what takes the bell's count down by one. Ids come
+    from `notifications`.
+
+    **Your inbox only**, and not because of a check bolted on here: the row
+    is looked up by id *and* user, so somebody else's notification is simply
+    not found — which is the same answer an id that never existed gets, and
+    the right one, since a refusal must not confirm that a stranger's
+    notification exists.
+
+    Read is a fact about you rather than about the thing notified: nobody
+    else can see it, nothing is deleted, and the notification stays in the
+    inbox as history. `delete` exists in the service and deliberately has no
+    tool — throwing away somebody's record of what happened is not a thing to
+    do on an inference, and the web app's own trash button is one click away
+    for the times it is meant.
+
+    Marking read **is idempotent**: one already read says so and changes
+    nothing.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    nid = _as_notification_id(notification_id)
+    async with SessionLocal() as db:
+        found = await notifications_service.mark_read(db, user, nid)
+        if found is None:
+            raise Denied("No such notification. It is not in your inbox.")
+        row, was_unread = found
+        unread = await notifications_service.unread_count(db, user)
+    # What it was, not just that it worked: a caller that has just marked
+    # something read by id has no list in front of it and nothing else to
+    # check the id against.
+    verb = "Marked read" if was_unread else "Already read"
+    return f"{verb}: [{row.id}] {row.title} — {unread} unread left."
+
+
+@tool()
+async def mark_all_notifications_read(ctx: Context) -> str:
+    """Mark your whole inbox read, across every organisation — the web app's
+    own "Mark all read", and what empties the bell in one go.
+
+    **Ask before using this.** Every other tool here that ends something
+    (`close_task`, `unplan_task`) is one thing at a time and nameable; this
+    one clears a list the person has not seen, and "you had nothing worth
+    reading" is exactly the judgement to leave to them. Mark the ones you
+    were asked about by id and say what the rest were.
+
+    Answers with how many were unread, so an empty inbox is distinguishable
+    from a full one that has just been emptied.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        cleared = await notifications_service.mark_all_read(db, user)
+    if cleared == 0:
+        return "Nothing was unread."
+    return f"Marked {cleared} notification(s) read. Nothing unread now."
 
 
 def _require_write(principal: _Principal) -> None:

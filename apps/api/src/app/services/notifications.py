@@ -117,7 +117,21 @@ async def unread_count(db: AsyncSession, user: User) -> int:
     ).scalar_one()
 
 
-async def mark_read(db: AsyncSession, user: User, notification_id: uuid.UUID) -> None:
+async def mark_read(
+    db: AsyncSession, user: User, notification_id: uuid.UUID
+) -> tuple[Notification, bool] | None:
+    """The row and whether this call is what marked it — or `None` for an id
+    that is not in this person's inbox.
+
+    The web app throws the answer away: it reloads the list either way, and
+    `POST /notifications/{id}/read` stays 204 whatever comes back, the same
+    "not found is fine" shape `delete` documents below. Both halves are here
+    for the MCP tool, which has no list to reload. It has to name *which*
+    notification it just ticked — a caller told only "done" cannot tell a
+    tick from a typo in an id — and the flag has to be read before the write,
+    because `read_at` is a `func.now()` the moment after and no longer
+    answers "was this already read".
+    """
     row = (
         await db.execute(
             select(Notification).where(
@@ -125,12 +139,22 @@ async def mark_read(db: AsyncSession, user: User, notification_id: uuid.UUID) ->
             )
         )
     ).scalar_one_or_none()
-    if row is not None and row.read_at is None:
+    if row is None:
+        return None
+    was_unread = row.read_at is None
+    if was_unread:
         row.read_at = func.now()
         await db.commit()
+    return row, was_unread
 
 
-async def mark_all_read(db: AsyncSession, user: User) -> None:
+async def mark_all_read(db: AsyncSession, user: User) -> int:
+    """How many were unread. Zero is an ordinary answer, not a failure.
+
+    Counted from the rows this already loads rather than asked for
+    separately — the count and the update have to be the same set, and a
+    second `unread_count()` around it would be two answers to one question.
+    """
     rows = (
         (
             await db.execute(
@@ -145,6 +169,7 @@ async def mark_all_read(db: AsyncSession, user: User) -> None:
     for row in rows:
         row.read_at = func.now()
     await db.commit()
+    return len(rows)
 
 
 async def delete(db: AsyncSession, user: User, notification_id: uuid.UUID) -> None:

@@ -157,6 +157,38 @@ what the web app's own bell polls. A count that disagreed with the bell
 would be a second, quieter answer to the same question. `my_reminders` is
 the existing precedent for a tool with no organisation id.
 
+Its rows are `[id] | title | kind=… | at=… | link=…`, the shape every other
+list in the module speaks. They were `[id] | kind | title` — the one row here
+whose second field was not the thing's name — and `at`/`link` arrived with the
+menu bar app's Notifications tab, which needs to say how old something is and
+open what it is about. **`link` is the stored `link_path`, not a path rebuilt
+from ids in the title**: a value recovered from a display string is a second
+answer that can disagree with the first, the identical argument
+`notifications.organisation_id` makes for being a real column.
+
+**`mark_notification_read` and `mark_all_notifications_read` are the write
+half, and the inbox has no delete tool on purpose.** A badge is only worth
+drawing if the thing drawing it can also put it down — the menu bar app could
+count unread notifications and do nothing about them, which is a number that
+only ever goes up. Read is a fact about you: nobody else can see it, nothing
+is destroyed, and the row stays in the inbox as history. `services/
+notifications.delete` has no tool over it because throwing away somebody's
+record of what happened is not a thing to do on an inference, and the web
+app's own trash button is a click away for the times it is meant. Both
+require write — marking read changes a row, and `_require_write` does not
+grade writes by how small they are — which is the one place this parts
+company with the "a status light can be pointed at a read credential"
+argument above: reading the badge is `read`, clearing it is not.
+
+The refusal for an id that is not yours is the same sentence a made-up id
+gets ("No such notification. It is not in your inbox."), 404-not-403 again:
+`mark_read` looks the row up by id *and* `user_id`, so a stranger's
+notification is genuinely not found rather than found and refused.
+`mark_read` returns the row **and whether this call is what marked it**,
+because `read_at` is a `func.now()` the moment after and can no longer answer
+"was this already read" — the flag is what lets the tool say `Already read`
+instead of claiming a change it didn't make.
+
 **`running_timer` is the third tool that takes no organisation, and the
 reason is a database constraint rather than a preference.** There is one
 running timer per person across the whole installation — a partial unique
