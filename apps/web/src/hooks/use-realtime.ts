@@ -26,7 +26,9 @@ import { API_DOMAIN } from "@/config";
  */
 export type RealtimeEvent = {
   /** "message" for a comment, "task" for anything else about a task,
-   *  "planner" for a task placed on or taken off somebody's planner. */
+   *  "planner" for a task placed on or taken off somebody's planner, "org"
+   *  for the rest of what a dashboard is built from — an announcement, an
+   *  absence, a pin. */
   type: string;
   conversation_id?: string;
   message_id?: string;

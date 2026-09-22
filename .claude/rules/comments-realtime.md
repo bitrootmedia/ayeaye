@@ -11,6 +11,7 @@ paths:
   - "scripts/e2e-comments.sh"
   - "e2e/tests/comments.spec.ts"
   - "e2e/tests/realtime-task.spec.ts"
+  - "e2e/tests/realtime-dashboard.spec.ts"
 ---
 
 # Comments, mentions and the realtime socket
@@ -76,6 +77,17 @@ That check being early is safe because **events carry no content** — only
 "conversation X moved". The client refetches, so there is one authorisation
 path for message bodies; if access was revoked in between, the refetch 404s,
 which is the right answer.
+
+**`publish_org_changed` is the fourth event type, and the first that is not
+about one thing.** `message`, `task` and `planner` each name a record;
+`org` says only that something on an organisation's dashboard moved — an
+announcement, somebody's absence, a pin. It exists because that screen is
+built from four kinds of record and only one of them was on the wire, and it
+takes the audience as an argument rather than deciding: no `user_ids` means
+the organisation's watch key (an announcement is addressed to everybody), and
+`user_ids` means those people and no watch key (a pin is private). Same two
+audiences as everywhere else on this channel, chosen at the call site because
+here the *record* decides rather than the event type.
 
 **There is a third case, and it is deliberately neither of those two: the
 planner.** `publish_planner_changed` carries `user_ids` and **no watch key at

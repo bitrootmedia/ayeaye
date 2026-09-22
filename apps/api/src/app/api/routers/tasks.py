@@ -688,14 +688,14 @@ async def pin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: D
     services/pins.py. Idempotent: pinning something already pinned changes
     nothing."""
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
-    await pins_service.set_pinned(db, task_id, user, pinned=True)
+    await pins_service.set_pinned(db, task_id, user, pinned=True, ctx=ctx)
     return await _task_response(db, ctx, tctx, user)
 
 
 @router.delete("/tasks/{task_id}/pin", response_model=TaskOut)
 async def unpin_task(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
-    await pins_service.set_pinned(db, task_id, user, pinned=False)
+    await pins_service.set_pinned(db, task_id, user, pinned=False, ctx=ctx)
     return await _task_response(db, ctx, tctx, user)
 
 

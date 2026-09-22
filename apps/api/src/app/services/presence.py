@@ -27,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Announcement, OrganisationMember, OutOfOffice, User
 from app.models.organisation import STATUS_ACTIVE
+from app.realtime.events import publish_org_changed
 from app.services import access
+from app.services import organisations as organisations_service
 from app.services.organisations import OrgContext
 
 # How far ahead the dashboard looks. Two weeks is the horizon on which someone
@@ -69,7 +71,22 @@ async def add_absence(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await _announce_absence(db, user, change="absence_added")
     return row
+
+
+async def _announce_absence(db: AsyncSession, user: User, *, change: str) -> None:
+    """Tell every dashboard that shows this person.
+
+    An absence belongs to a person and not to a place — it is set on
+    `/me/out-of-office` and has no organisation id at all — but it is *read*
+    once per organisation they are in, so the event has to fan out over
+    exactly those. That is a handful of publishes on an action somebody takes
+    a few times a year, and the alternative is a colleague asking you for
+    something an hour after you said you were away.
+    """
+    for organisation, _role in await organisations_service.list_for_user(db, user):
+        await publish_org_changed(organisation_id=str(organisation.id), change=change)
 
 
 async def remove_absence(db: AsyncSession, user: User, absence_id: uuid.UUID) -> None:
@@ -86,6 +103,7 @@ async def remove_absence(db: AsyncSession, user: User, absence_id: uuid.UUID) ->
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
     await db.delete(row)
     await db.commit()
+    await _announce_absence(db, user, change="absence_removed")
 
 
 async def away_between(
@@ -190,6 +208,11 @@ async def post_announcement(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    # The one record here that is *addressed* to everybody, so the one where
+    # waiting for the next refresh is most obviously wrong.
+    await publish_org_changed(
+        organisation_id=str(ctx.organisation.id), change="announcement_posted"
+    )
     return row
 
 
@@ -217,3 +240,6 @@ async def remove_announcement(
         )
     await db.delete(row)
     await db.commit()
+    await publish_org_changed(
+        organisation_id=str(ctx.organisation.id), change="announcement_removed"
+    )

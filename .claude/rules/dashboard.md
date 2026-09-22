@@ -11,6 +11,7 @@ paths:
   - "scripts/e2e-dashboard.sh"
   - "scripts/e2e-working-hours.sh"
   - "e2e/tests/dashboard.spec.ts"
+  - "e2e/tests/realtime-dashboard.spec.ts"
 ---
 
 # The dashboard, presence and working hours
@@ -38,6 +39,33 @@ an expiry date — a noticeboard nobody prunes is a noticeboard nobody reads.
 checking before they ask you for something; a private one is a diary. You set
 it on your own account, and members of organisations you share see it. The
 dashboard looks two weeks ahead.
+
+**The dashboard is live, and it is the only screen here that had to be told
+about records other than tasks.** It watches `org:<id>`, the same key the
+Tasks board uses, and coalesces for 1.5s before refetching — one request that
+returns eight lists must not be rebuilt per event on a busy afternoon. Task
+changes already travelled on that key; announcements, absences and pins did
+not, which is what `realtime.publish_org_changed` is for. A dashboard that
+went live for a status change and not for a notice pinned to the top of it
+would be the more confusing half-answer.
+
+**It does not ask what moved.** Any event that reaches it refetches, filtered
+only by organisation — the audience check the Planner also makes, not a branch
+on `change`, which `hooks/use-realtime.ts` forbids for the reason it gives: a
+screen that only reacts to the kinds it recognises stops reacting the day a
+ninth card arrives. Adding a card to this page therefore needs no client
+change at all, only a publish wherever its record is written.
+
+**An absence fans out; a pin does not.** An absence has no organisation of its
+own — it is set on `/me/out-of-office` and read once per organisation the
+person belongs to — so `presence._announce_absence` publishes over exactly
+those, a handful of events on something somebody does a few times a year. A
+pin is private: nobody else's dashboard changes because you bookmarked
+something, so it goes out by user id with no watch key at all, the shape
+`publish_planner_changed` already uses. `e2e/tests/realtime-dashboard.spec.ts`
+pins both halves, including that the colleague's Pinned card stays put.
+`pins.set_pinned` takes `ctx` only so it can name the organisation in that
+event — the access rule is the task's and was decided before it got there.
 
 **A status line and an announcement are different things**, which is why both
 exist: the first is one person's answer to "what are you on with", the second
