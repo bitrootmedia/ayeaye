@@ -18,7 +18,7 @@ from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
 from app.api.router import api_router
-from app.api.routers import health, wellknown
+from app.api.routers import docs, health, wellknown
 from app.core.config import settings
 from app.core.lifespan import lifespan
 from app.core.logging import configure_logging
@@ -68,12 +68,18 @@ def create_app() -> FastAPI:
     # which has no route there either. Under /api, the same URL — SITE_URL +
     # /api/docs — works identically in dev and in production, no flag to
     # remember, the same "one origin" reasoning everything else here follows.
+    #
+    # The two *pages* are `api/routers/docs.py` rather than generated here,
+    # which is why `docs_url`/`redoc_url` are off: FastAPI's own would carry
+    # FastAPI's favicon, fetched from fastapi.tiangolo.com. The schema they
+    # read is still generated here, at the URL that module names — one
+    # constant, so the pages and the document cannot end up at two addresses.
     app = FastAPI(
         title=f"{settings.brand_name} API",
         lifespan=lifespan,
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=docs.OPENAPI_URL,
     )
 
     # SuperTokens' own middleware must be added before CORS so its auth routes

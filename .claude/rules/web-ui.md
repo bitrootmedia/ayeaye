@@ -63,6 +63,28 @@ and can't read a custom property; that is the one place in this product a
 token colour is written twice, and it is written out in full so a palette
 change shows up as a visible mismatch rather than drifting.
 
+**One file, and the API's docs pages borrow it rather than copying it.**
+`/api/docs` and `/api/redoc` used to wear FastAPI's own logo, fetched from
+`fastapi.tiangolo.com` — somebody else's branding, and a third-party request
+made by an installation whose whole premise is that it runs on your own
+hardware. There is no argument for it on `FastAPI(...)`, so
+`api/routers/docs.py` owns the two routes and passes
+`swagger_favicon_url` / `redoc_favicon_url` — and what it passes is the
+plain path `/favicon.svg`, not an asset of its own. **Single origin is what
+makes that a URL instead of a build step:** Caddy's catch-all serves the web
+app, so the API can point at the SPA's file on the same hostname and there is
+still exactly one drawing. A second, API-side copy would be precisely the
+"rasterised copy that quietly stops matching" the favicon's own comment
+exists to rule out. The pages keep their addresses (`api_router` is mounted
+at `/api`), `main.py` sets `docs_url=None`/`redoc_url=None` and takes
+`openapi_url` from that module's one constant, and Swagger's
+`/docs/oauth2-redirect` helper is not carried over — it sat at the bare root
+where Caddy hands everything to the SPA, and this API declares no OAuth2
+security scheme, so Swagger never drew the Authorize button that would use
+it. `scripts/e2e-instance.sh` pins all of it, including a `grep -c tiangolo`
+of `0`: putting `docs_url` back in `main.py` restores the third-party fetch
+silently, and that assertion is what notices.
+
 **The sign-in/sign-up/reset screens carry the same header and footer.** They
 are SuperTokens' own routes — `getSuperTokensRoutesForReactRouterDom` hands
 back a flat list of `<Route>`s with their own absolute paths, so they can't be

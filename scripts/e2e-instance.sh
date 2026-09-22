@@ -202,5 +202,26 @@ echo "revoking takes the panel away on the next request"
 ok "the panel closes"             "$(code -b /tmp/inst-b.jar $B/api/instance/overview)"         "404"
 ok "/me agrees, same session"     "$(curl -s -b /tmp/inst-b.jar $B/api/me | j "d['is_instance_admin']")" "False"
 
+echo "the API docs are this installation's, and reach nothing outside it"
+# Three claims, and the middle one is the point. FastAPI generates these two
+# pages itself when docs_url/redoc_url are set, and its generated markup
+# points the tab icon at fastapi.tiangolo.com — somebody else's logo, fetched
+# from somebody else's server, by a box whose whole premise is that it is
+# yours. `api/routers/docs.py` owns the routes for exactly that reason, and
+# putting docs_url back in main.py silently undoes it.
+ok "Swagger UI is served"         "$(code $B/api/docs)"                                         "200"
+ok "…wearing our own anchor"      "$(curl -s $B/api/docs | grep -c 'icon" href="/favicon.svg"')" "1"
+ok "…and calling nobody's server" "$(curl -s $B/api/docs | grep -c tiangolo)"                   "0"
+ok "ReDoc, the same three"        "$(code $B/api/redoc)"                                        "200"
+ok "…wearing our own anchor"      "$(curl -s $B/api/redoc | grep -c 'icon" href="/favicon.svg"')" "1"
+ok "…and calling nobody's server" "$(curl -s $B/api/redoc | grep -c tiangolo)"                  "0"
+# That href is a same-origin URL rather than a copy of the drawing — single
+# origin is what lets the API borrow the SPA's own file instead of shipping
+# a second one that quietly stops matching it.
+ok "the anchor is really there"   "$(code $B/favicon.svg)"                                      "200"
+ok "…and it is the SPA's own"     "$(curl -s $B/favicon.svg | grep -c 'aria-label="ayeayecaptain"')" "1"
+# The schema the pages read still has to be where they look for it.
+ok "the schema is where they look" "$(code $B/api/openapi.json)"                                "200"
+
 echo "  $pass passed, $fail failed"
 [ $fail -eq 0 ]
