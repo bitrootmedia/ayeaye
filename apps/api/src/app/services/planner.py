@@ -23,6 +23,13 @@ Two rules:
    as a note or a reminder, and the read has to re-check rather than the
    write having to clean up after every possible way access can be taken away
    later.
+
+Both writes announce on the realtime channel — see
+`realtime.publish_planner_changed` for why the audience is the planner's
+owner alone and not a watch key. It lives in the service rather than in the
+router because there are five call sites between HTTP, MCP and task
+creation, and the rule that holds is the same one tasks use: if it writes,
+it announces.
 """
 
 import uuid
@@ -36,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import OrganisationMember, PlannerEntry, Task, User
 from app.models.organisation import STATUS_ACTIVE
 from app.models.planner import BUCKET_RANK
+from app.realtime import events as realtime
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -222,15 +230,31 @@ async def place(
     entry = (await db.execute(stmt)).scalar_one()
     await db.commit()
     await db.refresh(entry)
+    await realtime.publish_planner_changed(
+        user_id=str(target_user_id),
+        organisation_id=str(org_id),
+        task_id=str(task_id),
+        change="planned",
+    )
     return entry, task
 
 
-async def remove(db: AsyncSession, *, target_user_id: uuid.UUID, task_id: uuid.UUID) -> None:
+async def remove(
+    db: AsyncSession, *, target_user_id: uuid.UUID, org_id: uuid.UUID, task_id: uuid.UUID
+) -> None:
     """Back to the pool.
 
     Idempotent: dropping an already-unplanned task, or racing another remove,
     is a no-op success — not a 404. Dragging to the pool and finding it
     already there is not an error a person caused.
+
+    **`org_id` is for the realtime ping, not for a check** — deliberately, and
+    this is the one place that distinction matters: `unplan_task` over MCP
+    checks no task access at all, precisely so a board can still be cleared
+    after handing the work back took away the only route into the task. A
+    caller passes the organisation it already resolved; nothing here re-reads
+    it, and the announce is the same "which planner moved" it would be if the
+    task had vanished entirely.
     """
     await db.execute(
         PlannerEntry.__table__.delete().where(
@@ -238,3 +262,12 @@ async def remove(db: AsyncSession, *, target_user_id: uuid.UUID, task_id: uuid.U
         )
     )
     await db.commit()
+    # Unconditionally, including the no-op case: the delete is idempotent and
+    # finding out whether a row was actually there costs a `RETURNING` and a
+    # branch to save a ping that is one refetch of a small, personal board.
+    await realtime.publish_planner_changed(
+        user_id=str(target_user_id),
+        organisation_id=str(org_id),
+        task_id=str(task_id),
+        change="unplanned",
+    )

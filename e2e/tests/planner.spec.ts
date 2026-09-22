@@ -181,3 +181,79 @@ test.describe("the planner", () => {
     await expect(them.getByRole("button", { name: "Planning for" })).toHaveCount(0);
   });
 });
+
+/**
+ * The planner, moving under you.
+ *
+ * Two tabs of the **same person**, not two people: that is the shape the
+ * feature is for. Somebody's queue is arranged from a task screen, from an
+ * assistant working down `next_task`, or from an admin's override — none of
+ * which is the tab the board happens to be open in.
+ *
+ * The two kinds of change arrive by different routes and both are pinned
+ * here. A **planner** event has no watch key at all and is delivered to the
+ * planner's owner by user id, because a planner is private. A **task** event
+ * rides the organisation watch key like everywhere else. Miss either and the
+ * board goes quietly stale.
+ */
+test.describe("the planner is live", () => {
+  // The board coalesces for 1.5s before refetching, so it is allowed more
+  // time than a task screen — still far less than any poll.
+  const LIVE = { timeout: 15_000 };
+
+  async function plannedFromAnotherTab(page: Page, orgId: string, title: string) {
+    const tab = await page.context().newPage();
+    await tab.goto(`/orgs/${orgId}/tasks`);
+    await tab.getByRole("link", { name: new RegExp(title) }).click();
+    await tab.waitForURL(/\/tasks\/[0-9a-f-]+$/);
+    await tab.getByRole("button", { name: "Planner", exact: true }).click();
+    await tab.getByRole("option", { name: "Today" }).click();
+    await expect(tab.getByRole("heading", { name: "Added to Today" })).toBeVisible();
+    return tab;
+  }
+
+  test("a task planned somewhere else lands on the open board", async ({ page }) => {
+    await signUp(page, uniqueEmail("pllive"));
+    const orgId = await createOrg(page, `Planner live ${Date.now()}`);
+    await createTask(page, orgId, "Splice the mainbrace");
+
+    await page.goto(`/orgs/${orgId}/planner`);
+    const pool = page.getByRole("region", { name: "Not planned yet" });
+    const today = page.getByRole("region", { name: "Today" });
+    await expect(pool.getByText("Splice the mainbrace")).toBeVisible();
+
+    const tab = await plannedFromAnotherTab(page, orgId, "Splice the mainbrace");
+
+    // No reload on the board's side.
+    await expect(today.getByText("Splice the mainbrace")).toBeVisible(LIVE);
+    await expect(pool.getByText("Splice the mainbrace")).toHaveCount(0);
+
+    await tab.close();
+  });
+
+  test("closing a planned task takes it off the board", async ({ page }) => {
+    // The other half: this one is an ordinary task event on the organisation
+    // key, and the planner has to be listening to it as well — a bucket only
+    // holds open work, so a task closed elsewhere has to leave.
+    await signUp(page, uniqueEmail("pllive2"));
+    const orgId = await createOrg(page, `Planner live ${Date.now()}`);
+    await createTask(page, orgId, "Stow the spinnaker");
+
+    const tab = await plannedFromAnotherTab(page, orgId, "Stow the spinnaker");
+
+    await page.goto(`/orgs/${orgId}/planner`);
+    const today = page.getByRole("region", { name: "Today" });
+    await expect(today.getByText("Stow the spinnaker")).toBeVisible();
+
+    await tab.getByRole("button", { name: "Close task" }).click();
+    await expect(tab.getByRole("button", { name: "Reopen" })).toBeVisible();
+
+    await expect(today.getByText("Stow the spinnaker")).toHaveCount(0, LIVE);
+    // And it doesn't reappear in the pool either — the pool is open work too.
+    await expect(
+      page.getByRole("region", { name: "Not planned yet" }).getByText("Stow the spinnaker"),
+    ).toHaveCount(0);
+
+    await tab.close();
+  });
+});

@@ -25,12 +25,18 @@ import { API_DOMAIN } from "@/config";
  * viewer whose access was just revoked gets a 404 rather than a payload.
  */
 export type RealtimeEvent = {
-  /** "message" for a comment, "task" for anything else about a task. */
+  /** "message" for a comment, "task" for anything else about a task,
+   *  "planner" for a task placed on or taken off somebody's planner. */
   type: string;
   conversation_id?: string;
   message_id?: string;
-  /** Set on `type: "task"`. */
+  /** Set on `type: "task"` and `type: "planner"`. */
   task_id?: string;
+  /** Set on `type: "planner"`: **whose** planner moved. That event has no
+   *  watch key at all — a planner is private, so it is delivered to its owner
+   *  by user id rather than broadcast on the organisation key every board in
+   *  the company is already listening to. */
+  user_id?: string;
   /** What moved, for debugging — never branch on it: a screen that only
    *  refreshes for changes it recognises stops refreshing the day somebody
    *  adds a sixth kind. */

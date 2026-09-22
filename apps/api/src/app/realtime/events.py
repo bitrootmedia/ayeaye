@@ -105,6 +105,54 @@ async def publish_task_changed(*, task_id: str, organisation_id: str, change: st
         await client.aclose()
 
 
+async def publish_planner_changed(
+    *, user_id: str, organisation_id: str, task_id: str, change: str
+) -> None:
+    """Announce that somebody's planner moved — a task placed, or taken off.
+
+    **The one event on this channel whose audience is a person rather than a
+    thing on screen**, so it is all `user_ids` and no watch key at all. A
+    planner is private: the whole product promise is "nobody else sees this
+    unless you're an admin looking at yours", and the org watch key that task
+    events ride is exactly the channel every colleague's board is already
+    listening on. Putting "user A planned task B" onto it would broadcast a
+    private board's activity to the whole organisation to save an admin a
+    refresh, which is the wrong trade.
+
+    The consequence, stated rather than papered over: an **admin watching
+    somebody else's** planner sees task changes live (those ride the org key
+    like everywhere else) but not that person's own re-planning. They are
+    nearly always the one doing the arranging, and their own screen has
+    already moved optimistically.
+
+    Same no-content rule as the rest: only whose planner, which task, and
+    what kind of change for the log. The client refetches the board.
+    """
+    client = aioredis.from_url(settings.redis_url)
+    try:
+        await client.publish(
+            EVENTS_CHANNEL,
+            json.dumps(
+                {
+                    "type": "planner",
+                    "user_id": user_id,
+                    "organisation_id": organisation_id,
+                    "task_id": task_id,
+                    "change": change,
+                    # The planner's owner, wherever they happen to be logged
+                    # in. No watch key — see the docstring.
+                    "user_ids": [user_id],
+                    "watch": None,
+                }
+            ),
+        )
+    except Exception as exc:
+        # The entry is already committed. Losing the ping costs a refresh.
+        logger.warning("could not publish a planner event: %s", exc)
+    finally:
+        await client.aclose()
+
+
 async def realtime_subscriber(manager: ConnectionManager) -> None:
     """Forward events from Redis to this process's sockets.
 

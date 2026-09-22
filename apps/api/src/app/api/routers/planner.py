@@ -95,4 +95,6 @@ async def unplan_task(
 ):
     """Back to the pool."""
     target_id, _role = await planner_service.resolve_target(db, ctx, user, user_id=user_id)
-    await planner_service.remove(db, target_user_id=target_id, task_id=task_id)
+    await planner_service.remove(
+        db, target_user_id=target_id, org_id=ctx.organisation.id, task_id=task_id
+    )

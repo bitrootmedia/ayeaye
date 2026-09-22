@@ -77,6 +77,15 @@ That check being early is safe because **events carry no content** — only
 path for message bodies; if access was revoked in between, the refetch 404s,
 which is the right answer.
 
+**There is a third case, and it is deliberately neither of those two: the
+planner.** `publish_planner_changed` carries `user_ids` and **no watch key at
+all**, because a planner is private and `org:<id>` — the key the whole Tasks
+board rides — is exactly the channel every colleague is already listening on.
+"Who to update live" is the wrong question for a screen only one person may
+look at; "who owns this" is the right one. See `planner-calendar.md` for what
+that costs (an admin viewing somebody else's board doesn't get their
+re-planning live) and why that is the cheaper side of the trade.
+
 **The socket is authenticated by the session cookie**, which single origin
 gives us for free. The reference project had to pass an access token in a query
 string — where it lands in server logs and browser history — precisely because

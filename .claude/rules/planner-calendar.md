@@ -45,8 +45,47 @@ not a cosmetic one. This is the one thing `scripts/e2e-planner.sh` has a
 dedicated regression case for, and it's worth re-reading if this file is ever
 touched: removing that re-check makes the test fail, which is the point of it.
 
-No realtime channel, on purpose — like notes and reminders, this is refetch-
-after-mutation, not a socket. `position` is a plain integer, the same
+**The board is live, and the event is the one on the channel with no watch
+key.** It used to be refetch-after-mutation like notes and reminders, and
+that was wrong for the same reason the agent queue is interesting: a planner
+is a queue *somebody else* arranges — an assistant working down `next_task`,
+an admin's override, the task screen's own bucket picker in another tab —
+so the tab with the board open is very often not the tab that changed it.
+Two kinds of event reach it. Task changes ride the `org:<id>` watch key
+exactly as they do for the Tasks board, because the pool is "every open
+visible task you haven't planned" and a close, a hide or a revoked grant
+moves it. Planner changes go through `realtime.publish_planner_changed`,
+which is **all `user_ids` and no watch key at all** — a planner is private,
+and `org:<id>` is the channel every colleague's board is already listening
+on, so putting "user A planned task B" on it would broadcast a private
+board's activity to the whole organisation to save an admin one refresh.
+The consequence is stated rather than papered over: an admin watching
+somebody *else's* planner gets task changes live but not that person's own
+re-planning — they are nearly always the one arranging it, and their own
+screen has already moved optimistically. The publish lives in
+`services/planner.py`'s `place()`/`remove()` rather than in the router,
+because there are five call sites across HTTP, MCP and task creation and
+the rule that holds is the one tasks already use: if it writes, it
+announces. `remove()` takes an `org_id` purely to carry in that ping and
+deliberately checks nothing with it — `unplan_task` over MCP checks no task
+access at all, precisely so a board can still be cleared after the handback
+took away the only route into the task.
+
+**`Planner.tsx` defers a refetch rather than dropping it**, which is where
+it differs from the Tasks board it otherwise copies (1.5s coalesce, same
+constant name). A `busy` counter covers both a drag in progress and a write
+in flight: a board that reshuffles under a card somebody is still holding,
+or one refetched mid-`PUT` and therefore describing the board as it was
+just *before* the drop, both read as bugs rather than as freshness. A
+hidden tab is deferred too and flushed on `visibilitychange`, where the
+Tasks board skips outright and catches up on the next event — fine for a
+screen a busy organisation keeps poking, wrong for a planner that can sit
+untouched for an afternoon. Wiring the drag lifecycle up to that counter
+also turned up a pre-existing bug: there was no `onDragCancel`, so
+cancelling a drag with Escape left `activeTask` set and a card following
+the pointer forever.
+
+`position` is a plain integer, the same
 no-resequencing convention as `Task.position`: the client computes a value
 (the midpoint of its new neighbours, or ±1000 at an end) once per drop, and
 nothing server-side ever renumbers a bucket.
@@ -127,6 +166,13 @@ product decision worth pinning in a test — asserting "left the pool, landed
 in *some* bucket, survives a reload" is the honest claim; asserting "landed
 in Today specifically" is asserting an implementation detail that has no
 product meaning.
+
+`planner.spec.ts`'s **"the planner is live"** block pins both event routes,
+with two tabs of the *same person* rather than two people — that is the
+shape the feature is for. Both were checked against a sabotaged handler and
+both fail without it, which is this codebase's standing requirement for a
+live test: the first realtime board test ever written here passed while the
+board was receiving nothing at all.
 
 ## The planner is also the agent queue
 

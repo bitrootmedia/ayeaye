@@ -18,7 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CalendarDaysIcon, GripVerticalIcon, InboxIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
@@ -30,6 +30,7 @@ import { ClosedBadge } from "@/components/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { useToastManager } from "@/components/ui/toast";
+import { useRealtime } from "@/hooks/use-realtime";
 import { cn } from "@/lib/utils";
 import {
   PLANNER_BUCKETS,
@@ -41,6 +42,17 @@ import {
   type PlannerEntry,
   type PlannerTask,
 } from "@/lib/types";
+
+/**
+ * How long changes are collected before the board refetches.
+ *
+ * The same 1.5s the Tasks board uses and for the same reason: this screen
+ * shows every open task somebody can see, so a busy organisation produces a
+ * steady trickle of events and one refresh is the right answer to a handful
+ * of them. The task screen refetches immediately because it is one task; a
+ * board is the opposite.
+ */
+const LIVE_COALESCE_MS = 1_500;
 
 /** The pool and every bucket, by one shared id space — a task's id, since it
  *  lives in exactly one place at a time. */
@@ -94,6 +106,87 @@ export default function Planner() {
     void load();
   }, [load]);
 
+  /**
+   * A refetch must never land in the middle of a gesture or a save.
+   *
+   * Both would be visible and both would look like a bug rather than a
+   * refresh: a board that reshuffles under a card somebody is still holding,
+   * or an answer fetched while our own `PUT` is in flight and therefore
+   * describing the board as it was a moment *before* the drop — which paints
+   * the card back where it came from until the next event happens along.
+   * `busy` counts drags and writes; an event that arrives while it is raised
+   * sets `pending` and is served the moment it drops to zero.
+   */
+  const busy = useRef(0);
+  const pending = useRef(false);
+  const refresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const reload = useCallback(() => {
+    // Hidden tabs are deferred rather than dropped. The Tasks board skips
+    // them outright and catches up on the next event, which is fine for a
+    // screen a busy organisation keeps poking; a planner can sit untouched
+    // for an afternoon, and coming back to a stale one is the whole failure
+    // this is meant to avoid.
+    if (busy.current > 0 || document.visibilityState !== "visible") {
+      pending.current = true;
+      return;
+    }
+    pending.current = false;
+    void load().catch(() => {});
+  }, [load]);
+
+  const release = useCallback(() => {
+    busy.current = Math.max(0, busy.current - 1);
+    if (busy.current === 0 && pending.current) reload();
+  }, [reload]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && pending.current) reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearTimeout(refresh.current);
+    };
+  }, [reload]);
+
+  /**
+   * Live.
+   *
+   * Two kinds of event move this board and they arrive by different routes.
+   * **Task changes** ride the organisation watch key exactly as they do for
+   * the Tasks board — a title edited, a task closed or hidden, a grant given
+   * or taken away, all of which add to or remove from the pool. **Planner
+   * changes** — an assistant working its way down your queue, an admin
+   * arranging it, your own other tab — carry no watch key at all and are
+   * delivered to the planner's owner by user id, because a planner is
+   * private and the org key is the channel every colleague's board is
+   * already listening on. See `realtime.publish_planner_changed`.
+   *
+   * Filtering on `type` and on whose planner moved is an *audience* check,
+   * not the forbidden branch on `change`: nothing here asks what kind of
+   * change it was.
+   */
+  useRealtime(
+    useCallback(
+      (event) => {
+        if (event.organisation_id && event.organisation_id !== orgId) return;
+        if (event.type === "planner") {
+          // Only ever our own, since that is the only one addressed to us —
+          // belt and braces for the admin who is looking at somebody else's.
+          if (event.user_id !== (targetUserId ?? me?.id)) return;
+        } else if (event.type !== "task") {
+          return;
+        }
+        clearTimeout(refresh.current);
+        refresh.current = setTimeout(reload, LIVE_COALESCE_MS);
+      },
+      [orgId, targetUserId, me?.id, reload],
+    ),
+    useMemo(() => (orgId ? { kind: "org" as const, id: orgId } : undefined), [orgId]),
+  );
+
   useEffect(() => {
     if (!orgId || !isAdmin) return;
     void api<Member[]>(`/organisations/${orgId}/members`).then(setMembers);
@@ -136,6 +229,7 @@ export default function Planner() {
   );
 
   const onDragStart = (event: DragStartEvent) => {
+    busy.current += 1;
     if (!board) return;
     const taskId = String(event.active.id);
     const from = containerOf(board, taskId);
@@ -148,8 +242,25 @@ export default function Planner() {
     setActiveTask(task ?? null);
   };
 
+  /** Escape, or a drag dnd-kit abandons, fires this instead of `onDragEnd` —
+   *  so the overlay card and the busy count are both cleared in two places or
+   *  neither. Without it a cancelled drag left a card following the pointer
+   *  and the board permanently too busy to refresh. */
+  const onDragCancel = () => {
+    setActiveTask(null);
+    release();
+  };
+
   const onDragEnd = async (event: DragEndEvent) => {
     setActiveTask(null);
+    try {
+      await applyDrop(event);
+    } finally {
+      release();
+    }
+  };
+
+  const applyDrop = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!board || !over) return;
 
@@ -256,6 +367,7 @@ export default function Planner() {
           collisionDetection={closestCenter}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
+          onDragCancel={onDragCancel}
         >
           {/* The pool is a tray, not a column of the board: it stays put on
               the left where you drag *from*, and only stacks above the

@@ -1262,9 +1262,13 @@ async def unplan_task(ctx: Context, organisation_id: str, task_id: str) -> str:
     async with SessionLocal() as db:
         # Membership, not task access: this only ever deletes the caller's own
         # row, but a stranger should still be told "no such organisation"
-        # rather than handed a cheerful success.
-        await _org(db, user, organisation_id)
-        await planner_service.remove(db, target_user_id=user.id, task_id=tid)
+        # rather than handed a cheerful success. It is also where the org id
+        # the realtime announce carries comes from — resolved, never trusted
+        # from the argument.
+        org = await _org(db, user, organisation_id)
+        await planner_service.remove(
+            db, target_user_id=user.id, org_id=org.organisation.id, task_id=tid
+        )
     return "Off your planner."
 
 
