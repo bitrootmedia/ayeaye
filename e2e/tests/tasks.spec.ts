@@ -74,6 +74,39 @@ test.describe("the board", () => {
     await page.getByRole("button", { name: "Show closed" }).click();
     await expect(page.getByText("Finish me")).toBeVisible();
   });
+
+  test("dragging a card to another column changes its status", async ({ page }) => {
+    // Keyboard drag, for the reason planner.spec.ts gives: dnd-kit's pointer
+    // sensor is flaky to script, and this also proves the move is reachable
+    // without a mouse. ArrowRight goes to the nearest column to the right.
+    await signUp(page, uniqueEmail("tk"));
+    const orgId = await createOrg(page, `Board ${Date.now()}`);
+    await createTask(page, orgId, "Hoist the mainsail");
+
+    const todo = page.getByRole("region", { name: "To do" });
+    const inProgress = page.getByRole("region", { name: "In progress" });
+    await expect(todo.getByText("Hoist the mainsail")).toBeVisible();
+
+    await page.getByRole("button", { name: "Move Hoist the mainsail" }).focus();
+    await page.keyboard.press("Space");
+    await page.waitForTimeout(250);
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(250);
+    await page.keyboard.press("Space");
+
+    await expect(inProgress.getByText("Hoist the mainsail")).toBeVisible();
+    await expect(todo.getByText("Hoist the mainsail")).toHaveCount(0);
+
+    // A real PATCH, not a local rearrangement.
+    await page.reload();
+    await expect(inProgress.getByText("Hoist the mainsail")).toBeVisible();
+
+    // Grouped by who's action-required, a drag would be a hand-off, so
+    // there's nothing to grab.
+    await page.goto(`/orgs/${orgId}/tasks?view=board&group=action_required`);
+    await expect(page.getByText("Hoist the mainsail")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Move Hoist the mainsail" })).toHaveCount(0);
+  });
 });
 
 test.describe("only the owner closes", () => {

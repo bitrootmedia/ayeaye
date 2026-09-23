@@ -1,9 +1,26 @@
 import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  rectIntersection,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type CollisionDetection,
+  type KeyboardCoordinateGetter,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
   ArrowDownIcon,
   ArrowUpIcon,
   CircleDotIcon,
   Columns3Icon,
   EyeOffIcon,
+  GripVerticalIcon,
   LayoutGridIcon,
   ListIcon,
   PlusIcon,
@@ -13,7 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
-import { api, apiWithHeaders } from "@/api";
+import { ApiError, api, apiWithHeaders } from "@/api";
 import type { Shell } from "@/App";
 import { useRealtime } from "@/hooks/use-realtime";
 import { EntityPicker, type PickerItem } from "@/components/entity-picker";
@@ -41,7 +58,9 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
+import { useToastManager } from "@/components/ui/toast";
 import { ago, timestamp } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { lastView, rememberView } from "@/lib/view-preference";
 import {
   PRIORITY_LABEL,
@@ -416,7 +435,7 @@ export default function Tasks() {
           </EmptyContent>
         </Empty>
       ) : view === "board" ? (
-        <Board orgId={org.id} board={board!} groupBy={groupBy} />
+        <Board orgId={org.id} board={board!} groupBy={groupBy} onMoved={load} />
       ) : (
         <>
           <TaskList
@@ -460,15 +479,87 @@ export default function Tasks() {
   );
 }
 
+/**
+ * Pointer drops go wherever the pointer is; keyboard drags have no pointer,
+ * so they fall back to whichever column the moved card overlaps most. A
+ * card is wide enough to straddle two columns at the md breakpoint, and
+ * "the one under your cursor" is the only answer that never surprises.
+ */
+const boardCollision: CollisionDetection = (args) => {
+  const hits = pointerWithin(args);
+  return hits.length > 0 ? hits : rectIntersection(args);
+};
+
+/**
+ * Arrow keys move a keyboard-held card to the nearest column in that
+ * direction, rather than dnd-kit's default 25px nudge.
+ *
+ * dnd-kit's `sortableKeyboardCoordinates` looks like it does this, but it
+ * returns nothing unless the dragged item is itself a droppable — true of a
+ * sortable, not of a plain draggable card — so the card never moved.
+ */
+const columnKeyboardCoordinates: KeyboardCoordinateGetter = (
+  event,
+  { context: { collisionRect, droppableRects, droppableContainers, over } },
+) => {
+  const step = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] }[
+    event.code
+  ];
+  if (!step || !collisionRect) return undefined;
+  event.preventDefault();
+  const [dx, dy] = step;
+  let best: { x: number; y: number; distance: number } | null = null;
+  for (const container of droppableContainers.getEnabled()) {
+    const rect = droppableRects.get(container.id);
+    if (!rect || container.id === over?.id) continue;
+    const ahead = dx * (rect.left - collisionRect.left) + dy * (rect.top - collisionRect.top);
+    if (ahead <= 0) continue;
+    const distance = Math.hypot(rect.left - collisionRect.left, rect.top - collisionRect.top);
+    if (!best || distance < best.distance) {
+      // Just inside the column's corner, so the card overlaps it the most.
+      best = { x: rect.left + 8, y: rect.top + 8, distance };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : undefined;
+};
+
 function Board({
   orgId,
-  board,
+  board: served,
   groupBy,
+  onMoved,
 }: {
   orgId: string;
   board: BoardData;
   groupBy: GroupBy;
+  onMoved: () => Promise<void> | void;
 }) {
+  const toast = useToastManager();
+  // The board as drawn. A drop moves the card here first, so it lands where
+  // it was let go rather than snapping back for the length of a round trip;
+  // the next fetch replaces it wholesale, which is also what puts the card
+  // at its real place in the column's order.
+  const [board, setBoard] = useState(served);
+  useEffect(() => setBoard(served), [served]);
+  const [active, setActive] = useState<Task | null>(null);
+
+  const sensors = useSensors(
+    // A few pixels of slack so a click on the grip is still a click.
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // Arrow keys jump to the neighbouring column rather than nudging 25px.
+    useSensor(KeyboardSensor, { coordinateGetter: columnKeyboardCoordinates }),
+  );
+
+  // Dragging a card between columns *is* setting that field — the status or
+  // the priority the column names. Action-required columns are people, and
+  // dropping work on somebody is a hand-off that notifies them; that stays a
+  // deliberate choice on the task screen rather than something a slipped
+  // drag can do.
+  const draggable = groupBy === "status" || groupBy === "priority";
+  // `read` would 403 on the PATCH. The grip isn't offered rather than being
+  // offered and then refusing — the same reason `can_close` hides Close.
+  const canMove = (task: Task) => draggable && task.access !== "read";
+
   // Status and priority are fixed, small enums — columns are driven by them
   // rather than by what came back, so an empty column stays on screen (a
   // board whose columns appear and disappear as work moves is one you can't
@@ -477,7 +568,13 @@ function Board({
   // catch-all — a person with zero flagged tasks simply never gets a
   // column, and that's the entire membership, not a small fixed set worth
   // hardcoding. So those columns come straight from what the server found.
-  let columns: { key: string; heading: React.ReactNode; items: Task[]; total: number }[];
+  let columns: {
+    key: string;
+    label: string;
+    heading: React.ReactNode;
+    items: Task[];
+    total: number;
+  }[];
   if (groupBy === "action_required") {
     // Nobody last: the point of this arrangement is "who's being waited on,
     // for what", and the catch-all for tasks asking nothing of anyone is
@@ -495,6 +592,7 @@ function Board({
       })
       .map((c) => ({
         key: c.key,
+        label: c.key === "none" ? "Nobody" : personName(c.tasks[0]?.action_required),
         heading:
           c.key === "none" ? (
             <span className="text-sm font-medium text-muted-foreground">Nobody</span>
@@ -515,6 +613,10 @@ function Board({
     const keys: string[] = groupBy === "status" ? TASK_STATUSES : TASK_PRIORITIES;
     columns = keys.map((key) => ({
       key,
+      label:
+        groupBy === "status"
+          ? STATUS_LABEL[key as TaskStatus]
+          : PRIORITY_LABEL[key as TaskPriority],
       heading:
         groupBy === "status" ? (
           <StatusBadge status={key as TaskStatus} />
@@ -529,55 +631,222 @@ function Board({
     }));
   }
 
+  const columnOf = (taskId: string) =>
+    board.columns.find((c) => c.tasks.some((t) => t.id === taskId));
+
+  const onDragStart = (event: DragStartEvent) => {
+    const id = String(event.active.id);
+    setActive(columnOf(id)?.tasks.find((t) => t.id === id) ?? null);
+  };
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    setActive(null);
+    if (!event.over || groupBy === "action_required") return;
+    const taskId = String(event.active.id);
+    const to = String(event.over.id);
+    const from = columnOf(taskId);
+    const task = from?.tasks.find((t) => t.id === taskId);
+    if (!from || !task || from.key === to) return;
+
+    const field = groupBy; // "status" | "priority" — the column key is the value
+    const moved: Task = { ...task, [field]: to };
+    const snapshot = board;
+    const exists = board.columns.some((c) => c.key === to);
+    setBoard({
+      ...board,
+      columns: [
+        ...board.columns.map((c) =>
+          c.key === from.key
+            ? { ...c, tasks: c.tasks.filter((t) => t.id !== taskId), total: c.total - 1 }
+            : c.key === to
+              ? { ...c, tasks: [moved, ...c.tasks], total: c.total + 1 }
+              : c,
+        ),
+        // A column the server sent nothing for isn't in `board.columns` at
+        // all — the empty ones on screen come from the enum, not the payload.
+        ...(exists ? [] : [{ key: to, total: 1, tasks: [moved] }]),
+      ],
+    });
+
+    try {
+      await api(`/organisations/${orgId}/tasks/${taskId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ [field]: to }),
+      });
+      await onMoved();
+    } catch (err) {
+      setBoard(snapshot);
+      const detail =
+        err instanceof ApiError && err.status === 403
+          ? "You can see this task, but not change it."
+          : err instanceof ApiError && err.status === 404
+            ? "That task isn't visible to you any more."
+            : "Try again.";
+      toast.add({ title: "Couldn't move that", description: detail });
+    }
+  };
+
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-      {columns.map((column) => (
-        <div key={column.key} className="flex flex-col gap-2 rounded-xl bg-muted/40 p-2">
-          <div className="flex items-center justify-between px-1 py-1">
-            {column.heading}
-            {/* The real total, not what fits. "50" beside a column holding
-                812 is the board lying about how much work there is. */}
-            <span className="font-mono text-xs text-muted-foreground">
-              {column.items.length < column.total
-                ? `${column.items.length} of ${column.total}`
-                : column.total}
-            </span>
-          </div>
-          {column.items.map((task) => (
-            <Link
-              key={task.id}
-              to={`/orgs/${orgId}/tasks/${task.id}`}
-              className="group space-y-2 rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50"
-            >
-              <div className="flex items-start gap-2">
-                {/* The glyph is redundant in the priority arrangement — but
-                    dropping it would make cards jump between views, and the
-                    column heading is off-screen once you've scrolled. */}
-                <PriorityGlyph priority={task.priority} className="mt-0.5" />
-                <span className="min-w-0 flex-1 text-sm font-medium">{task.title}</span>
-                <HiddenMark task={task} />
-                <ClosedBadge isOpen={task.is_open} />
-              </div>
-              {/* Redundant only when status itself is the column; grouped by
-                  priority or by action-required, it's the one place left
-                  that says where the task actually stands. */}
-              {groupBy !== "status" && <StatusBadge status={task.status} />}
-              <TaskMeta task={task} hideActionRequired={groupBy === "action_required"} />
-            </Link>
-          ))}
-          {column.items.length === 0 && (
-            <p className="px-1 py-2 text-xs text-muted-foreground">Nothing here.</p>
-          )}
-          {column.items.length < column.total && (
-            <Link
-              to={`/orgs/${orgId}/tasks?view=list`}
-              className="px-1 py-2 text-xs text-muted-foreground underline underline-offset-2"
-            >
-              {column.total - column.items.length} more — see the list
-            </Link>
-          )}
-        </div>
-      ))}
+    <DndContext
+      sensors={sensors}
+      collisionDetection={boardCollision}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => setActive(null)}
+    >
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {columns.map((column) => (
+          <BoardColumn key={column.key} id={column.key} label={column.label} droppable={draggable}>
+            <div className="flex items-center justify-between px-1 py-1">
+              {column.heading}
+              {/* The real total, not what fits. "50" beside a column holding
+                  812 is the board lying about how much work there is. */}
+              <span className="font-mono text-xs text-muted-foreground">
+                {column.items.length < column.total
+                  ? `${column.items.length} of ${column.total}`
+                  : column.total}
+              </span>
+            </div>
+            {column.items.map((task) => (
+              <BoardCard
+                key={task.id}
+                orgId={orgId}
+                task={task}
+                groupBy={groupBy}
+                movable={canMove(task)}
+              />
+            ))}
+            {column.items.length === 0 && (
+              <p className="px-1 py-2 text-xs text-muted-foreground">Nothing here.</p>
+            )}
+            {column.items.length < column.total && (
+              <Link
+                to={`/orgs/${orgId}/tasks?view=list`}
+                className="px-1 py-2 text-xs text-muted-foreground underline underline-offset-2"
+              >
+                {column.total - column.items.length} more — see the list
+              </Link>
+            )}
+          </BoardColumn>
+        ))}
+      </div>
+      <DragOverlay>
+        {active && <BoardCardBody orgId={orgId} task={active} groupBy={groupBy} lifted />}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+function BoardColumn({
+  id,
+  label,
+  droppable,
+  children,
+}: {
+  id: string;
+  label: string;
+  droppable: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, disabled: !droppable });
+  return (
+    <div
+      ref={setNodeRef}
+      role="region"
+      aria-label={label}
+      className={cn(
+        "flex flex-col gap-2 rounded-xl bg-muted/40 p-2 transition-colors",
+        isOver && "bg-accent/50 ring-1 ring-primary/40",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function BoardCard({
+  orgId,
+  task,
+  groupBy,
+  movable,
+}: {
+  orgId: string;
+  task: Task;
+  groupBy: GroupBy;
+  movable: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+    disabled: !movable,
+  });
+  return (
+    <div ref={setNodeRef} className={cn(isDragging && "opacity-40")}>
+      <BoardCardBody
+        orgId={orgId}
+        task={task}
+        groupBy={groupBy}
+        dragHandleProps={movable ? { ...attributes, ...listeners } : undefined}
+      />
+    </div>
+  );
+}
+
+/** Separated from `BoardCard` so the `DragOverlay` copy that follows the
+ *  pointer shares the markup without carrying a live drag handle. */
+function BoardCardBody({
+  orgId,
+  task,
+  groupBy,
+  dragHandleProps,
+  lifted,
+}: {
+  orgId: string;
+  task: Task;
+  groupBy: GroupBy;
+  dragHandleProps?: Record<string, unknown>;
+  lifted?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "group relative space-y-2 rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50",
+        lifted && "shadow-lg",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        {dragHandleProps && (
+          // Only the grip carries dnd-kit's listeners, so opening the task and
+          // moving it never fight over the same click — the Planner's idiom.
+          // `relative z-10` lifts it above the card-wide link below.
+          <button
+            type="button"
+            aria-label={`Move ${task.title}`}
+            className="relative z-10 -ml-1 mt-0.5 shrink-0 cursor-grab touch-none text-muted-foreground opacity-40 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
+            {...dragHandleProps}
+          >
+            <GripVerticalIcon className="size-4" />
+          </button>
+        )}
+        {/* The glyph is redundant in the priority arrangement — but
+            dropping it would make cards jump between views, and the
+            column heading is off-screen once you've scrolled. */}
+        <PriorityGlyph priority={task.priority} className="mt-0.5" />
+        {/* The whole card still opens the task: the link's ::after covers
+            it, and a <button> can't be nested inside an <a>. */}
+        <Link
+          to={`/orgs/${orgId}/tasks/${task.id}`}
+          className="min-w-0 flex-1 text-sm font-medium after:absolute after:inset-0 after:rounded-lg"
+        >
+          {task.title}
+        </Link>
+        <HiddenMark task={task} />
+        <ClosedBadge isOpen={task.is_open} />
+      </div>
+      {/* Redundant only when status itself is the column; grouped by
+          priority or by action-required, it's the one place left
+          that says where the task actually stands. */}
+      {groupBy !== "status" && <StatusBadge status={task.status} />}
+      <TaskMeta task={task} hideActionRequired={groupBy === "action_required"} />
     </div>
   );
 }

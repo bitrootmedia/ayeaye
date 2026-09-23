@@ -249,6 +249,25 @@ already owns the only red and the only amber, and a second colour scale per
 card would stop red meaning "this needs you". Every glyph carries a `title`
 and an `aria-label`, so the level is never conveyed by colour alone.
 
+**Dragging a board card to another column sets that field** — status or
+priority, whichever the board is grouped by, through the same
+`PATCH /tasks/{id}` the task screen uses, so events and notifications are
+not reimplemented. Four things about `Board` in `views/Tasks.tsx`:
+
+- **Not when grouped by action-required.** Those columns are people, and a
+  drop there is a hand-off that notifies somebody; it stays a deliberate
+  choice on the task screen, not something a slipped drag does.
+- **No grip on a `read` card**, rather than a grip whose drop 403s — the
+  `can_close` rule again.
+- **Only the grip carries dnd-kit's listeners** (the Planner's idiom); the
+  whole card still opens the task through the title link's `::after`,
+  because a `<button>` can't sit inside an `<a>`.
+- **The keyboard coordinate getter is our own.** `sortableKeyboardCoordinates`
+  silently returns nothing unless the dragged item is itself a droppable —
+  true of a sortable, not of a `useDraggable` card — so arrow keys did
+  nothing. `columnKeyboardCoordinates` jumps to the nearest column in the
+  arrow's direction. `tasks.spec.ts` pins the drag by keyboard.
+
 ## Triage
 
 `views/Triage.tsx`, at `/orgs/{id}/triage`, its own rail item directly under
