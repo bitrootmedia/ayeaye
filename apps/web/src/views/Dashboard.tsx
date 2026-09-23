@@ -12,7 +12,7 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useToastManager } from "@/components/ui/toast";
+import { useRealtime } from "@/hooks/use-realtime";
 import { ago } from "@/lib/format";
 import {
   personName,
@@ -36,6 +37,15 @@ import {
   type TaskStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/**
+ * How long changes are collected before the page refetches.
+ *
+ * The same 1.5s the Tasks board and the Planner use, and for the same reason:
+ * this screen is one request that returns eight lists, and a busy Tuesday
+ * afternoon would otherwise rebuild all of them several times a second.
+ */
+const LIVE_COALESCE_MS = 1_500;
 
 /**
  * The organisation's landing screen.
@@ -56,6 +66,7 @@ export default function Dashboard() {
 
   const [data, setData] = useState<DashboardData | null>(null);
   const [posting, setPosting] = useState(false);
+  const refresh = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const load = useCallback(async () => {
     if (!orgId) return;
@@ -65,6 +76,44 @@ export default function Dashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Live, on the organisation's key.
+   *
+   * This screen is eight cards built from four kinds of record — tasks,
+   * announcements, absences and your own pins — and it was the one place in
+   * the product where the answer to "has anything changed" was to press
+   * reload. The socket already carried every task change on `org:<id>`;
+   * `publish_org_changed` carries the rest.
+   *
+   * **Nothing is branched on here beyond the audience.** An event that names
+   * an organisation which isn't this one is somebody else's; everything else
+   * refetches, whatever `type` or `change` it claims. A dashboard that only
+   * reacted to the kinds it recognised would quietly stop reacting the day a
+   * ninth card arrives — which is the rule `use-realtime.ts` states about
+   * `change` and the reason this does not ask what moved.
+   *
+   * Coalesced at the same 1.5s the Tasks board and the Planner use: twenty
+   * people working is twenty events a second, and this page is one request
+   * that builds eight lists. Only while the tab is visible — a dashboard left
+   * open on another desktop for a week should not be refetching all of it.
+   */
+  useRealtime(
+    useCallback(
+      (event) => {
+        if (event.organisation_id && event.organisation_id !== orgId) return;
+        clearTimeout(refresh.current);
+        refresh.current = setTimeout(() => {
+          if (document.visibilityState === "visible") void load();
+        }, LIVE_COALESCE_MS);
+      },
+      [orgId, load],
+    ),
+    useMemo(() => (orgId ? { kind: "org" as const, id: orgId } : undefined), [orgId]),
+  );
+
+  // Whatever was still pending when the screen goes.
+  useEffect(() => () => clearTimeout(refresh.current), []);
 
   if (!org) return null;
   if (!data) {

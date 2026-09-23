@@ -105,6 +105,53 @@ async def publish_task_changed(*, task_id: str, organisation_id: str, change: st
         await client.aclose()
 
 
+async def publish_org_changed(
+    *, organisation_id: str, change: str, user_ids: list[str] | None = None
+) -> None:
+    """Announce that something *other than a task* moved in an organisation.
+
+    An announcement posted or taken down, somebody marking themselves away, a
+    task pinned to a dashboard. These are the records the organisation's own
+    landing screen is built from and the only ones on it that
+    `publish_task_changed` does not already cover — a dashboard that went live
+    for a status change and not for a notice pinned to the top of it would be
+    the more confusing half-answer.
+
+    **The two audiences again, and here the caller picks.** With no
+    `user_ids` this goes out on the organisation's watch key, which is what
+    an announcement or an absence is: everybody's dashboard shows it, so
+    everybody looking at one should see it arrive. With `user_ids` it is
+    delivered to those people only and carries no watch key at all — the
+    shape `publish_planner_changed` already uses for a private record, and
+    what a pin is: nobody else's dashboard changes when you pin something,
+    so broadcasting it would be every tab in the company refetching for one
+    person's bookmark.
+
+    No content, like everything else on this channel: the client refetches,
+    and a viewer whose membership was revoked in between gets a 404 from that
+    refetch rather than a payload.
+    """
+    client = aioredis.from_url(settings.redis_url)
+    try:
+        await client.publish(
+            EVENTS_CHANNEL,
+            json.dumps(
+                {
+                    "type": "org",
+                    "organisation_id": organisation_id,
+                    "change": change,
+                    "user_ids": user_ids or [],
+                    "watch": None if user_ids else f"org:{organisation_id}",
+                }
+            ),
+        )
+    except Exception as exc:
+        # Already committed. Losing the ping costs a refresh.
+        logger.warning("could not publish an organisation event: %s", exc)
+    finally:
+        await client.aclose()
+
+
 async def publish_planner_changed(
     *, user_id: str, organisation_id: str, task_id: str, change: str
 ) -> None:

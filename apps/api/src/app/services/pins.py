@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Task, TaskPin, User
+from app.realtime.events import publish_org_changed
 from app.services import access
 from app.services.organisations import OrgContext
 
@@ -50,9 +51,22 @@ async def pinned_ids(db: AsyncSession, task_ids: list[uuid.UUID], user: User) ->
     return set(rows)
 
 
-async def set_pinned(db: AsyncSession, task_id: uuid.UUID, user: User, *, pinned: bool) -> None:
+async def set_pinned(
+    db: AsyncSession, task_id: uuid.UUID, user: User, *, pinned: bool, ctx: OrgContext
+) -> None:
     """Idempotent either way: pinning twice, or unpinning something that was
-    never pinned, is a no-op rather than an error."""
+    never pinned, is a no-op rather than an error.
+
+    `ctx` is here only so the dashboard can be told, which is why it arrives
+    as a keyword beside `pinned` rather than as the first argument the rest of
+    this module's statements take: a pin's access rule is the task's, decided
+    by the caller before it gets here.
+
+    **Delivered to the pinner, not broadcast.** A pin is private — nobody
+    else's dashboard changes when you make one — so this goes out by user id
+    with no watch key, the shape `publish_planner_changed` uses for a planner.
+    The audience is your own other tabs.
+    """
     if pinned:
         stmt = (
             insert(TaskPin)
@@ -62,11 +76,14 @@ async def set_pinned(db: AsyncSession, task_id: uuid.UUID, user: User, *, pinned
         await db.execute(stmt)
     else:
         await db.execute(
-            TaskPin.__table__.delete().where(
-                TaskPin.task_id == task_id, TaskPin.user_id == user.id
-            )
+            TaskPin.__table__.delete().where(TaskPin.task_id == task_id, TaskPin.user_id == user.id)
         )
     await db.commit()
+    await publish_org_changed(
+        organisation_id=str(ctx.organisation.id),
+        change="pinned" if pinned else "unpinned",
+        user_ids=[str(user.id)],
+    )
 
 
 def my_pinned_tasks_stmt(*, user_id: uuid.UUID, ctx: OrgContext) -> Select:
