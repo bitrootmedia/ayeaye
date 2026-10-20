@@ -719,6 +719,7 @@ export const NOTIFICATION_KIND_LABEL: Record<string, string> = {
   // since it shipped. See migration 0045 for the other half of that.
   book_shared: "A book was shared with you",
   comment_mention: "Mentioned in a comment",
+  timer_paused: "Your timer was paused while you were away",
 };
 
 // --- time ------------------------------------------------------------------
@@ -737,7 +738,13 @@ export type TimeEntry = {
   edited_at: string | null;
 };
 
-export type Timer = { entry: TimeEntry | null; organisation_id: string | null };
+export type Timer = {
+  entry: TimeEntry | null;
+  organisation_id: string | null;
+  /** Set while "still working on this?" waits for an answer: when it runs
+   *  out and the timer pauses itself. */
+  check_in_deadline?: string | null;
+};
 
 export type RollupRow = { id: string | null; name: string; seconds: number };
 export type TimeSummary = {

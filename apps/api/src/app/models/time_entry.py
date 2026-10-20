@@ -70,6 +70,23 @@ class TimeEntry(Base):
 
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # "Still working on this?" — see services/check_ins.py. Only ever set on a
+    # running entry. `next_check_in_at` is when to ask; asking moves it into
+    # `check_in_asked_at` and sets `check_in_deadline`, and an answer clears
+    # both and picks a new `next_check_in_at`. No answer by the deadline ends
+    # the entry at `check_in_asked_at`. On the entry rather than a table of
+    # their own because a check-in is about one running timer and dies with
+    # it — there is never a second one, or one left over.
+    next_check_in_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    check_in_asked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    check_in_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Set when someone corrects an entry after the fact — which PLAN.md §9
     # settles as allowed, because people forget to stop timers and the
     # alternative is a timesheet everyone knows is wrong.

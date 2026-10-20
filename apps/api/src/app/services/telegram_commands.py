@@ -1,6 +1,8 @@
 """What a Telegram chat can say to this product, and what it says back.
 
-Four commands. `/start {code}` is the linking handshake (`services/
+Four commands, and one kind of button — the two under "still working on
+this?" (`services/check_ins.py`), which arrive as a `callback_query` rather
+than a message. `/start {code}` is the linking handshake (`services/
 notification_channels.py::complete_telegram_link`); `/task`, `/org` and
 `/help` are new. Everything else — a plain message, an unrecognised
 command — gets a "send /help" reply and creates nothing. That was a
@@ -35,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models import NotificationChannel, User
 from app.models.notification_channel import CHANNEL_TELEGRAM
+from app.services import check_ins as check_ins_service
 from app.services import notification_channels as channels_service
 from app.services import organisations as organisations_service
 from app.services import tasks as tasks_service
@@ -52,6 +55,9 @@ HELP_TEXT = (
 
 
 async def handle_update(db: AsyncSession, update: dict) -> None:
+    if update.get("callback_query"):
+        await _handle_button(db, update["callback_query"])
+        return
     message = update.get("message") or {}
     text = (message.get("text") or "").strip()
     chat = message.get("chat") or {}
@@ -82,6 +88,37 @@ async def handle_update(db: AsyncSession, update: dict) -> None:
         await _reply(chat_id, HELP_TEXT)
     else:
         await _reply(chat_id, "Didn't understand that — send /help for the commands.")
+
+
+async def _handle_button(db: AsyncSession, query: dict) -> None:
+    """A tap on one of the buttons under "still working on this?".
+
+    The only buttons this bot sends, so anything else is ignored. Resolved
+    through the chat the tap came from, exactly like a command — the entry id
+    in the button only pins *which* timer, it grants nothing on its own.
+    """
+    message = query.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    parsed = check_ins_service.parse_callback(query.get("data") or "")
+    if chat_id is None or parsed is None:
+        return
+    action, entry_id = parsed
+    resolved = await _channel_and_user(db, str(chat_id))
+    if resolved is None:
+        return
+    _, user = resolved
+    outcome = await check_ins_service.answer(
+        db, user, still_working=action == check_ins_service.ANSWER_YES, entry_id=entry_id
+    )
+    question = (message.get("text") or "").split("\n")[0]
+    text = {
+        check_ins_service.CONFIRMED: f"{question}\n\n✓ Yes — carrying on.",
+        check_ins_service.STOPPED: f"{question}\n\n■ Stopped the timer.",
+        check_ins_service.GONE: f"{question}\n\nThat timer isn't running any more.",
+    }[outcome]
+    await telegram_service.settle_question(
+        str(chat_id), message.get("message_id"), query.get("id"), text
+    )
 
 
 async def _handle_start(db: AsyncSession, chat_id: str, code: str) -> None:

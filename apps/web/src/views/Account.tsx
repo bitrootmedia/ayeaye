@@ -63,6 +63,17 @@ const HOUR_ITEMS: PickerItem[] = Array.from({ length: 24 }, (_, hour) => ({
   label: `${String(hour).padStart(2, "0")}:00`,
 }));
 
+const CHECK_IN_ITEMS: PickerItem[] = [
+  { value: "telegram", label: "Ask in Telegram and the apps" },
+  { value: "apps", label: "Ask only in the apps" },
+  { value: "off", label: "Don't ask" },
+];
+
+const PER_DAY_ITEMS: PickerItem[] = Array.from({ length: 24 }, (_, i) => ({
+  value: String(i + 1),
+  label: i === 0 ? "At most once a day" : `At most ${i + 1} times a day`,
+}));
+
 /**
  * Your account: who you are, how to reach you, and when you aren't here.
  *
@@ -79,6 +90,8 @@ export default function Account() {
   const [status, setStatus] = useState(me?.status_message ?? "");
   const [dailySummary, setDailySummary] = useState(me?.daily_summary_enabled ?? true);
   const [summaryHour, setSummaryHour] = useState(me?.daily_summary_hour ?? 6);
+  const [checkIns, setCheckIns] = useState(me?.timer_check_ins ?? "telegram");
+  const [checkInsPerDay, setCheckInsPerDay] = useState(me?.timer_check_ins_per_day ?? 6);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -91,6 +104,8 @@ export default function Account() {
           status_message: status,
           daily_summary_enabled: dailySummary,
           daily_summary_hour: summaryHour,
+          timer_check_ins: checkIns,
+          timer_check_ins_per_day: checkInsPerDay,
         }),
       });
       await reload();
@@ -181,6 +196,32 @@ export default function Account() {
                   </p>
                 </div>
               )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="timer-check-ins">Timer check-ins</Label>
+              <EntityPicker
+                id="timer-check-ins"
+                ariaLabel="Timer check-ins"
+                items={CHECK_IN_ITEMS}
+                value={checkIns}
+                onChange={(value) => value !== null && setCheckIns(value as typeof checkIns)}
+              />
+              {checkIns !== "off" && (
+                <EntityPicker
+                  id="timer-check-ins-per-day"
+                  ariaLabel="Timer check-ins per day"
+                  items={PER_DAY_ITEMS}
+                  value={String(checkInsPerDay)}
+                  onChange={(value) => value !== null && setCheckInsPerDay(Number(value))}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                While a timer runs, every hour or two you&rsquo;re asked whether you&rsquo;re
+                still on it — in the header here, in the menu bar app, and in Telegram if
+                it&rsquo;s linked below. No answer within 15–30 minutes pauses the timer at the
+                moment it asked, and &ldquo;Your timer was paused&rdquo; tells you wherever you
+                route it.
+              </p>
             </div>
             <Button onClick={save} disabled={saving}>
               Save

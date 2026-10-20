@@ -10,6 +10,7 @@ from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
 
 from app.tasks import (
+    check_ins,  # noqa: F401  registers sweep_timer_check_ins
     daily_summary,  # noqa: F401  registers sweep_daily_summaries
     deadlines,  # noqa: F401  registers sweep_deadlines
     exports,  # noqa: F401  registers build_export, sweep_expired_exports
@@ -34,6 +35,7 @@ scheduler = TaskiqScheduler(broker=broker, sources=[LabelScheduleSource(broker)]
 __all__ = [
     "broker",
     "scheduler",
+    "check_ins",
     "daily_summary",
     "deadlines",
     "exports",

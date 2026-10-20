@@ -68,6 +68,11 @@ export type Me = {
   /** Which local hour that digest goes out, 0-23, read against `timezone`.
    *  Default 6. Yours to change on the account screen. */
   daily_summary_hour: number;
+  /** "Still working on this?" while a timer runs — asked in Telegram (if
+   *  linked) and in the apps, only in the apps, or not at all. At most
+   *  `timer_check_ins_per_day` a day. See `services/check_ins.py`. */
+  timer_check_ins: "telegram" | "apps" | "off";
+  timer_check_ins_per_day: number;
   /** Whether this account administers the *installation* — an
    *  `instance_admins` row, granted from the shell alone
    *  (`scripts/instance.sh grant-admin`). It decides whether the rail shows

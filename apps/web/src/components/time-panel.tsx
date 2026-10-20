@@ -129,7 +129,7 @@ export function TimePanel({
           onClick={startOrStop}
         >
           {runningHere ? <SquareIcon className="fill-current" /> : <PlayIcon />}
-          {runningHere ? "Stop timer" : "Start timer"}
+          {runningHere ? "Stop timer" : "Start work"}
         </Button>
 
         <div className="space-y-2">

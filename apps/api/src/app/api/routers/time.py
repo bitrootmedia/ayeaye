@@ -15,6 +15,7 @@ from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.models import TimeEntry, User
 from app.schemas.structure import PersonOut
 from app.schemas.time import (
+    CheckInAnswer,
     ManualEntryIn,
     StartTimerOut,
     TimeEntryOut,
@@ -22,7 +23,7 @@ from app.schemas.time import (
     TimerOut,
     TimeSummaryOut,
 )
-from app.services import time_tracking
+from app.services import check_ins, time_tracking
 
 me_router = APIRouter(prefix="/me", tags=["time"])
 router = APIRouter(prefix="/organisations/{org_id}", tags=["time"])
@@ -75,7 +76,17 @@ async def my_timer(user: CurrentUser, db: DbSession):
     return TimerOut(
         entry=_entry_out(entry, who=user, task_title=task.title),
         organisation_id=str(task.organisation_id),
+        check_in_deadline=entry.check_in_deadline,
     )
+
+
+@me_router.post("/timer/check-in", response_model=TimerOut)
+async def answer_check_in(body: CheckInAnswer, user: CurrentUser, db: DbSession):
+    """Answer "still working on this?" from the header — yes, or stop.
+    Answers the same question the menu bar app and Telegram would; whichever
+    is first wins. Returns the timer as it now stands."""
+    await check_ins.answer(db, user, still_working=body.still_working)
+    return await my_timer(user, db)
 
 
 @me_router.post("/timer/stop", response_model=TimerOut)

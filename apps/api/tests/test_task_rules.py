@@ -347,4 +347,6 @@ def test_notification_kinds_are_a_closed_set():
         # comment notification that ignores the unread-run debounce — being
         # named is a direct address. See services/mentions.py.
         "comment_mention",
+        # A timer stopped because nobody answered the menu bar's check-in.
+        "timer_paused",
     }

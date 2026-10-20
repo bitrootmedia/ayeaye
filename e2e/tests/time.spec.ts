@@ -15,7 +15,7 @@ test.describe("time tracking", () => {
     await createTask(page, orgId, "Sand the hull");
     await openTask(page, orgId, "Sand the hull");
 
-    await page.getByRole("button", { name: "Start timer" }).click();
+    await page.getByRole("button", { name: "Start work" }).click();
     const clock = page.getByRole("status", { name: "Running timer" }).getByLabel("Elapsed");
     await expect(clock).toBeVisible();
 
@@ -26,7 +26,7 @@ test.describe("time tracking", () => {
     expect(await clock.textContent()).not.toBe(first);
 
     await page.getByRole("button", { name: "Stop the running timer" }).click();
-    await expect(page.getByRole("button", { name: "Start timer" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start work" })).toBeVisible();
   });
 
   test("the timer follows you across screens", async ({ page }) => {
@@ -36,7 +36,7 @@ test.describe("time tracking", () => {
     const orgId = await createOrg(page, `Clock ${Date.now()}`);
     await createTask(page, orgId, "Keep timing me");
     await openTask(page, orgId, "Keep timing me");
-    await page.getByRole("button", { name: "Start timer" }).click();
+    await page.getByRole("button", { name: "Start work" }).click();
     await expect(page.getByRole("status", { name: "Running timer" })).toBeVisible();
 
     await page.goto(`/orgs/${orgId}/projects`);
@@ -52,11 +52,11 @@ test.describe("time tracking", () => {
     await createTask(page, orgId, "Second job");
 
     await openTask(page, orgId, "First job");
-    await page.getByRole("button", { name: "Start timer" }).click();
+    await page.getByRole("button", { name: "Start work" }).click();
     await expect(page.getByRole("status", { name: "Running timer" })).toBeVisible();
 
     await openTask(page, orgId, "Second job");
-    await page.getByRole("button", { name: "Start timer" }).click();
+    await page.getByRole("button", { name: "Start work" }).click();
     // Not silent: the switch is announced, because otherwise the first task's
     // clock stops with no sign it ever did.
     await expect(page.getByText("Timer switched")).toBeVisible();

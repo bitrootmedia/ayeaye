@@ -37,6 +37,13 @@ class TimerOut(BaseModel):
 
     entry: TimeEntryOut | None
     organisation_id: str | None = None
+    # Set while "still working on this?" is waiting for an answer — when it
+    # runs out and the timer pauses itself. See services/check_ins.py.
+    check_in_deadline: datetime | None = None
+
+
+class CheckInAnswer(BaseModel):
+    still_working: bool
 
 
 class StartTimerOut(BaseModel):

@@ -71,6 +71,7 @@ from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
 from app.services import changelog as changelog_service
+from app.services import check_ins as check_ins_service
 from app.services import checklists as checklists_service
 from app.services import conversations as conversations_service
 from app.services import dependencies as dependencies_service
@@ -2066,7 +2067,36 @@ async def running_timer(ctx: Context) -> str:
         f"elapsed={time_tracking.format_duration(elapsed)}",
         f"started={entry.started_at.isoformat()}",
     ]
+    # Only while "still working on this?" is waiting — when it runs out and
+    # the timer pauses itself. A client shows the question and answers it
+    # with `answer_check_in`. See services/check_ins.py.
+    if entry.check_in_deadline is not None:
+        bits.append(f"check_in_deadline={entry.check_in_deadline.isoformat()}")
     return " | ".join(bits)
+
+
+@tool()
+async def answer_check_in(
+    ctx: Context,
+    still_working: Annotated[
+        bool, Field(description="True to carry on timing, false to stop the timer now.")
+    ],
+) -> str:
+    """Answer "still working on this?" for your running timer.
+
+    While a timer runs, the server asks now and then whether you are still
+    on it — `running_timer` shows `check_in_deadline=` while it waits — and
+    nobody answering by then pauses the timer. Answer only what the person
+    said: this is their timesheet, not a guess about it."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        outcome = await check_ins_service.answer(db, user, still_working=still_working)
+    return {
+        check_ins_service.CONFIRMED: "Carrying on.",
+        check_ins_service.STOPPED: "Stopped the timer.",
+        check_ins_service.GONE: "Nothing is running.",
+    }[outcome]
 
 
 @tool()

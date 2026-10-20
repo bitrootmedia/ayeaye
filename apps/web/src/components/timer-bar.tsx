@@ -24,6 +24,7 @@ export function TimerBar({ timer, onChanged }: { timer: Timer; onChanged: () => 
   const entry = timer.entry;
   const [elapsed, setElapsed] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [answering, setAnswering] = useState(false);
 
   useEffect(() => {
     if (!entry) return;
@@ -46,6 +47,23 @@ export function TimerBar({ timer, onChanged }: { timer: Timer; onChanged: () => 
       onChanged();
     } finally {
       setStopping(false);
+    }
+  };
+
+  // "Still working on this?" — the server asks now and then while a timer
+  // runs, in Telegram and the menu bar app too, and whichever answers first
+  // answers it everywhere. Here it is one button: the Stop beside it is
+  // already the other answer.
+  const carryOn = async () => {
+    setAnswering(true);
+    try {
+      await api("/me/timer/check-in", {
+        method: "POST",
+        body: JSON.stringify({ still_working: true }),
+      });
+      onChanged();
+    } finally {
+      setAnswering(false);
     }
   };
 
@@ -78,6 +96,17 @@ export function TimerBar({ timer, onChanged }: { timer: Timer; onChanged: () => 
         <span className="hidden max-w-40 truncate text-xs text-muted-foreground md:block">
           {entry.task_title}
         </span>
+      )}
+      {timer.check_in_deadline && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={carryOn}
+          disabled={answering}
+          title="If nobody answers, the timer pauses itself"
+        >
+          Still working? Yes
+        </Button>
       )}
       <Button variant="ghost" size="sm" onClick={stop} disabled={stopping} aria-label="Stop the running timer">
         <SquareIcon className="fill-current" />

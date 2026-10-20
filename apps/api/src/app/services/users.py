@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User
 from app.security.authn import get_user_email
+from app.services import check_ins
 
 logger = logging.getLogger("app.services.users")
 
@@ -97,6 +98,8 @@ async def update_profile(
     status_message: str | None = None,
     daily_summary_enabled: bool | None = None,
     daily_summary_hour: int | None = None,
+    timer_check_ins: str | None = None,
+    timer_check_ins_per_day: int | None = None,
 ) -> User:
     if display_name is not None:
         user.display_name = display_name.strip() or None
@@ -111,7 +114,17 @@ async def update_profile(
         # it, and the CHECK constraint is the backstop — an hour arriving from
         # somewhere else is worth landing on a real hour, not a 500.
         user.daily_summary_hour = max(0, min(23, daily_summary_hour))
+    withdraw = False
+    if timer_check_ins is not None and timer_check_ins in check_ins.MODES:
+        withdraw = timer_check_ins == check_ins.MODE_OFF != user.timer_check_ins
+        user.timer_check_ins = timer_check_ins
+    if timer_check_ins_per_day is not None:
+        user.timer_check_ins_per_day = max(1, min(24, timer_check_ins_per_day))
     await db.commit()
+    if withdraw:
+        # A question already up is taken back rather than left to run out
+        # and pause a timer somebody has just said not to watch.
+        await check_ins.withdraw(db, user.id)
     await db.refresh(user)
     return user
 

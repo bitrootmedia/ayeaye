@@ -59,6 +59,11 @@ KIND_BOOK_SHARED = "book_shared"
 # address, and "you already have unread messages in that thread" is exactly
 # the case where the person needs telling anyway. See services/mentions.py.
 KIND_COMMENT_MENTION = "comment_mention"
+# A running timer was paused because nobody answered "still working on
+# this?" — see services/check_ins.py. Its own kind so it can be routed
+# somewhere you will see away from the desk (Telegram, typically), which is
+# by construction where you are.
+KIND_TIMER_PAUSED = "timer_paused"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_ACTION_REQUIRED_CLEARED,
@@ -73,6 +78,7 @@ NOTIFICATION_KINDS = (
     KIND_EXPORT_READY,
     KIND_BOOK_SHARED,
     KIND_COMMENT_MENTION,
+    KIND_TIMER_PAUSED,
 )
 
 

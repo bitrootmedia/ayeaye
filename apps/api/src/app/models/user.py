@@ -87,6 +87,26 @@ class User(Base):
     # schedulers racing sends one digest, not two.
     last_daily_summary_sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # Whether a running timer asks now and then if you're still on it, and
+    # where: `telegram` (the default — the chat if one is linked, and the menu
+    # bar app and the web header either way), `apps` (only those two), or
+    # `off`. Opt-out for the daily digest's reason: the timer left running
+    # overnight is exactly the one whose owner never went looking for a
+    # setting. See services/check_ins.py.
+    timer_check_ins: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'telegram'")
+    )
+    # At most this many questions a day, so a long day is not a nag.
+    timer_check_ins_per_day: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("6")
+    )
+    # How many have been asked on `timer_check_ins_day`, the person's own
+    # local date. A different date means zero; nothing has to reset it.
+    timer_check_ins_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    timer_check_ins_count: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("0")
+    )
+
     # Set true for every account that existed when email verification was
     # introduced, and cleared by the one-off pass in
     # `services/verification.py`. False for everything created since, which
@@ -122,6 +142,12 @@ class User(Base):
         # failing anywhere anybody would look, so it is refused by the
         # database as well as by the API field that writes it.
         CheckConstraint("daily_summary_hour BETWEEN 0 AND 23", name="ck_users_daily_summary_hour"),
+        CheckConstraint(
+            "timer_check_ins IN ('telegram', 'apps', 'off')", name="ck_users_timer_check_ins"
+        ),
+        CheckConstraint(
+            "timer_check_ins_per_day BETWEEN 1 AND 24", name="ck_users_timer_check_ins_per_day"
+        ),
     )
 
     created_at: Mapped[datetime] = mapped_column(

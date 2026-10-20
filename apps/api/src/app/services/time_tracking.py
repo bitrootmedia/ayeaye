@@ -30,13 +30,13 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Project, Task, TimeEntry, User
 from app.models.task import EVENT_TIME_DELETED, EVENT_TIME_EDITED, EVENT_TIME_LOGGED
-from app.services import access
+from app.services import access, check_ins
 from app.services import tasks as tasks_service
 from app.services.organisations import OrgContext
 
@@ -354,7 +354,13 @@ async def start(
             _event(stopped.task_id, user, EVENT_TIME_LOGGED, reason="switched to another task")
         )
 
-    entry = TimeEntry(task_id=task.id, user_id=user.id, started_at=func.now())
+    # The first "still working on this?" — see services/check_ins.py.
+    entry = TimeEntry(
+        task_id=task.id,
+        user_id=user.id,
+        started_at=func.now(),
+        next_check_in_at=check_ins.first_check_in(datetime.now(UTC)),
+    )
     db.add(entry)
     try:
         await db.commit()
@@ -406,6 +412,50 @@ async def stop(db: AsyncSession, user: User) -> TimeEntry | None:
     await db.refresh(entry)
     await _announce(db, entry.task_id, "timer_stopped")
     return entry
+
+
+async def end_unanswered(
+    db: AsyncSession, entry_id: uuid.UUID
+) -> tuple[TimeEntry, Task] | None:
+    """Pause a timer whose check-in nobody answered: end it at the moment it
+    asked, which is the last moment anybody can say was work.
+
+    A conditional UPDATE, so it is also the claim — two sweeps pause once,
+    and an answer that landed a second earlier wins (it clears the deadline
+    this requires). `None` when there was nothing left to pause.
+    """
+    from app.models import TaskEvent
+
+    row = (
+        await db.execute(
+            update(TimeEntry)
+            .where(
+                TimeEntry.id == entry_id,
+                TimeEntry.ended_at.is_(None),
+                TimeEntry.check_in_deadline.is_not(None),
+            )
+            .values(
+                ended_at=TimeEntry.check_in_asked_at,
+                check_in_deadline=None,
+                next_check_in_at=None,
+            )
+            .returning(TimeEntry)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    db.add(
+        TaskEvent(
+            task_id=row.task_id,
+            actor_user_id=row.user_id,
+            kind=EVENT_TIME_LOGGED,
+            data={"reason": "paused: nobody answered a check-in"},
+        )
+    )
+    await db.commit()
+    await _announce(db, row.task_id, "timer_stopped")
+    task = (await db.execute(select(Task).where(Task.id == row.task_id))).scalar_one()
+    return row, task
 
 
 async def log_manual(

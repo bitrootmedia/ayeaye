@@ -52,3 +52,21 @@ Things that bite:
 - **Anything that writes a `task_events` row must also refresh the task**, not
   just its own panel. The History card sits on the same screen, and refreshing
   one and not the other makes the trail look like it recorded nothing.
+- **A running timer asks "still working on this?"** — `services/check_ins.py`,
+  read its docstring. The server asks, never a client: a question only the menu
+  bar app could ask reaches only people running it, and the forgotten timer
+  belongs to somebody who isn't. State is three columns on the running entry
+  (`next_check_in_at`, `check_in_asked_at`, `check_in_deadline`);
+  `sweep_timer_check_ins` runs **every minute**, because an hourly tick would
+  stretch a 15–30 minute wait to 75. Asked in Telegram (two inline buttons,
+  arriving at the webhook as a `callback_query`), in the web header
+  (`GET /me/timer`'s `check_in_deadline`, answered by `POST /me/timer/check-in`)
+  and in the menu bar app (`running_timer`'s `check_in_deadline=`, answered by
+  the `answer_check_in` MCP tool). No answer ends the entry **at
+  `check_in_asked_at`**, not at the deadline — the unanswered wait is the one
+  stretch known not to be work — and raises `timer_paused`. Preference and
+  daily cap are `users.timer_check_ins` / `timer_check_ins_per_day`, on the
+  Account screen; the cap counts the person's own local day. Asking publishes
+  a realtime ping directly rather than through `tasks_service.announce`, which
+  would bump the task's "last activity" for a question nobody has answered.
+  `scripts/e2e-check-ins.sh` proves every path by moving the clock with psql.
