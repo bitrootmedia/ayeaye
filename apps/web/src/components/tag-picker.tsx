@@ -9,7 +9,14 @@ import { cn } from "@/lib/utils";
 import type { Tag } from "@/lib/types";
 
 /**
- * Tags on a task: the chips, and the thing that adds one.
+ * Tags on a task, an article or a fact: the chips, and the thing that adds one.
+ *
+ * **`basePath`, not a `taskId`** — the generalisation `AccessPanel` and
+ * `FilesPanel` already went through, for the same reason: a second real
+ * caller. All three resources answer `POST {basePath}/tags` with a name and
+ * `DELETE {basePath}/tags/{id}`. `noun` keeps the one sentence that names
+ * the resource honest — see `FilesPanel`'s own note on why a shared
+ * component must not swallow a caller's word.
  *
  * **Not `EntityPicker`.** Every other picker chooses one of a fixed set; this
  * one has to offer "create «what you typed»" when nothing matches, because a
@@ -19,16 +26,19 @@ import type { Tag } from "@/lib/types";
  */
 export function TagStrip({
   orgId,
-  taskId,
+  basePath,
   tags,
   editable,
   onChanged,
+  noun = "task",
 }: {
   orgId: string;
-  taskId: string;
+  /** e.g. `/organisations/{org}/tasks/{task}` or `/organisations/{org}/kb/facts/{fact}`. */
+  basePath: string;
   tags: Tag[];
   editable: boolean;
   onChanged: () => Promise<void> | void;
+  noun?: string;
 }) {
   const toast = useToastManager();
   const [open, setOpen] = useState(false);
@@ -88,7 +98,7 @@ export function TagStrip({
     if (busy) return;
     setBusy(true);
     try {
-      await api(`/organisations/${orgId}/tasks/${taskId}/tags`, {
+      await api(`${basePath}/tags`, {
         method: "POST",
         body: JSON.stringify({ name }),
       });
@@ -105,7 +115,7 @@ export function TagStrip({
 
   const remove = async (tag: Tag) => {
     try {
-      await api(`/organisations/${orgId}/tasks/${taskId}/tags/${tag.id}`, { method: "DELETE" });
+      await api(`${basePath}/tags/${tag.id}`, { method: "DELETE" });
       await onChanged();
     } catch {
       toast.add({ title: "Couldn't remove that tag" });
@@ -180,7 +190,7 @@ export function TagStrip({
             )}
             {!loading && !matches.length && !canCreate && (
               <p className="px-2 py-4 text-center text-sm text-muted-foreground">
-                {q ? "Already on this task." : "No tags yet — type to make one."}
+                {q ? `Already on this ${noun}.` : "No tags yet — type to make one."}
               </p>
             )}
           </div>

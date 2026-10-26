@@ -9,11 +9,12 @@ from app.models.conversation import (
     Message,
     MessageRead,
 )
+from app.models.embedding import Embedding
 from app.models.export import Export
 from app.models.idempotency import IdempotencyKey
 from app.models.instance_admin import InstanceAdmin
 from app.models.instance_settings import InstanceSettings
-from app.models.knowledge_base import Article, ArticleRevision, Book, BookMember
+from app.models.knowledge_base import Article, ArticleRevision, Book, BookMember, Fact
 from app.models.login_event import LoginEvent
 from app.models.mfa import MfaBackupCode, MfaTotpDevice
 from app.models.note import TaskNote
@@ -35,7 +36,7 @@ from app.models.structure import (
     Team,
     TeamMember,
 )
-from app.models.tag import Tag, TaskTag
+from app.models.tag import ArticleTag, FactTag, Tag, TaskTag
 from app.models.task import Task, TaskEvent, TaskGrant
 from app.models.task_dependency import TaskDependency
 from app.models.task_revision import TaskRevision
@@ -49,15 +50,19 @@ __all__ = [
     "Announcement",
     "Article",
     "ArticleRevision",
+    "ArticleTag",
     "Book",
     "BookMember",
     "Bookmark",
     "ChangelogEntry",
+    "Embedding",
     "Conversation",
     "Attachment",
     "Message",
     "MessageRead",
     "Export",
+    "Fact",
+    "FactTag",
     "IdempotencyKey",
     "InstanceAdmin",
     "InstanceSettings",

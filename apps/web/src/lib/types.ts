@@ -652,7 +652,7 @@ export type SearchHit = {
   /** Every kind `services/search.py::search` can return. "article" was
    *  missing here from the day the knowledge base shipped, which is how its
    *  hits ended up being routed to a task URL — see `search-palette.tsx`. */
-  kind: "task" | "project" | "note" | "article" | "changelog";
+  kind: "task" | "project" | "note" | "article" | "changelog" | "fact";
   id: string;
   title: string;
   /** A window around the match, so a hit deep in a description shows why. */
@@ -847,6 +847,52 @@ export type Article = {
   updated_at: string;
   /** The caller's resolved level: read | write | owner. */
   access: AccessLevel;
+};
+
+/** A fact: a few sentences worth knowing next time, filed in a book and
+ *  read by whoever can read the book. No draft step, unlike an article. */
+export type Fact = {
+  id: string;
+  book_id: string;
+  body: string;
+  tags: Tag[];
+  written_by: Person | null;
+  /** The token or OAuth client it arrived through — "via Claude". */
+  via: string | null;
+  superseded_at: string | null;
+  superseded_by_fact_id: string | null;
+  created_at: string;
+  updated_at: string;
+  can_edit: boolean;
+  can_delete: boolean;
+};
+
+/** One answer from `/kb/recall`. */
+export type Recalled = {
+  kind: "fact" | "article" | "task";
+  id: string;
+  title: string;
+  snippet: string | null;
+  /** The book, or a task's project. */
+  context: string | null;
+  /** The book a fact lives in; otherwise the item itself. */
+  parent_id: string | null;
+  when: string;
+  /** Superseded fact, closed task, archived book. */
+  inactive: boolean;
+  by: string | null;
+  via: string | null;
+  tags: string[];
+  score: number;
+  /** Which search found it: by text, by meaning, or both. */
+  matched: "text" | "meaning" | "both";
+};
+
+export type RecallResult = {
+  items: Recalled[];
+  /** False when only text was searched. */
+  semantic: boolean;
+  unknown_tags: string[];
 };
 
 /** A version of a task's content that a save replaced.

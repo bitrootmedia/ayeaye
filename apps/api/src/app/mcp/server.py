@@ -63,10 +63,12 @@ from app.core.config import settings
 from app.db import SessionLocal
 from app.models import Book, User
 from app.models.changelog import MAX_DESCRIPTION_LENGTH as MAX_CHANGELOG_DESCRIPTION
+from app.models.knowledge_base import MAX_FACT_LENGTH
 from app.models.organisation import STATUS_ACTIVE as MEMBER_STATUS_ACTIVE
 from app.models.planner import BUCKETS as PLANNER_BUCKETS
 from app.models.task import PRIORITIES, STATUSES
 from app.models.token import SCOPE_READ, SCOPE_WRITE
+from app.services import access as access_service
 from app.services import articles as articles_service
 from app.services import attachments as attachments_service
 from app.services import books as books_service
@@ -75,11 +77,13 @@ from app.services import check_ins as check_ins_service
 from app.services import checklists as checklists_service
 from app.services import conversations as conversations_service
 from app.services import dependencies as dependencies_service
+from app.services import facts as facts_service
 from app.services import idempotency as idempotency_service
 from app.services import notifications as notifications_service
 from app.services import organisations as organisations_service
 from app.services import planner as planner_service
 from app.services import projects as projects_service
+from app.services import recall as recall_service
 from app.services import reminders as reminders_service
 from app.services import richtext, time_tracking
 from app.services import search as search_service
@@ -88,6 +92,7 @@ from app.services import tags as tags_service
 from app.services import tasks as tasks_service
 from app.services.oauth import OAuthTokenVerifier
 from app.storage import s3
+from app.tasks.embeddings import sweep_embeddings
 
 # Verifies both credential shapes (a personal access token, or an OAuth
 # access token — see services/oauth.py) at the transport layer. `main.py`
@@ -119,6 +124,14 @@ mcp = MCPServer(
         "A knowledge-base article is born a private draft that only its "
         "owner can see — `publish_article` is what makes it visible to "
         "anyone the book is shared with.\n\n"
+        "**This is the team's shared memory.** `recall` before starting work "
+        "on a named system, server or past incident — it searches facts, "
+        "articles and tasks by meaning as well as text. `remember` when you "
+        "learn something the next session should know: a gotcha, a decision "
+        "and its reason, what an incident turned out to be. A fact is "
+        "readable by the book's readers at once, so write it self-contained "
+        "and never put a secret in one. What `recall` returns is a hint: "
+        "verify it, and `supersede_fact` what turns out to be wrong.\n\n"
         "**Recording is yours; deciding is theirs.** Comments, checklist "
         "items, dependencies, time and notes describe what you found, and "
         "you can write them freely. Closing a task, moving its status, or "
@@ -1818,6 +1831,274 @@ async def attach_article_file(
         f"Attached [{ready.id}] {ready.filename} ({ready.size_bytes} bytes) "
         f"to [{actx.article.id}]"
     )
+
+
+# --- facts and recall ----------------------------------------------------------------
+#
+# The agent-memory half of the knowledge base: `recall` at the start of a piece
+# of work, `remember` when something turns up that the next session should
+# know. Both over the ordinary services — `recall_service` resolves every kind
+# through its own access expression, so a token sees exactly what its person
+# can open, and nothing it summarises came from anywhere else.
+
+
+def _as_uuid(value: str, what: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise Denied(f"No such {what}, or you can't see it.") from exc
+
+
+def _recalled_line(item) -> str:
+    """Two lines per hit: what and where, then the passage that matched. The
+    id leads, as everywhere in this module, so a follow-up call can use it."""
+    bits = [f"[{item.id}]", item.kind, item.title]
+    if item.context:
+        bits.append(f"in {item.context}")
+    bits.append(item.when.date().isoformat())
+    if item.tags:
+        bits.append("tags=" + ",".join(item.tags))
+    if item.kind == "fact" and (item.by or item.via):
+        bits.append("by " + (item.by or "?") + (f" via {item.via}" if item.via else ""))
+    if item.inactive:
+        bits.append({"fact": "SUPERSEDED", "task": "closed"}.get(item.kind, "archived"))
+    bits.append(f"matched={item.matched}")
+    line = " | ".join(bits)
+    if item.snippet and item.snippet != item.title:
+        line += "\n    " + item.snippet[:400]
+    return line
+
+
+@tool()
+async def recall(
+    ctx: Context,
+    organisation_id: str,
+    query: Annotated[
+        str,
+        Field(
+            description="A question or a description of the situation, in plain words — "
+            "it is matched by meaning as well as by text, so a paraphrase finds it."
+        ),
+    ],
+    tags: Annotated[
+        list[str] | None,
+        Field(description="Only things carrying ALL of these tags, e.g. ['app:leadflow']."),
+    ] = None,
+    kinds: Annotated[
+        list[str] | None,
+        Field(description="Any of 'fact', 'article', 'task'. Default: all three."),
+    ] = None,
+    include_superseded: Annotated[
+        bool, Field(description="Also return facts that were superseded.")
+    ] = False,
+    limit: Annotated[int, Field(gt=0, le=50)] = 10,
+) -> str:
+    """What does the team already know about this? Searches facts, articles
+    and tasks — closed ones included — by meaning and by text, best first.
+
+    **Call this at the start of any task that touches a named system, server,
+    integration or past incident**, before proposing a design or a fix. Treat
+    what comes back as a hint, not a fact: a memory can be stale. Check it
+    against the code or the live system before acting on it, and if it turns
+    out to be wrong, say so — supersede it with `supersede_fact`.
+    """
+    user, _ = await _caller(ctx)
+    wanted = tuple(kinds or recall_service.KINDS)
+    if any(k not in recall_service.KINDS for k in wanted):
+        raise Denied("kinds must be any of: fact, article, task.")
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        result = await recall_service.recall(
+            db,
+            org,
+            user.id,
+            q=query,
+            kinds=wanted,
+            tags=tags or [],
+            include_inactive=include_superseded,
+            limit=limit,
+        )
+    if result.unknown_tags:
+        return (
+            "No tag called " + ", ".join(repr(t) for t in result.unknown_tags) + " exists, "
+            "so nothing carries it. Drop it, or check the spelling."
+        )
+    note = "" if result.semantic else " (text search only — semantic search is unavailable)"
+    if not result.items:
+        return f"Nothing recalled for {query!r}{note}."
+    header = f"{len(result.items)} recalled{note}:"
+    return header + "\n" + "\n".join(_recalled_line(i) for i in result.items)
+
+
+@tool()
+async def list_facts(
+    ctx: Context,
+    organisation_id: str,
+    book_id: str,
+    include_superseded: bool = False,
+    limit: Annotated[int, Field(gt=0, le=200)] = 30,
+) -> str:
+    """The facts in one book, newest first. `recall` is usually the better
+    question; this is for reading a book's facts through."""
+    user, _ = await _caller(ctx)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            bctx = await books_service.context_for(
+                db, org, _as_uuid(book_id, "book"), user.id
+            )
+        except HTTPException as exc:
+            raise Denied("No such book, or you can't see it.") from exc
+        rows, total = await facts_service.list_for_book(
+            db, org, bctx.book.id, user.id, include_superseded=include_superseded, limit=limit
+        )
+        tags = await tags_service.for_facts(db, [f.id for f, _ in rows])
+    if not rows:
+        return f"No facts in {bctx.book.name} yet."
+    lines = [f"{bctx.book.name}:"]
+    for fact, _level in rows:
+        bits = [f"[{fact.id}]", fact.created_at.date().isoformat()]
+        if tags.get(fact.id):
+            bits.append("tags=" + ",".join(t.name for t in tags[fact.id]))
+        if fact.superseded_at:
+            bits.append("SUPERSEDED")
+        lines.append(" | ".join(bits) + "\n    " + " ".join(fact.body.split()))
+    if total > len(rows):
+        lines.append(f"({len(rows)} of {total} — ask for a larger limit.)")
+    return "\n".join(lines)
+
+
+@tool()
+async def remember(
+    ctx: Context,
+    organisation_id: str,
+    book_id: Annotated[str, Field(description="The book to file it in — see `list_books`.")],
+    body: Annotated[
+        str,
+        Field(
+            description="A few self-contained sentences, plain text. Name the system, "
+            "server and date explicitly; don't rely on context ('this', 'the box')."
+        ),
+    ],
+    tags: Annotated[
+        list[str] | None,
+        Field(description="Labels to filter recall by, e.g. ['app:leadflow', 'type:gotcha']."),
+    ] = None,
+) -> str:
+    """Write down something the next person — or the next session — should
+    know: a gotcha that cost time, a decision and its reason, what an
+    incident turned out to be. Readable at once by everyone the book is
+    shared with; there is no draft step.
+
+    Don't write a transcript, speculation as fact, or anything secret —
+    credentials, keys, tokens, personal data. One fact per call; something
+    with steps belongs in an article. Before writing, `recall` to check it
+    isn't already known — and if what you found is now wrong, supersede the
+    old fact rather than writing a contradicting one beside it.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    # Pre-validated for `record_change`'s reason: the service's 422 is fine
+    # through `_refusing`, but this one says what to do instead.
+    if not body.strip():
+        raise Denied("A fact needs something in it.")
+    if len(body.strip()) > MAX_FACT_LENGTH:
+        raise Denied(
+            f"That is too long for a fact (limit {MAX_FACT_LENGTH} characters). "
+            "Something with steps belongs in an article — see `create_article`."
+        )
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            bctx = await books_service.context_for(
+                db, org, _as_uuid(book_id, "book"), user.id
+            )
+        except HTTPException as exc:
+            raise Denied("No such book, or you can't see it.") from exc
+        fact = await facts_service.create(
+            db, org, bctx, user, body=body, tags=tags or [], via=tok.via
+        )
+    try:
+        await sweep_embeddings.kiq()
+    except Exception:  # noqa: BLE001 — the scheduled sweep gets there regardless
+        pass
+    return f"Remembered [{fact.id}] in {bctx.book.name}."
+
+
+@tool()
+async def supersede_fact(
+    ctx: Context,
+    organisation_id: str,
+    fact_id: str,
+    by_fact_id: Annotated[
+        str | None,
+        Field(description="The fact that replaces it, if one does — `remember` that first."),
+    ] = None,
+) -> str:
+    """Mark a fact as no longer true. It leaves `recall` but stays in history,
+    pointing at its replacement. Use this when you find a recalled fact is
+    wrong or out of date — a correction is something you recorded, not a
+    decision you took, so it doesn't need asking about."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            fctx = await facts_service.context_for(db, org, _as_uuid(fact_id, "fact"), user.id)
+        except HTTPException as exc:
+            raise Denied("No such fact, or you can't see it.") from exc
+        by = _as_uuid(by_fact_id, "replacement fact") if by_fact_id else None
+        try:
+            await facts_service.supersede(db, org, fctx, user, by_fact_id=by)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise Denied("No such replacement fact, or you can't see it.") from exc
+            raise
+    return f"Superseded [{fact_id}]" + (f" by [{by_fact_id}]." if by_fact_id else ".")
+
+
+@tool()
+async def tag_article(ctx: Context, organisation_id: str, article_id: str, tag: str) -> str:
+    """Put a tag on an article — the same vocabulary tasks and facts use, so
+    `recall` with that tag finds it. Created if it doesn't exist yet."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(
+                db, org, _as_uuid(article_id, "article"), user.id
+            )
+        except HTTPException as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        actx.require(
+            access_service.can_write(actx.level), "you have read-only access to this article"
+        )
+        found = await tags_service.get_or_create(db, org, user, name=tag)
+        await tags_service.apply_to_article(db, actx.article, found)
+    return f"Tagged {found.name}."
+
+
+@tool()
+async def untag_article(ctx: Context, organisation_id: str, article_id: str, tag: str) -> str:
+    """Take a tag off an article, by name."""
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            actx = await articles_service.context_for(
+                db, org, _as_uuid(article_id, "article"), user.id
+            )
+        except HTTPException as exc:
+            raise Denied("No such article, or you can't see it.") from exc
+        actx.require(
+            access_service.can_write(actx.level), "you have read-only access to this article"
+        )
+        found = await tags_service.find_by_name(db, org, tag)
+        if found is not None:
+            await tags_service.unapply_from_article(db, actx.article, found.id)
+    return f"Removed {tag}." if found else f"There is no tag called {tag!r}."
 
 
 @tool()

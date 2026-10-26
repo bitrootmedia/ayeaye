@@ -24,6 +24,7 @@ from app.api.routers import (
     personal_notes,
     planner,
     public,
+    recall,
     reminders,
     sparks,
     structure,
@@ -78,6 +79,11 @@ api_router.include_router(structure.router)
 # Books, articles and their revisions — a book's access model is a
 # project's, unchanged; see services/books.py and services/articles.py.
 api_router.include_router(knowledge_base.router)
+
+# Facts — the few sentences worth knowing next time — tags on articles, and
+# recall across facts, articles and tasks, by text and by meaning. Same /kb
+# prefix; see services/recall.py.
+api_router.include_router(recall.router)
 
 # Tasks, their history and their per-task grants. Same organisation prefix.
 api_router.include_router(tasks.router)

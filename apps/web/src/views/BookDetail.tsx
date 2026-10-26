@@ -7,11 +7,18 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
 import { AccessPanel } from "@/components/access-panel";
+import { FactsPanel } from "@/components/facts-panel";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,6 +70,8 @@ export default function BookDetail() {
   const { organisations } = useOutletContext<Shell>();
   const navigate = useNavigate();
   const toast = useToastManager();
+  // A fact picked out by a link from ⌘K or recall — see FactsPanel.
+  const [params] = useSearchParams();
 
   const org = organisations.find((o) => o.id === orgId) ?? null;
   const [book, setBook] = useState<Book | null>(null);
@@ -240,6 +249,13 @@ export default function BookDetail() {
               )}
             </CardContent>
           </Card>
+
+          <FactsPanel
+            orgId={org.id}
+            bookId={book.id}
+            editable={editable}
+            highlight={params.get("fact")}
+          />
         </div>
 
         <div className="space-y-4">

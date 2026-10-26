@@ -44,6 +44,12 @@ paths:
   this right. The `self-host-troubleshooting` skill has the detail and the
   two commands that check it hasn't come back; the short version is that
   `docker run --network none ayeayecaptain-api` must reach "Uvicorn running".
+- **The bundled Postgres is built, not pulled** — `infra/postgres/Dockerfile`
+  adds pgvector to the same `postgres:18-alpine`, so existing volumes keep
+  their collation. When the base image moves to a new Alpine and the build
+  fails with "no such package", the clang/llvm version in it is what changes;
+  see `recall.md`. The bundled embedding model is the opt-in
+  `local-embeddings` profile (Ollama, ~4 GB), always on in a checkout.
 - **`init.sql` runs only on an empty data directory.** Change it after the
   first boot and it is silently skipped; `docker compose down -v` first.
 - **Backups must be `pg_dumpall`.** SuperTokens keeps identity in its own

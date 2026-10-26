@@ -5,6 +5,7 @@ import { Link, useOutletContext, useParams } from "react-router-dom";
 import { api } from "@/api";
 import type { Shell } from "@/App";
 import { PageHeader } from "@/components/page-header";
+import { RecallBox } from "@/components/recall-box";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,15 +68,15 @@ export default function KnowledgeBase() {
       <PageHeader
         crumbs={[{ label: org.name, to: `/orgs/${org.id}` }, { label: "Knowledge base" }]}
         title="Knowledge base"
-        description="Runbooks, policies, anything worth writing down once and finding again."
+        description="Runbooks, policies, facts — anything worth writing down once and finding again."
         actions={
           <>
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
-                aria-label="Filter by name"
-                placeholder="Filter by name…"
+                aria-label="Filter books by name"
+                placeholder="Filter books…"
                 className="w-48 pl-8"
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -91,6 +92,10 @@ export default function KnowledgeBase() {
           </>
         }
       />
+
+      <div className="mb-6">
+        <RecallBox orgId={org.id} />
+      </div>
 
       {books === null ? (
         <div className="flex flex-1 items-center justify-center py-12">

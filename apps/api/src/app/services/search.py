@@ -70,6 +70,7 @@ from app.models import (
     ArticleRevision,
     Book,
     ChangelogEntry,
+    Fact,
     Project,
     Tag,
     Task,
@@ -93,7 +94,7 @@ DEFAULT_LIMIT = 6
 
 @dataclass(frozen=True)
 class Hit:
-    kind: str  # "task" | "project" | "note" | "article" | "changelog"
+    kind: str  # "task" | "project" | "note" | "article" | "changelog" | "fact"
     id: str
     title: str
     subtitle: str | None
@@ -104,7 +105,7 @@ class Hit:
     inactive: bool
 
 
-def _score(column, q: str) -> ColumnElement[float]:
+def column_score(column, q: str) -> ColumnElement[float]:
     """How well one text column matches the query.
 
     `GREATEST` over three signals rather than a weighted sum: they're on
@@ -203,10 +204,10 @@ def tasks_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
         .correlate(Task)
     )
     score = func.greatest(
-        _score(Task.title, q),
+        column_score(Task.title, q),
         # Descriptions are secondary: a hit in the body is real but weaker
         # than a hit in the name, and this keeps the ordering intuitive.
-        _score(Task.description_text, q) * literal(0.6),
+        column_score(Task.description_text, q) * literal(0.6),
         case((tag_hit, literal(0.9)), else_=literal(0.0)).cast(Float),
     )
     return (
@@ -239,8 +240,8 @@ def tasks_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
 def projects_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Select:
     level = access.project_level_expression(user_id, ctx.role)
     score = func.greatest(
-        _score(Project.name, q),
-        _score(Project.description, q) * literal(0.6),
+        column_score(Project.name, q),
+        column_score(Project.description, q) * literal(0.6),
     )
     return (
         select(
@@ -274,7 +275,7 @@ def notes_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Se
     your notes to get back to the work, not to read the note in a palette.
     """
     level = access.task_level_expression(user_id, ctx.role)
-    score = _score(TaskNote.body, q)
+    score = column_score(TaskNote.body, q)
     return (
         select(
             literal("note").label("kind"),
@@ -318,10 +319,10 @@ def articles_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) ->
     )
     revision = aliased(ArticleRevision)
     score = func.greatest(
-        _score(revision.title, q),
+        column_score(revision.title, q),
         # Body text is secondary, same weighting a task's description gets
         # against its own title.
-        _score(revision.body_text, q) * literal(0.6),
+        column_score(revision.body_text, q) * literal(0.6),
     )
     return (
         select(
@@ -348,6 +349,42 @@ def articles_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) ->
     )
 
 
+def facts_stmt(*, user_id: uuid.UUID, ctx: OrgContext, q: str, limit: int) -> Select:
+    """Matching facts the caller can see — their book's level, the only rule
+    a fact has (see `access.visible_facts_stmt`). Superseded ones are left
+    out: the palette is for jumping to what is true now, and recall's
+    "include superseded" is where somebody goes looking for what was.
+
+    Like a changelog entry, a fact has no title, so its first line stands in
+    for one; the book is the context. The id is the *fact's*, and the palette
+    links to its book with the fact picked out — a fact has no screen of its
+    own.
+    """
+    level = access.book_level_expression(user_id, ctx.role)
+    score = column_score(Fact.body, q)
+    return (
+        select(
+            literal("fact").label("kind"),
+            Fact.id.label("id"),
+            func.split_part(Fact.body, "\n", 1).label("title"),
+            literal(None).label("subtitle"),
+            Book.name.label("context"),
+            score.label("score"),
+            (Book.archived_at.isnot(None)).label("inactive"),
+        )
+        .select_from(Fact)
+        .join(Book, Book.id == Fact.book_id)
+        .where(
+            Book.organisation_id == ctx.organisation.id,
+            level > access.NO_ACCESS,
+            Fact.superseded_at.is_(None),
+            matches(Fact.body, q),
+        )
+        .order_by(score.desc(), Fact.id.desc())
+        .limit(limit)
+    )
+
+
 def changelog_stmt(*, ctx: OrgContext, q: str, limit: int) -> Select:
     """Matching changelog entries.
 
@@ -367,7 +404,7 @@ def changelog_stmt(*, ctx: OrgContext, q: str, limit: int) -> Select:
     wants beside the words. The score is computed over the whole description,
     so a match three lines down still surfaces the entry.
     """
-    score = _score(ChangelogEntry.description, q)
+    score = column_score(ChangelogEntry.description, q)
     return (
         select(
             literal("changelog").label("kind"),
@@ -426,6 +463,7 @@ async def search(
         projects_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         notes_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         articles_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
+        facts_stmt(user_id=user_id, ctx=ctx, q=q, limit=limit),
         changelog_stmt(ctx=ctx, q=q, limit=limit),
     ):
         for row in (await db.execute(stmt)).all():
@@ -475,5 +513,7 @@ __all__ = [
     "notes_stmt",
     "articles_stmt",
     "changelog_stmt",
+    "facts_stmt",
     "matches",
+    "column_score",
 ]

@@ -45,7 +45,9 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 }
 
 test("photograph the product", async ({ page }) => {
-  test.slow();
+  // Four minutes, not `test.slow()`'s ninety seconds: recall embeds its
+  // question on a CPU, and on a dev stack that queues behind the sweep.
+  test.setTimeout(240_000);
   const owner = uniqueEmail("shot");
   const mate = uniqueEmail("mate");
 
@@ -222,6 +224,35 @@ test("photograph the product", async ({ page }) => {
   await addEntry("Switched the yard's booking feed to the new endpoint.", "2026-03-09");
   await shot(page, "10c-changelog");
 
+  // The knowledge base: a book with facts in it, then recall over them. The
+  // facts go in through the screen, as a person would add them; the recall
+  // is photographed whether or not the model has embedded them yet, because
+  // "found by text" is a real state of that screen too.
+  await page.goto(`/orgs/${orgId}/kb`);
+  await page.getByRole("button", { name: "New book" }).first().click();
+  const bookDialog = page.locator('[data-slot="dialog-content"]');
+  await bookDialog.getByRole("textbox", { name: "Name" }).fill("Yard gotchas");
+  await bookDialog.getByRole("button", { name: "Create" }).click();
+  await expect(bookDialog).toHaveCount(0);
+  await page.getByRole("link", { name: /Yard gotchas/ }).click();
+  await page.waitForURL(/\/kb\/books\/[0-9a-f-]+$/);
+  for (const fact of [
+    "The travel lift's slings are rated to 12 tonnes. Anything heavier goes on the crane, booked a week ahead.",
+    "Antifoul needs 24 hours above 10°C to cure before launch — check the forecast before booking the lift.",
+  ]) {
+    await page.getByRole("textbox", { name: "New fact" }).fill(fact);
+    await page.getByRole("button", { name: "Add fact" }).click();
+    // Emptied, not "the text is visible" — the textarea still holds it until
+    // the POST lands; see recall.spec.ts's `addFact`.
+    await expect(page.getByRole("textbox", { name: "New fact" })).toHaveValue("");
+  }
+  await shot(page, "10d-book-facts");
+  await page.goto(`/orgs/${orgId}/kb?recall=${encodeURIComponent("how heavy can the travel lift go")}`);
+  await expect(page.getByRole("region", { name: "Recall" }).getByRole("link").first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await shot(page, "10e-recall");
+
   // The search palette, mid-query.
   await page.goto(`/orgs/${orgId}/tasks`);
   await page.getByRole("button", { name: "Search" }).click();
@@ -320,6 +351,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/changelog`);
   await shot(page, "17d-changelog-dark");
+
+  await page.goto(`/orgs/${orgId}/kb?recall=${encodeURIComponent("how heavy can the travel lift go")}`);
+  await shot(page, "17d2-recall-dark");
 
   await page.goto("/instance");
   await shot(page, "17e-instance-dark");

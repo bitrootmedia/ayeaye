@@ -1,6 +1,14 @@
 """Tags: a shared vocabulary for an organisation, and what carries it.
 
-    organisations ──► tags ◄──┬── task_tags ──► tasks
+    organisations ──► tags ◄──┬── task_tags    ──► tasks
+                              ├── article_tags ──► articles
+                              └── fact_tags    ──► facts
+
+**One vocabulary across tasks and the knowledge base**, on purpose: a task
+tagged `app:leadflow` and the runbook tagged `app:leadflow` are about the
+same thing, and the task screen can say so only because the word is the same
+row. Three join tables rather than one polymorphic one, so each carries a real
+foreign key and a deleted article takes its taggings with it.
 
 **Organisation-scoped, not global.** A vocabulary is only useful if it's
 shared, and a global namespace would leak one company's tag names to another.
@@ -93,6 +101,56 @@ class TaskTag(Base):
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_func.now()
+    )
+
+
+class ArticleTag(Base):
+    """A tag on an article. Applying one is `write` on the article, like any
+    other edit; who can see it is who can see the article."""
+
+    __tablename__ = "article_tags"
+    __table_args__ = (
+        UniqueConstraint("article_id", "tag_id", name="uq_article_tags_article_tag"),
+        Index("ix_article_tags_tag", "tag_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_func.now()
+    )
+
+
+class FactTag(Base):
+    """A tag on a fact — `write` on its book to apply, the book's readers see it."""
+
+    __tablename__ = "fact_tags"
+    __table_args__ = (
+        UniqueConstraint("fact_id", "tag_id", name="uq_fact_tags_fact_tag"),
+        Index("ix_fact_tags_tag", "tag_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    fact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("facts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     tag_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), nullable=False

@@ -113,6 +113,31 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_bot_username: str = ""
 
+    # --- recall: embeddings ------------------------------------------------
+    # Any OpenAI-compatible `POST {url}/embeddings` — the bundled Ollama
+    # (`http://ollama:11434/v1`), OpenAI, Voyage. URL or model empty disables
+    # semantic search entirely and recall is the text search it always was:
+    # the identical "optional infrastructure" contract SMTP_HOST holds. See
+    # services/embeddings.py.
+    embeddings_url: str = ""
+    embeddings_api_key: str = ""
+    embeddings_model: str = ""
+    # Some models are trained with a different instruction on each side of
+    # the comparison — a query is a question, a document is an answer — and
+    # score noticeably worse without it. Model-specific, so configuration;
+    # .env.example carries the values for the bundled model.
+    embeddings_query_prefix: str = ""
+    embeddings_document_prefix: str = ""
+    # Below this cosine similarity a meaning match is noise. Model-specific
+    # like the prefixes: 0.35 was measured against the bundled embeddinggemma,
+    # and another model spreads its scores differently. See recall.md.
+    embeddings_min_similarity: float = 0.35
+
+    @property
+    def embeddings_enabled(self) -> bool:
+        """The one place that rule is written down."""
+        return bool(self.embeddings_url and self.embeddings_model)
+
     @property
     def api_domain(self) -> str:
         """What SuperTokens is told the API's origin is. Same as the site: the

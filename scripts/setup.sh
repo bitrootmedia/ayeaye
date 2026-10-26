@@ -134,6 +134,15 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_START_TLS=true
 MAIL_FROM=
+
+# Recall searches by meaning as well as text when this is set. Optional, and
+# off by default: the bundled model is a large download. To turn it on, add
+# local-embeddings to COMPOSE_PROFILES and uncomment — .env.example explains
+# this and the hosted alternative.
+#EMBEDDINGS_URL=http://ollama:11434/v1
+#EMBEDDINGS_MODEL=embeddinggemma:300m
+#EMBEDDINGS_QUERY_PREFIX="task: search result | query: "
+#EMBEDDINGS_DOCUMENT_PREFIX="title: none | text: "
 EOF
 
 echo "Wrote .env with generated secrets for $SITE_URL"

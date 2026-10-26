@@ -7,6 +7,7 @@ import type { Shell } from "@/App";
 import { FilesPanel } from "@/components/files-panel";
 import { PageHeader } from "@/components/page-header";
 import { RichText, RichTextEditor } from "@/components/rich-text";
+import { TagStrip } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +32,15 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useToastManager } from "@/components/ui/toast";
 import { ago } from "@/lib/format";
-import { canAdminister, canEdit, personName, type Article, type ArticleRevision, type Book } from "@/lib/types";
+import {
+  canAdminister,
+  canEdit,
+  personName,
+  type Article,
+  type ArticleRevision,
+  type Book,
+  type Tag,
+} from "@/lib/types";
 
 // Same debounce as the notepad and the task's private note — long enough
 // not to write on every keystroke, short enough that leaving quickly still
@@ -53,6 +62,18 @@ export default function ArticleDetail() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [tags, setTags] = useState<Tag[]>([]);
+
+  // Its own fetch rather than a field on `Article`: tags change on their own,
+  // and refetching them shouldn't reopen an editing session.
+  const loadTags = useCallback(async () => {
+    if (!orgId || !articleId) return;
+    setTags(await api<Tag[]>(`/organisations/${orgId}/kb/articles/${articleId}/tags`));
+  }, [orgId, articleId]);
+
+  useEffect(() => {
+    void loadTags().catch(() => setTags([]));
+  }, [loadTags]);
 
   const load = useCallback(async () => {
     if (!orgId || !articleId) return;
@@ -183,6 +204,15 @@ export default function ArticleDetail() {
             )}
           </>
         }
+      />
+
+      <TagStrip
+        orgId={org.id}
+        basePath={`/organisations/${org.id}/kb/articles/${article.id}`}
+        tags={tags}
+        editable={editable}
+        onChanged={loadTags}
+        noun="article"
       />
 
       {article.is_private && (

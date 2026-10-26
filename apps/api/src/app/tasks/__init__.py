@@ -13,6 +13,7 @@ from app.tasks import (
     check_ins,  # noqa: F401  registers sweep_timer_check_ins
     daily_summary,  # noqa: F401  registers sweep_daily_summaries
     deadlines,  # noqa: F401  registers sweep_deadlines
+    embeddings,  # noqa: F401  registers sweep_embeddings
     exports,  # noqa: F401  registers build_export, sweep_expired_exports
     invites,  # noqa: F401  registers send_invite_email
     notification_channels,  # noqa: F401  registers send_telegram_message, send_webhook_notification
@@ -38,6 +39,7 @@ __all__ = [
     "check_ins",
     "daily_summary",
     "deadlines",
+    "embeddings",
     "exports",
     "invites",
     "notification_emails",

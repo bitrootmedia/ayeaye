@@ -529,7 +529,7 @@ export default function TaskDetail() {
 
       <TagStrip
         orgId={org.id}
-        taskId={task.id}
+        basePath={`/organisations/${org.id}/tasks/${task.id}`}
         tags={task.tags}
         editable={editable}
         onChanged={load}

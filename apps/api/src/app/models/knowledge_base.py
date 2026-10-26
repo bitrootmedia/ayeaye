@@ -229,3 +229,71 @@ class ArticleRevision(Base):
     )
 
     article: Mapped[Article] = relationship(back_populates="revisions")
+
+
+# Long enough for a gotcha with its cause and fix, short enough that it is
+# still one thing. Anything longer has steps, and steps belong in an article.
+MAX_FACT_LENGTH = 4000
+
+
+class Fact(Base):
+    """One short thing worth knowing next time — a gotcha, a decision and its
+    reason, what an incident turned out to be. Filed in a book, so it is read
+    exactly by whoever can read the book.
+
+    **Readable the moment it is written, unlike an article.** An article is
+    born a private draft because it is a document somebody is still shaping;
+    a fact is a few sentences that are finished when they're typed, and the
+    whole point of writing one — often from an assistant, mid-task — is that a
+    colleague's next session finds it. A draft step is the friction that would
+    stop facts being written at all.
+
+    **No owner, only whoever wrote it down** — `created_by_user_id` is SET
+    NULL, the changelog's own call: a fact belongs to the book, and one whose
+    author has left is still true. Editing is `write` on the book, the bar any
+    other change to a book's contents has.
+
+    **Superseded, not deleted, when it stops being true.** `superseded_at`
+    takes it out of recall without taking it out of history, and
+    `superseded_by_fact_id` says what replaced it when something did. Delete
+    is still there for the fact that was simply wrong.
+
+    `via` is the same attribution `messages.via` carries: the name of the
+    token or OAuth client a fact arrived through, so "Claude wrote this" is
+    visible beside whose access it was written with.
+    """
+
+    __tablename__ = "facts"
+    __table_args__ = (
+        CheckConstraint("length(btrim(body)) > 0", name="ck_facts_body"),
+        CheckConstraint(f"length(body) <= {MAX_FACT_LENGTH}", name="ck_facts_body_length"),
+        # A fact cannot replace itself; a cycle of two is allowed through and
+        # harmless — both are simply superseded.
+        CheckConstraint("superseded_by_fact_id <> id", name="ck_facts_not_self_superseded"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    via: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # SET NULL: deleting the replacement leaves this one superseded by
+    # nothing in particular, which is still true.
+    superseded_by_fact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("facts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

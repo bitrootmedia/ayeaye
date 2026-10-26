@@ -72,7 +72,7 @@ from datetime import date, timedelta
 from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.orm import aliased
 
-from app.models.knowledge_base import Article, Book, BookMember
+from app.models.knowledge_base import Article, Book, BookMember, Fact
 from app.models.organisation import ROLE_ADMIN, ROLE_RANK
 from app.models.structure import (
     LEVEL_OWNER,
@@ -897,4 +897,49 @@ def visible_article_stmt(
         .select_from(Article)
         .join(Book, Book.id == Article.book_id)
         .where(Article.id == article_id, Book.organisation_id == org_id, level > NO_ACCESS)
+    )
+
+
+def visible_facts_stmt(
+    *,
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
+    org_role: str,
+    book_id: uuid.UUID | None = None,
+    include_superseded: bool = False,
+) -> Select:
+    """Every fact the user can see — **a fact's level is its book's**, with no
+    route of its own and no private state to short-circuit on. That is the
+    whole access model for facts, and it is why there is no
+    `fact_level_expression`: a second name for `book_level_expression` would
+    read like a second rule.
+
+    Newest first, the order a log of things learned is read in.
+    """
+    level = book_level_expression(user_id, org_role)
+    stmt = (
+        select(Fact, level.label("level_rank"))
+        .select_from(Fact)
+        .join(Book, Book.id == Fact.book_id)
+        .where(Book.organisation_id == org_id, level > NO_ACCESS)
+        .order_by(Fact.id.desc())
+    )
+    if book_id is not None:
+        stmt = stmt.where(Fact.book_id == book_id)
+    if not include_superseded:
+        stmt = stmt.where(Fact.superseded_at.is_(None))
+    return stmt
+
+
+def visible_fact_stmt(
+    *, user_id: uuid.UUID, org_id: uuid.UUID, org_role: str, fact_id: uuid.UUID
+) -> Select:
+    """One fact, if the user can see its book. Superseded included — a link to
+    a specific fact shouldn't look like deletion."""
+    level = book_level_expression(user_id, org_role)
+    return (
+        select(Fact, level.label("level_rank"))
+        .select_from(Fact)
+        .join(Book, Book.id == Fact.book_id)
+        .where(Fact.id == fact_id, Book.organisation_id == org_id, level > NO_ACCESS)
     )

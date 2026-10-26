@@ -30,6 +30,7 @@ import ArticleDetail from "@/views/ArticleDetail";
 import Bookmarks from "@/views/Bookmarks";
 import Changelog from "@/views/Changelog";
 import BookDetail from "@/views/BookDetail";
+import FactLink from "@/views/FactLink";
 import KnowledgeBase from "@/views/KnowledgeBase";
 import OrganisationDetail from "@/views/OrganisationDetail";
 import OrganisationSettings from "@/views/OrganisationSettings";
@@ -327,6 +328,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route
                   path="orgs/:orgId/kb/articles/:articleId"
                   element={<Keyed param="articleId" element={<ArticleDetail />} />}
+                />
+                <Route
+                  path="orgs/:orgId/kb/facts/:factId"
+                  element={<Keyed param="factId" element={<FactLink />} />}
                 />
                 <Route path="orgs/:orgId/planner" element={<Planner />} />
                 <Route path="orgs/:orgId/calendar" element={<CalendarView />} />

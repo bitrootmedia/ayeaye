@@ -14,6 +14,10 @@ paths:
 
 ## The knowledge base
 
+**Books also hold facts, and the knowledge base answers recall** — the
+shared-memory half, in `recall.md`. Tags now reach articles too, through the
+same vocabulary as tasks.
+
 Read `services/books.py` and `services/articles.py`. Book → article, with
 every edit kept as history — a runbook or a policy is durable reference
 material, the thing this product had no place for before it existed.

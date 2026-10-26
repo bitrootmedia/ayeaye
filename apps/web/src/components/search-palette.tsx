@@ -2,6 +2,7 @@ import {
   BookOpenIcon,
   CircleDotIcon,
   FolderKanbanIcon,
+  LightbulbIcon,
   NotebookPenIcon,
   ScrollTextIcon,
   SearchIcon,
@@ -47,6 +48,9 @@ const KIND_ICON = {
   note: NotebookPenIcon,
   article: BookOpenIcon,
   changelog: ScrollTextIcon,
+  // A fact in a book. Its id is the fact's, and the permalink route resolves
+  // which book — see views/FactLink.tsx.
+  fact: LightbulbIcon,
 } as const;
 
 export function SearchPalette({
@@ -146,8 +150,10 @@ export function SearchPalette({
             ? `/orgs/${orgId}/kb/articles/${hit.id}`
             : hit.kind === "changelog"
               ? `/orgs/${orgId}/changelog?q=${q}`
-              : // Both tasks and note hits carry the task's id.
-                `/orgs/${orgId}/tasks/${hit.id}`,
+              : hit.kind === "fact"
+                ? `/orgs/${orgId}/kb/facts/${hit.id}`
+                : // Both tasks and note hits carry the task's id.
+                  `/orgs/${orgId}/tasks/${hit.id}`,
       );
     },
     [navigate, onOpenChange, orgId, query],

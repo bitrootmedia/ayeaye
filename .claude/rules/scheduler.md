@@ -20,6 +20,10 @@ tick and compete for it. It earns its place because a reminder has to arrive
 whether or not anybody has the app open: a loop inside the API dies on every
 reload in dev and fires twice the day somebody runs two replicas.
 
+**And one that runs every minute: `sweep_embeddings`** — recall's vectors,
+kept in step with the text. Idempotent by construction (it compares hashes,
+and a session advisory lock makes a concurrent run a no-op); see `recall.md`.
+
 It only **enqueues** — the work happens in the worker, so a slow sweep can't
 delay the next tick. `LabelScheduleSource` reads the cadence off the task's own
 `schedule=` label, so a job's timing lives next to the code it runs rather than

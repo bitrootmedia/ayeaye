@@ -25,6 +25,11 @@ they'd used it. Since then: the knowledge base, MCP and OAuth, notification
 channels, the planner, the calendar, instance administration, and a run of
 smaller features. Read the git log for what landed when.
 
+**The knowledge base is also the team's shared agent memory** (2026-10-26):
+facts filed in books, and recall across facts, articles and tasks by text
+and by meaning — pgvector in the same Postgres, so access stays one
+statement. Optional like email. See `.claude/rules/recall.md`.
+
 **One deviation from PLAN.md worth knowing:** it sequences access as Phase 3,
 after structure. It was built with Phase 2 instead, because the product
 decision is that projects are private by default — shipping "every member
@@ -413,6 +418,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
 ./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
 ./scripts/e2e-kb.sh                     # book access, private-article vanish, revision sessions, search
+./scripts/e2e-recall.sh                 # facts, recall by meaning, access on the vector half, MCP remember
 ./scripts/e2e-browser.sh                # real Chromium; also takes screenshots
 ```
 
@@ -487,6 +493,7 @@ also read one directly when you need it before touching a file.
 | `planner-calendar.md` | the day planner and the calendar |
 | `personal-lists.md` | the notepad, sparks, bookmarks, the changelog |
 | `knowledge-base.md` | books, articles, revisions |
+| `recall.md` | facts, recall, embeddings, pgvector, the bundled model |
 | `time-tracking.md` | timers, corrections, rollups |
 | `search.md` | why Postgres and not a search engine |
 | `organisations.md` | membership, invites, organisation settings |

@@ -229,6 +229,15 @@ with its text withheld, exactly as `create_spark` documents. **No edit or
 delete tool**, deliberately — correcting a log is a person's judgement about
 their own record, and nothing asked for it.
 
+**`recall`, `remember`, `list_facts`, `supersede_fact`, `tag_article` and
+`untag_article` are the shared-memory surface** — see `recall.md`. The server
+`instructions` tell an assistant to recall before working on a named system
+and to remember what the next session should know, never a secret; `remember`
+and `supersede_fact` are *recording*, so they need no asking under "recording
+is yours; deciding is theirs". `remember` passes `tok.via` like `comment`
+does, and kicks the embedding sweep so a fact written now is recallable by
+meaning seconds later.
+
 **`create_spark` takes no organisation at all**, and unlike `stop_timer` or
 `update_reminder` — which merely don't need one to find what they act on —
 it is because the record itself has none, ever. See the Sparks section.

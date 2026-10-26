@@ -385,6 +385,50 @@ for volume in postgres_data rustfs_data; do
   fi
 done
 
+head_ "Recall"
+# Optional, like email: off is a supported state and says so rather than
+# warning. What this catches is the half-configured one — a URL with no
+# model behind it, the bundled model with its container not running, or a
+# Postgres without pgvector — each of which leaves recall quietly answering
+# by text alone with nothing on screen saying why.
+EMB_URL=$(grep -E '^EMBEDDINGS_URL=' .env 2>/dev/null | cut -d= -f2-)
+EMB_MODEL=$(grep -E '^EMBEDDINGS_MODEL=' .env 2>/dev/null | cut -d= -f2-)
+if [ -f compose.override.yml ]; then
+  # The dev override pins both, whatever .env says.
+  EMB_URL=http://ollama:11434/v1; EMB_MODEL=embeddinggemma:300m
+fi
+if [ -z "$EMB_URL" ] && [ -z "$EMB_MODEL" ]; then
+  good "meaning-based search is off — recall searches by text (see .env.example to turn it on)"
+elif [ -z "$EMB_URL" ] || [ -z "$EMB_MODEL" ]; then
+  hard "EMBEDDINGS_URL and EMBEDDINGS_MODEL must both be set — with one, recall is text-only"
+else
+  good "embedding with $EMB_MODEL"
+  case "$EMB_URL" in
+    *ollama:11434*)
+      case ",${PROFILES:-}," in
+        *,local-embeddings,*) ;;
+        *) [ -f compose.override.yml ] \
+             || hard "EMBEDDINGS_URL points at the bundled Ollama but local-embeddings isn't in COMPOSE_PROFILES" ;;
+      esac
+      if docker compose ps --status running --format '{{.Service}}' 2>/dev/null | grep -qx ollama; then
+        good "ollama is up"
+      else
+        hard "ollama is NOT running — docker compose logs ollama"
+      fi ;;
+  esac
+  if [ "${LOCAL_DB:-1}" = 1 ]; then
+    table=$(docker compose exec -T postgres psql -U app -d app -tAc "select to_regclass('public.embeddings')" 2>/dev/null | tr -d '\r')
+    if [ -n "$table" ]; then
+      left=$(docker compose exec -T postgres psql -U app -d app -tAc "select count(*) from tasks t where not exists (select 1 from embeddings e where e.task_id = t.id)" 2>/dev/null | tr -d '\r')
+      good "the embeddings table exists"
+      [ "${left:-0}" = 0 ] && good "every task is embedded" \
+        || say "$left task(s) not embedded yet — the sweep works through them a minute at a time"
+    else
+      hard "no embeddings table — pgvector wasn't installed when migration 0052 ran; see that migration's docstring"
+    fi
+  fi
+fi
+
 head_ "Disk"
 avail=$(df -Pk . | awk 'NR==2{print int($4/1048576)}')
 if [ "${avail:-0}" -lt 2 ]; then

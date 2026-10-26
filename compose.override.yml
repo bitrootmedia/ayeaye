@@ -68,6 +68,14 @@ services:
       # Overridable from the shell, which is how that suite does it:
       #   EMAIL_VERIFICATION=required docker compose up -d api
       EMAIL_VERIFICATION: ${EMAIL_VERIFICATION:-off}
+      # Recall, always on in a checkout — the bundled Ollama below, pinned
+      # literally for the SMTP reason above, so the e2e suites can count on
+      # semantic search being there. Model and prefixes are the defaults
+      # .env.example documents for embeddinggemma.
+      EMBEDDINGS_URL: http://ollama:11434/v1
+      EMBEDDINGS_MODEL: embeddinggemma:300m
+      EMBEDDINGS_QUERY_PREFIX: "task: search result | query: "
+      EMBEDDINGS_DOCUMENT_PREFIX: "title: none | text: "
     ports:
       # Only for the interactive API docs at http://localhost:8000/docs, which
       # Caddy doesn't route (it serves the SPA at everything but /api and
@@ -91,6 +99,12 @@ services:
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_START_TLS: "false"
+      # Must match the api service's recall block exactly — the worker embeds
+      # the documents, the API the queries, and two models never compare.
+      EMBEDDINGS_URL: http://ollama:11434/v1
+      EMBEDDINGS_MODEL: embeddinggemma:300m
+      EMBEDDINGS_QUERY_PREFIX: "task: search result | query: "
+      EMBEDDINGS_DOCUMENT_PREFIX: "title: none | text: "
     volumes:
       - ./apps/api/src:/app/src
     command: uv run --no-sync taskiq worker --reload app.tasks:broker
@@ -120,6 +134,14 @@ services:
   postgres:
     ports:
       - "5432:5432"
+
+  # On in every checkout regardless of COMPOSE_PROFILES, the way Mailpit is:
+  # `!reset` clears the base file's `local-embeddings` profile. Production
+  # opts in; development shouldn't have to remember to.
+  ollama:
+    profiles: !reset []
+    environment:
+      EMBEDDINGS_MODEL: embeddinggemma:300m
 
   rustfs:
     environment:

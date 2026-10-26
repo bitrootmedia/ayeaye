@@ -119,6 +119,17 @@ services:
       # contract as SMTP_HOST above.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      # Recall's embeddings; the API embeds the *query*. All empty disables
+      # semantic search and leaves the text search that was always there —
+      # the same "optional infra" contract as SMTP_HOST. Any OpenAI-compatible
+      # /v1/embeddings endpoint: the bundled Ollama (`local-embeddings`
+      # profile), OpenAI, Voyage.
+      EMBEDDINGS_URL: ${EMBEDDINGS_URL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-}
+      EMBEDDINGS_QUERY_PREFIX: ${EMBEDDINGS_QUERY_PREFIX:-}
+      EMBEDDINGS_DOCUMENT_PREFIX: ${EMBEDDINGS_DOCUMENT_PREFIX:-}
+      EMBEDDINGS_MIN_SIMILARITY: ${EMBEDDINGS_MIN_SIMILARITY:-0.35}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -165,6 +176,14 @@ services:
       # The worker is what actually calls the Telegram Bot API.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      # Recall's embeddings; the worker embeds the *documents*. Must agree
+      # with the API's block on every value, or the two compare vectors from
+      # different models — see the API's block for what they mean.
+      EMBEDDINGS_URL: ${EMBEDDINGS_URL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-}
+      EMBEDDINGS_QUERY_PREFIX: ${EMBEDDINGS_QUERY_PREFIX:-}
+      EMBEDDINGS_DOCUMENT_PREFIX: ${EMBEDDINGS_DOCUMENT_PREFIX:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -237,6 +256,58 @@ services:
     volumes:
       - rustfs_data:/data
 
+  # A local embedding model for recall, so semantic search needs no API key
+  # and nothing leaves the box. Only started when `local-embeddings` is in
+  # COMPOSE_PROFILES; without it, point EMBEDDINGS_URL at a hosted provider
+  # or leave it empty and recall is text search alone.
+  #
+  # `ollama serve` alone answers "model not found" until somebody pulls one,
+  # so the entrypoint starts the server, pulls EMBEDDINGS_MODEL (cheap once it
+  # is in the volume), pins its thread count, and then waits on the server.
+  # The healthcheck asks for the model by name, so `healthy` means "can
+  # embed", not "is running".
+  #
+  # **The thread count is the whole performance story on a CPU.** Left alone,
+  # llama.cpp uses every core, and its threads wait on each other at every
+  # step — so one core busy with Postgres stalls all of them. Measured on a
+  # ten-core box with other work running: a short query took 2.9s at ten
+  # threads and 0.3s at eight. `ollama create` over the same name with a
+  # `num_thread` parameter keeps the weights (the vectors are identical, so
+  # nothing needs re-embedding) and changes only that; it is re-applied after
+  # every pull because a pull restores the published defaults. Two cores are
+  # left for everything else, or one on a box that small; OLLAMA_THREADS
+  # overrides it.
+  ollama:
+    image: ollama/ollama:0.40.3
+    restart: unless-stopped
+    profiles: ["local-embeddings"]
+    environment:
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-embeddinggemma:300m}
+      OLLAMA_THREADS: ${OLLAMA_THREADS:-}
+      # Keep the model loaded between calls. Loading it is most of the cost
+      # of an embedding on CPU, and the sweep calls every minute.
+      OLLAMA_KEEP_ALIVE: "-1"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        cores=$$(nproc)
+        threads=$${OLLAMA_THREADS:-$$(( cores > 2 ? cores - 2 : 1 ))}
+        ollama pull "$$EMBEDDINGS_MODEL" &&
+          printf 'FROM %s\nPARAMETER num_thread %s\n' "$$EMBEDDINGS_MODEL" "$$threads" > /tmp/Modelfile &&
+          ollama create "$$EMBEDDINGS_MODEL" -f /tmp/Modelfile &&
+          echo "embedding with $$EMBEDDINGS_MODEL on $$threads of $$cores cores"
+        wait
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", 'ollama show "$$EMBEDDINGS_MODEL" >/dev/null 2>&1']
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
   # --- data ------------------------------------------------------------------
 
   # Only started when `local-db` is in COMPOSE_PROFILES (the default — see
@@ -246,7 +317,11 @@ services:
   # POSTGRES_PASSWORD / POSTGRES_DB, used ONLY to initialise this container —
   # a managed instance has its own, already-created, and doesn't need these.
   postgres:
-    image: postgres:18-alpine
+    # The official postgres:18-alpine plus pgvector, built here rather than
+    # pulled — see infra/postgres/Dockerfile for why not the pgvector image.
+    build:
+      context: ./infra/postgres
+    image: ayeayecaptain-postgres
     restart: unless-stopped
     profiles: ["local-db"]
     environment:
@@ -313,5 +388,6 @@ volumes:
   postgres_data:
   rustfs_data:
   redis_data:
+  ollama_data:
   caddy_data:
   caddy_config:

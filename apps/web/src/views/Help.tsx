@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  BookOpenIcon,
   BookmarkIcon,
   BotIcon,
   CalendarDaysIcon,
@@ -42,6 +43,7 @@ const SECTIONS: Section[] = [
   { id: "planner", title: "Planner", icon: CalendarDaysIcon },
   { id: "calendar", title: "Calendar & reminders", icon: CalendarIcon },
   { id: "notepad", title: "Notepad", icon: NotebookIcon },
+  { id: "knowledge-base", title: "Knowledge base & recall", icon: BookOpenIcon },
   { id: "bookmarks", title: "Bookmarks", icon: BookmarkIcon },
   { id: "changelog", title: "Changelog", icon: ScrollTextIcon },
   { id: "notifications", title: "Notifications", icon: BellIcon },
@@ -282,6 +284,38 @@ export default function Help() {
             </p>
           </Section>
 
+          <Section id="knowledge-base" title="Knowledge base &amp; recall">
+            <p>
+              Books hold what&rsquo;s worth writing down once and finding again. A book is
+              private to whoever made it until they share it, exactly like a project, and
+              holds two kinds of thing.
+            </p>
+            <p>
+              <strong>Articles</strong> are documents &mdash; a runbook, a policy, a how-to.
+              Each starts as your own private draft and every edit is kept in its history;
+              publish it when it&rsquo;s ready for everyone the book is shared with.
+            </p>
+            <p>
+              <strong>Facts</strong> are a few sentences worth knowing next time: a gotcha
+              that cost an afternoon, a decision and the reason for it, what an incident
+              turned out to be. There&rsquo;s no draft step &mdash; a fact is readable by
+              the book&rsquo;s readers the moment it&rsquo;s added. When one stops being
+              true, mark it <em>No longer true</em> rather than deleting it: it drops out of
+              recall but stays in the book&rsquo;s history. Facts your assistant writes say
+              &ldquo;via&rdquo; and the name of the token it used.
+            </p>
+            <p>
+              <strong>Recall</strong>, the box at the top of the knowledge base, is the
+              question &ldquo;what do we already know about this?&rdquo;. It searches facts,
+              articles and tasks &mdash; closed ones too, since last spring&rsquo;s incident
+              is exactly what you&rsquo;re after &mdash; and, where your installation has it
+              turned on, by meaning as well as by words, so &ldquo;how do we rotate the
+              certificates&rdquo; finds the note that says &ldquo;renewing TLS&rdquo;. It only
+              ever shows what you could open yourself. Tags work across all three, so the
+              runbook and the task can be found under the same word.
+            </p>
+          </Section>
+
           <Section id="bookmarks" title="Bookmarks">
             <p>
               Links the whole organisation shares — the staging site, the shared drive, a
@@ -402,6 +436,15 @@ export default function Help() {
               . Make a token — read-only to start, or read/write if you want it to create
               tasks and comment as you — and copy the command shown right after, which
               connects it in one step. A token only ever reaches what <em>you</em> can reach.
+            </p>
+            <p>
+              A connected assistant shares the team&rsquo;s memory through the{" "}
+              <a href="#knowledge-base" className="underline underline-offset-2">
+                knowledge base
+              </a>
+              : it can <em>recall</em> what the team knows before starting on something, and{" "}
+              <em>remember</em> a fact when it learns something the next session should know.
+              Give it a book to write into and share that book with whoever should read it.
             </p>
             <p>
               Prefer to script against the REST API directly? It&rsquo;s fully documented,
