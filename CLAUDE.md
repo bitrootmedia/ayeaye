@@ -388,6 +388,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-triage.sh                 # the unassigned queue, and it stays access-scoped
 ./scripts/e2e-search.sh                 # fuzziness, ranking, and permissions
 ./scripts/e2e-time.sh                   # timers, corrections, rollups
+./scripts/e2e-work-reports.sh           # admins only, clipped to the window, hidden stays hidden
 ./scripts/e2e-comments.sh               # threads, debouncing, mentions, the socket
 ./scripts/e2e-attachments.sh            # the upload handshake, against real storage
 ./scripts/e2e-task-files.sh             # priority, task files, thumbnails, moving a task
@@ -494,7 +495,7 @@ also read one directly when you need it before touching a file.
 | `personal-lists.md` | the notepad, sparks, bookmarks, the changelog |
 | `knowledge-base.md` | books, articles, revisions |
 | `recall.md` | facts, recall, embeddings, pgvector, the bundled model |
-| `time-tracking.md` | timers, corrections, rollups |
+| `time-tracking.md` | timers, corrections, rollups, work reports |
 | `search.md` | why Postgres and not a search engine |
 | `organisations.md` | membership, invites, organisation settings |
 | `web-ui.md` | routing, Base UI, dialogs, pickers, the shell |

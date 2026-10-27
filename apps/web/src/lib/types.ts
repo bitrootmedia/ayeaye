@@ -637,6 +637,8 @@ export const canDeleteOrg = (role: Role) => role === "owner";
  *  what stops the UI offering a button that 403s. */
 export const canPinBookmark = (role: Role) => role === "owner";
 export const canRequireMfa = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
+/** Work reports are a question about people rather than work: an admin's. */
+export const canSeeWorkReports = (role: Role) => ROLE_RANK[role] >= ROLE_RANK.admin;
 
 /** You cannot appoint someone above yourself. */
 export const grantableRoles = (actor: Role): Role[] =>
@@ -752,6 +754,32 @@ export type TimeSummary = {
   by_person: RollupRow[];
   by_project: RollupRow[];
   by_task: RollupRow[];
+};
+
+/** Work reports — organisation admins only; see services/work_reports.py.
+ *  Every date and hour is in `tz`, the viewer's zone, echoed back. */
+export type WorkReport = {
+  since: string;
+  until: string;
+  tz: string;
+  total_seconds: number;
+  by_person: RollupRow[];
+  by_project: RollupRow[];
+  by_task: (RollupRow & { project_name: string | null })[];
+  by_day: { date: string; seconds: number; people: { id: string; seconds: number }[] }[];
+  /** Seven rows, Monday first, of twenty-four hours each. */
+  by_hour: number[][];
+  entries: TimeEntry[];
+  /** How many entries the window holds; `entries` is the newest of them. */
+  entries_total: number;
+};
+
+export type RightNow = {
+  user: Person;
+  role: Role;
+  running: TimeEntry | null;
+  in_progress: { id: string; title: string; project_id: string | null }[];
+  last_active_at: string | null;
 };
 
 /** `5400 -> "1h 30m"`. Mirrors `format_duration` in services/time_tracking.py. */

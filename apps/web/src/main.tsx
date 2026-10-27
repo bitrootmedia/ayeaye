@@ -48,6 +48,7 @@ import Tasks from "@/views/Tasks";
 import Teams from "@/views/Teams";
 import Time from "@/views/Time";
 import Triage from "@/views/Triage";
+import WorkReports from "@/views/WorkReports";
 
 // Design tokens. Imported here, once, for the whole app.
 import "@/index.css";
@@ -339,6 +340,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="orgs/:orgId/bookmarks" element={<Bookmarks />} />
                 <Route path="orgs/:orgId/changelog" element={<Changelog />} />
                 <Route path="orgs/:orgId/time" element={<Time />} />
+                <Route path="orgs/:orgId/reports" element={<WorkReports />} />
                 <Route path="notifications" element={<Notifications />} />
                 {/* Personal and cross-organisation, like the inbox above it. */}
                 <Route path="reminders" element={<Reminders />} />

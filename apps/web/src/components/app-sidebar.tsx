@@ -18,6 +18,7 @@ import {
   CircleHelpIcon,
   ClockIcon,
   BookOpenIcon,
+  ChartColumnIcon,
   FolderKanbanIcon,
   InboxIcon,
   LogOutIcon,
@@ -51,7 +52,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import type { Organisation } from "@/lib/types";
+import { canSeeWorkReports, type Organisation } from "@/lib/types";
 import { useTheme } from "@/lib/theme";
 
 export function AppSidebar({
@@ -151,6 +152,17 @@ export function AppSidebar({
                     icon: ScrollTextIcon,
                   },
                   { to: `/orgs/${currentOrg.id}/time`, label: "Time", icon: ClockIcon },
+                  // Admins only. The server refuses everyone else anyway —
+                  // this just doesn't offer a link that would 403.
+                  ...(canSeeWorkReports(currentOrg.role)
+                    ? [
+                        {
+                          to: `/orgs/${currentOrg.id}/reports`,
+                          label: "Work reports",
+                          icon: ChartColumnIcon,
+                        },
+                      ]
+                    : []),
                   { to: `/orgs/${currentOrg.id}/people`, label: "People", icon: UsersIcon },
                   {
                     to: `/orgs/${currentOrg.id}/structure`,

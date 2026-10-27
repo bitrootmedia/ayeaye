@@ -32,6 +32,7 @@ from app.api.routers import (
     telegram_webhook,
     time,
     users,
+    work_reports,
 )
 
 api_router = APIRouter()
@@ -90,6 +91,10 @@ api_router.include_router(tasks.router)
 
 # Time logged against those tasks, plus the rollups.
 api_router.include_router(time.router)
+
+# Work reports over that time — who worked on what, when, and who is on what
+# right now. Organisation admins only; see services/work_reports.py.
+api_router.include_router(work_reports.router)
 
 # A personal day plan over the tasks a person can see. Organisation-scoped
 # like Tasks; the admin escape hatch is time entries' shape, not notes' —

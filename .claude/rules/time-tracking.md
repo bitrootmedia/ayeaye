@@ -7,6 +7,10 @@ paths:
   - "apps/web/src/components/timer-bar.tsx"
   - "apps/web/src/components/time-panel.tsx"
   - "scripts/e2e-time.sh"
+  - "apps/api/src/app/services/work_reports.py"
+  - "apps/api/src/app/api/routers/work_reports.py"
+  - "apps/web/src/views/WorkReports.tsx"
+  - "scripts/e2e-work-reports.sh"
 ---
 
 # Time tracking
@@ -70,3 +74,36 @@ Things that bite:
   a realtime ping directly rather than through `tasks_service.announce`, which
   would bump the task's "last activity" for a question nobody has answered.
   `scripts/e2e-check-ins.sh` proves every path by moving the clock with psql.
+
+## Work reports
+
+`views/WorkReports.tsx` at `/orgs/:orgId/reports`, over
+`GET .../reports/work` and `GET .../reports/now`. Read the
+`services/work_reports.py` docstring. **Organisation admins only** — the
+rail only offers it to them (`canSeeWorkReports`) and the server answers
+anyone else with a **403**, which the screen turns into a sentence. `/time`
+already shows everyone the hours on tasks they can see; this is a question
+about *people*, which is an admin's.
+
+- **It composes `entries_in_scope` and does not widen it.** Hours on
+  somebody else's hidden task are missing from the report exactly as the
+  task is missing from the board. Counting them under a placeholder would
+  tell an admin a hidden task exists. `e2e-work-reports.sh` pins it.
+- **Entries are clipped to the window and spread across the wall-clock
+  hours they cover** (`spread`), so an overnight entry lands on both days
+  and a three-hour block fills three cells of the activity grid. Slices are
+  **fractional seconds, rounded once at the end** — truncating each slice
+  lost a second an hour and showed a 2h 30m entry as 2h 29m.
+- **Dates and hours are the viewer's zone**, sent as `tz` from the browser
+  and echoed back; a zone the server doesn't know reads as UTC rather than
+  an error, the same "ignore what you can't read" rule as an unknown sort
+  key.
+- **The arithmetic is Python over one statement's rows.** Access is still
+  one SQL statement; an admin's window over a team is a few thousand rows,
+  and the range is capped at 366 days.
+- **"Right now" is four statements, never one per member**: active members,
+  running timers in scope, open in-progress tasks they own, and last logged
+  time. A timer on a task the admin can't see reads as nothing running.
+- Filters live in the URL (`since`, `until`, repeated `user`, `project`).
+  The charts are hand-drawn divs, not a chart library: one hue, bars from
+  the baseline, a hover readout above each plot.

@@ -242,6 +242,15 @@ export default function Help() {
               loud — "1h30", "45", "1.5h" all work. Rollups by person, project or task are on
               the Time screen.
             </p>
+            <p>
+              Organisation <strong>owners and admins</strong> also get{" "}
+              <strong>Work reports</strong> in the rail: who worked on what and when over any
+              date range, hours per day, which hours of the week the work happens in, and who
+              is on what right now — their running timer and their tasks in progress. Filter
+              by person or project; the filters stay in the address bar, so a report can be
+              sent as a link. Hours on a task somebody has hidden aren&rsquo;t counted, the
+              same as everywhere else.
+            </p>
           </Section>
 
           <Section id="planner" title="Planner">

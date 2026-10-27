@@ -270,6 +270,8 @@ test("photograph the product", async ({ page }) => {
   await page.waitForTimeout(400);
   await page.goto(`/orgs/${orgId}/time`);
   await shot(page, "12-time");
+  await page.goto(`/orgs/${orgId}/reports`);
+  await shot(page, "12b-work-reports");
 
   // The task's own private note and reminder, photographed with the task.
   await page.goto(`/orgs/${orgId}/tasks`);
@@ -354,6 +356,9 @@ test("photograph the product", async ({ page }) => {
 
   await page.goto(`/orgs/${orgId}/kb?recall=${encodeURIComponent("how heavy can the travel lift go")}`);
   await shot(page, "17d2-recall-dark");
+
+  await page.goto(`/orgs/${orgId}/reports`);
+  await shot(page, "17d3-work-reports-dark");
 
   await page.goto("/instance");
   await shot(page, "17e-instance-dark");

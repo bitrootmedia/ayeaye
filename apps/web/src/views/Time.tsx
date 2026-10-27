@@ -172,7 +172,7 @@ export default function Time() {
   );
 }
 
-function Rollup({
+export function Rollup({
   title,
   rows,
   total,
