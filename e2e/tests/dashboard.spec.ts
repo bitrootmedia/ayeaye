@@ -120,6 +120,24 @@ test.describe("the dashboard", () => {
     await page.reload();
     await expect(page.getByLabel("Status")).toHaveValue("Heads-down on the refit");
   });
+
+  test("the weekly report is offered to admins, and only to them", async ({ page }) => {
+    await signUp(page, uniqueEmail("db"));
+    await page.goto("/account");
+    // Nothing administered yet, so nothing for it to send.
+    await expect(page.getByRole("checkbox", { name: "Weekly report" })).toHaveCount(0);
+
+    await createOrg(page, `Dash ${Date.now()}`);
+    await page.goto("/account");
+    const weekly = page.getByRole("checkbox", { name: "Weekly report" });
+    await expect(weekly).toBeChecked();
+    await weekly.uncheck();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("heading", { name: "Saved" })).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole("checkbox", { name: "Weekly report" })).not.toBeChecked();
+  });
 });
 
 /**

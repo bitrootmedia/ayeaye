@@ -98,6 +98,7 @@ async def update_profile(
     status_message: str | None = None,
     daily_summary_enabled: bool | None = None,
     daily_summary_hour: int | None = None,
+    weekly_report_enabled: bool | None = None,
     timer_check_ins: str | None = None,
     timer_check_ins_per_day: int | None = None,
 ) -> User:
@@ -114,6 +115,8 @@ async def update_profile(
         # it, and the CHECK constraint is the backstop — an hour arriving from
         # somewhere else is worth landing on a real hour, not a 500.
         user.daily_summary_hour = max(0, min(23, daily_summary_hour))
+    if weekly_report_enabled is not None:
+        user.weekly_report_enabled = weekly_report_enabled
     withdraw = False
     if timer_check_ins is not None and timer_check_ins in check_ins.MODES:
         withdraw = timer_check_ins == check_ins.MODE_OFF != user.timer_check_ins

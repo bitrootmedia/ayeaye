@@ -236,7 +236,9 @@ RA=$(recall_args "$OID" "statement_timeout")
 ok "MCP recall by text"             "$(tool "$READTOK" recall "$RA" | grep -c "$MFID")" "1"
 settle
 RA=$(recall_args "$OID" "dashboard tool scheduled refresh keeps failing on the replica database")
-ok "MCP recall by meaning"          "$(tool "$READTOK" recall "$RA" | head -2 | grep -c "$MFID")" "1"
+# Retried while text-only, for `recall()`'s reason above.
+for _ in 1 2 3; do MR=$(tool "$READTOK" recall "$RA"); echo "$MR" | grep -q "text search only" || break; done
+ok "MCP recall by meaning"          "$(echo "$MR" | head -2 | grep -c "$MFID")" "1"
 SUPARGS=$(python3 -c 'import json,sys; print(json.dumps({"organisation_id": sys.argv[1], "fact_id": sys.argv[2]}))' "$OID" "$MFID")
 ok "supersede_fact"                 "$(tool "$TOK" supersede_fact "$SUPARGS" | cut -c1-11)" "Superseded "
 RA=$(recall_args "$OID" "x" "app:nope")

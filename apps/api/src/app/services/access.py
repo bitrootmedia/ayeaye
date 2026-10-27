@@ -801,6 +801,7 @@ def _book_grant_rank_subquery(user_id: uuid.UUID):
             or_(BookMember.user_id == user_id, tm.user_id.isnot(None)),
         )
         .correlate(Book)
+        .scalar_subquery()
     )
 
 

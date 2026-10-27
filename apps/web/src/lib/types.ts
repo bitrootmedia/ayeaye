@@ -722,6 +722,7 @@ export const NOTIFICATION_KIND_LABEL: Record<string, string> = {
   book_shared: "A book was shared with you",
   comment_mention: "Mentioned in a comment",
   timer_paused: "Your timer was paused while you were away",
+  weekly_report: "Weekly report (organisations you administer)",
 };
 
 // --- time ------------------------------------------------------------------

@@ -22,6 +22,7 @@ from app.tasks import (
     recurrence,  # noqa: F401  registers sweep_recurring_tasks
     reminders,  # noqa: F401  registers sweep_reminders
     thumbnails,  # noqa: F401  registers make_thumbnail
+    weekly_report,  # noqa: F401  registers sweep_weekly_reports
 )
 from app.tasks.broker import broker
 
@@ -48,4 +49,5 @@ __all__ = [
     "recurrence",
     "reminders",
     "thumbnails",
+    "weekly_report",
 ]

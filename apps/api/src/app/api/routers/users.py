@@ -53,6 +53,9 @@ class MeOut(BaseModel):
     # above. Both are on the wire together because the account screen shows
     # them together: "6am" means nothing without saying 6am *where*.
     daily_summary_hour: int
+    # Monday's report on last week, for organisations you administer. Sent
+    # at `daily_summary_hour`. See services/weekly_report.py.
+    weekly_report_enabled: bool
     # "Still working on this?" while a timer runs: `telegram`, `apps` or
     # `off`, and at most how many a day. See services/check_ins.py.
     timer_check_ins: str
@@ -73,6 +76,7 @@ class MeUpdate(BaseModel):
     status_message: str | None = Field(default=None, max_length=140)
     daily_summary_enabled: bool | None = None
     daily_summary_hour: int | None = Field(default=None, ge=0, le=23)
+    weekly_report_enabled: bool | None = None
     timer_check_ins: str | None = Field(default=None, pattern="^(telegram|apps|off)$")
     timer_check_ins_per_day: int | None = Field(default=None, ge=1, le=24)
 
@@ -92,6 +96,7 @@ def _me(user, *, is_instance_admin: bool = False) -> MeOut:
         status_message=user.status_message,
         daily_summary_enabled=user.daily_summary_enabled,
         daily_summary_hour=user.daily_summary_hour,
+        weekly_report_enabled=user.weekly_report_enabled,
         timer_check_ins=user.timer_check_ins,
         timer_check_ins_per_day=user.timer_check_ins_per_day,
         is_instance_admin=is_instance_admin,

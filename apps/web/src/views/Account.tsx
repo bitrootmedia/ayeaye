@@ -90,6 +90,7 @@ export default function Account() {
   const [status, setStatus] = useState(me?.status_message ?? "");
   const [dailySummary, setDailySummary] = useState(me?.daily_summary_enabled ?? true);
   const [summaryHour, setSummaryHour] = useState(me?.daily_summary_hour ?? 6);
+  const [weeklyReport, setWeeklyReport] = useState(me?.weekly_report_enabled ?? true);
   const [checkIns, setCheckIns] = useState(me?.timer_check_ins ?? "telegram");
   const [checkInsPerDay, setCheckInsPerDay] = useState(me?.timer_check_ins_per_day ?? 6);
   const [saving, setSaving] = useState(false);
@@ -104,6 +105,7 @@ export default function Account() {
           status_message: status,
           daily_summary_enabled: dailySummary,
           daily_summary_hour: summaryHour,
+          weekly_report_enabled: weeklyReport,
           timer_check_ins: checkIns,
           timer_check_ins_per_day: checkInsPerDay,
         }),
@@ -197,6 +199,26 @@ export default function Account() {
                 </div>
               )}
             </div>
+            {/* Only for people who administer an organisation — it goes to
+                nobody else, so for everybody else it would be a switch that
+                does nothing. */}
+            {organisations.some((o) => o.role === "owner" || o.role === "admin") && (
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={weeklyReport}
+                    onChange={(e) => setWeeklyReport(e.target.checked)}
+                  />
+                  Weekly report
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Monday morning, per organisation you administer: hours by person, tasks opened
+                  and closed, and articles and facts added last week. Sent at the same hour as
+                  the daily summary.
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="timer-check-ins">Timer check-ins</Label>
               <EntityPicker

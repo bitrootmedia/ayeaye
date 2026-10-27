@@ -34,7 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import NotificationChannel, OrganisationMember, User
-from app.models.notification import NOTIFICATION_KINDS
+from app.models.notification import KIND_WEEKLY_REPORT, NOTIFICATION_KINDS
 from app.models.notification_channel import (
     CHANNEL_EMAIL,
     CHANNEL_KINDS,
@@ -48,6 +48,11 @@ from app.services import tokens as tokens_service
 # stale link sitting in an old chat isn't a standing way in; long enough that
 # nobody has to race it.
 LINK_CODE_TTL = timedelta(minutes=15)
+
+# What a new chat or webhook starts with: everything, except the weekly
+# report — a page of a week arriving in a chat is something to switch on,
+# not something to discover one Monday. Email gets every kind.
+RELAY_DEFAULT_KINDS = [k for k in NOTIFICATION_KINDS if k != KIND_WEEKLY_REPORT]
 
 
 async def get_or_create_email_channel(db: AsyncSession, user_id: uuid.UUID) -> NotificationChannel:
@@ -187,7 +192,7 @@ async def start_telegram_link(db: AsyncSession, user: User) -> str:
             kind=CHANNEL_TELEGRAM,
             label="Telegram",
             config={"link_code": code},
-            enabled_kinds=list(NOTIFICATION_KINDS),
+            enabled_kinds=list(RELAY_DEFAULT_KINDS),
             verified_at=None,
         )
     )
@@ -276,7 +281,7 @@ async def create_webhook(
         kind=CHANNEL_WEBHOOK,
         label=label,
         config={"url": url, "secret": secret},
-        enabled_kinds=list(NOTIFICATION_KINDS),
+        enabled_kinds=list(RELAY_DEFAULT_KINDS),
         verified_at=datetime.now(UTC),
     )
     db.add(row)

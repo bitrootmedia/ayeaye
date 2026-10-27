@@ -251,6 +251,17 @@ export default function Help() {
               sent as a link. Hours on a task somebody has hidden aren&rsquo;t counted, the
               same as everywhere else.
             </p>
+            <p>
+              They also get a <strong>weekly report</strong> by email every Monday morning,
+              one per organisation they run: hours by person, tasks opened and closed, and
+              articles and facts added the week before, with a link to that week&rsquo;s work
+              report. A quiet week sends nothing. It goes out at the same hour as your daily
+              summary; turn it off on the{" "}
+              <Link to="/account" className="underline underline-offset-2">
+                Account
+              </Link>{" "}
+              screen.
+            </p>
           </Section>
 
           <Section id="planner" title="Planner">

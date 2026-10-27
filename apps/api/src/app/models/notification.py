@@ -64,6 +64,10 @@ KIND_COMMENT_MENTION = "comment_mention"
 # somewhere you will see away from the desk (Telegram, typically), which is
 # by construction where you are.
 KIND_TIMER_PAUSED = "timer_paused"
+# Monday's report to an organisation's admins on the week before: articles
+# and facts added, hours by person, tasks opened and closed. See
+# services/weekly_report.py.
+KIND_WEEKLY_REPORT = "weekly_report"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_ACTION_REQUIRED_CLEARED,
@@ -79,6 +83,7 @@ NOTIFICATION_KINDS = (
     KIND_BOOK_SHARED,
     KIND_COMMENT_MENTION,
     KIND_TIMER_PAUSED,
+    KIND_WEEKLY_REPORT,
 )
 
 

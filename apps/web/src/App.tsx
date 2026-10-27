@@ -68,6 +68,9 @@ export type Me = {
   /** Which local hour that digest goes out, 0-23, read against `timezone`.
    *  Default 6. Yours to change on the account screen. */
   daily_summary_hour: number;
+  /** Monday's report on last week, for organisations you administer. Sent
+   *  at `daily_summary_hour`. Opt-out. See `services/weekly_report.py`. */
+  weekly_report_enabled: boolean;
   /** "Still working on this?" while a timer runs — asked in Telegram (if
    *  linked) and in the apps, only in the apps, or not at all. At most
    *  `timer_check_ins_per_day` a day. See `services/check_ins.py`. */

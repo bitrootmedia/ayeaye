@@ -87,6 +87,17 @@ class User(Base):
     # schedulers racing sends one digest, not two.
     last_daily_summary_sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # Monday's report on last week, for the organisations you administer —
+    # opt-out for the digest's reason, and only ever sent to an owner or
+    # admin, so for everybody else this does nothing. Goes out at
+    # `daily_summary_hour`; a second hour to choose would be a second
+    # setting to find. See services/weekly_report.py.
+    weekly_report_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    # The claim, as for the digest: the Monday it was sent on.
+    last_weekly_report_sent_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     # Whether a running timer asks now and then if you're still on it, and
     # where: `telegram` (the default — the chat if one is linked, and the menu
     # bar app and the web header either way), `apps` (only those two), or

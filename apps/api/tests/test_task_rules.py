@@ -349,4 +349,6 @@ def test_notification_kinds_are_a_closed_set():
         "comment_mention",
         # A timer stopped because nobody answered the menu bar's check-in.
         "timer_paused",
+        # Monday's report on last week, to an organisation's admins.
+        "weekly_report",
     }

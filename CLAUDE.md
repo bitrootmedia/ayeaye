@@ -389,6 +389,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-search.sh                 # fuzziness, ranking, and permissions
 ./scripts/e2e-time.sh                   # timers, corrections, rollups
 ./scripts/e2e-work-reports.sh           # admins only, clipped to the window, hidden stays hidden
+./scripts/e2e-weekly-report.sh          # Monday, admins only, once; the admin's own view, by email
 ./scripts/e2e-comments.sh               # threads, debouncing, mentions, the socket
 ./scripts/e2e-attachments.sh            # the upload handshake, against real storage
 ./scripts/e2e-task-files.sh             # priority, task files, thumbnails, moving a task

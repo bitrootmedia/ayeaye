@@ -4,6 +4,8 @@ paths:
   - "apps/api/src/app/services/recurrence.py"
   - "apps/api/src/app/services/deadlines.py"
   - "apps/api/src/app/services/daily_summary.py"
+  - "apps/api/src/app/services/weekly_report.py"
+  - "scripts/e2e-weekly-report.sh"
   - "apps/api/src/app/models/task_series.py"
   - "scripts/e2e-recurring-tasks.sh"
   - "docker-compose.yml"
@@ -13,9 +15,10 @@ paths:
 
 ## The scheduler
 
-A tenth container, `taskiq scheduler app.tasks:scheduler`, running three
-hourly jobs — `sweep_reminders` (:05), `sweep_deadlines` (:15) and
-`sweep_daily_summaries` (:25), staggered so they don't all land on the same
+A tenth container, `taskiq scheduler app.tasks:scheduler`, running hourly
+jobs — `sweep_reminders` (:05), `sweep_deadlines` (:15),
+`sweep_daily_summaries` (:25), `sweep_recurring_tasks` (:35) and
+`sweep_weekly_reports` (:45), staggered so they don't all land on the same
 tick and compete for it. It earns its place because a reminder has to arrive
 whether or not anybody has the app open: a loop inside the API dies on every
 reload in dev and fires twice the day somebody runs two replicas.
@@ -100,6 +103,22 @@ constraint (migration 0004, extended in 0013 and again in 0019), and
 exactly that set so the two can't drift. Adding a kind in Python without the
 matching `ALTER` raises an `IntegrityError` at the worst possible moment —
 while notifying somebody.
+
+**The weekly report** (`services/weekly_report.py`, `tasks/weekly_report.py`,
+:45 past) is the digest's shape for organisation admins: Monday, at the
+person's own `daily_summary_hour` and zone, last week (Monday to Monday in
+that zone) — hours by person, tasks opened and closed, published articles
+and facts added. One per organisation they administer, none for a quiet one,
+claimed on `users.last_weekly_report_sent_on`. **It is the recipient's own
+view**, composed from the same builders the screens use — a member's hidden
+task, its hours and a private draft are missing from it as from the board —
+and the time half *is* `work_reports.report`, not a second sum. Opt-out
+(`users.weekly_report_enabled`); the claim only ever stamps someone who
+administers somewhere. Its kind is backfilled onto **email channels only**,
+and a new Telegram or webhook channel starts without it
+(`notification_channels.RELAY_DEFAULT_KINDS`): a week's summary in a chat is
+something to switch on. `scripts/e2e-weekly-report.sh` drives the sweep with
+an injected `now` in a zone nobody else uses.
 
 ## Recurring tasks
 
