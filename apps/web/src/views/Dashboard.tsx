@@ -172,7 +172,7 @@ export default function Dashboard() {
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">Right now</p>
                 {awayNow.map((a) => (
-                  <AwayRow key={a.id} absence={a} />
+                  <AwayRow key={a.id} absence={a} orgId={org.id} />
                 ))}
               </div>
             )}
@@ -180,7 +180,7 @@ export default function Dashboard() {
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">Coming up</p>
                 {awaySoon.map((a) => (
-                  <AwayRow key={a.id} absence={a} />
+                  <AwayRow key={a.id} absence={a} orgId={org.id} />
                 ))}
               </div>
             )}
@@ -238,10 +238,25 @@ export default function Dashboard() {
   );
 }
 
-function AwayRow({ absence }: { absence: DashboardData["away"][number] }) {
+function AwayRow({
+  absence,
+  orgId,
+}: {
+  absence: DashboardData["away"][number];
+  orgId: string;
+}) {
   return (
     <div className="flex flex-wrap items-baseline gap-2">
-      <span className="font-medium">{personName(absence.person)}</span>
+      {absence.person ? (
+        <Link
+          to={`/orgs/${orgId}/people/${absence.person.id}`}
+          className="font-medium underline-offset-2 hover:underline"
+        >
+          {personName(absence.person)}
+        </Link>
+      ) : (
+        <span className="font-medium">{personName(absence.person)}</span>
+      )}
       <span className="font-mono text-xs text-muted-foreground">
         {absence.starts_on} → {absence.ends_on}
       </span>

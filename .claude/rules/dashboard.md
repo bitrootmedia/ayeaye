@@ -3,6 +3,9 @@ paths:
   - "apps/api/src/app/api/routers/dashboard.py"
   - "apps/api/src/app/services/presence.py"
   - "apps/api/src/app/services/working_hours.py"
+  - "apps/api/src/app/services/profiles.py"
+  - "apps/web/src/views/MemberProfile.tsx"
+  - "scripts/e2e-member-profile.sh"
   - "apps/web/src/views/Dashboard.tsx"
   - "apps/web/src/views/Account.tsx"
   - "apps/web/src/views/OrganisationDetail.tsx"
@@ -88,7 +91,7 @@ through; restating it here would be two rules that can disagree.
 ## Working hours
 
 Read `services/working_hours.py`. A Mon–Sun × 0–23 weekly grid, yours to set
-on the Account screen and any colleague's to see from the People roster —
+on the Account screen and any colleague's to see on your profile page —
 the same "not private, deliberately" shape `services/presence.py` already
 applies to out-of-office, just a recurring weekly pattern instead of a date
 range. **Purely informational, for now.** Nothing reads this to decide
@@ -144,3 +147,35 @@ clicks — reset on a *window* `mouseup`, not just the grid's own, so
 releasing outside it still ends the drag, the same "don't trust only the
 element under the pointer" reasoning `main.tsx` already applies to
 cancelling a stray file drop.
+
+## A colleague's profile
+
+`/orgs/{id}/people/{user_id}` (`views/MemberProfile.tsx`), reached by
+clicking a name on the People roster or in the dashboard's Away card. It
+answers "is now a good time to reach them, and what are they on" in one
+request: `GET /organisations/{id}/members/{user_id}/profile` — `{user_id}`
+the user's own id, like the working-hours route beside it.
+
+**It shows nothing new, and that is the rule that holds it together.** Read
+the `services/profiles.py` docstring. The person (status line, timezone,
+working hours, out-of-office) is membership-scoped exactly as presence and
+working hours already are. Their tasks are `access.visible_tasks_stmt` *as
+the viewer*, narrowed with `mine_user_id` — so a private project, a hidden
+task or a revoked grant drops out of the profile precisely as it does from
+the task list. A profile route that showed more than the task list would be
+a hole in the access model with a friendly face; don't add a "because
+you're looking at their profile" branch.
+
+**The running timer is only reported when it's on a task the viewer can
+see** — the time tracker's own `entries_in_scope` rule. Not "busy on
+something you can't see": that leaks that the task exists. The empty state
+says "nothing you can see" for the same reason, and the open-task count is
+"N of M you can see".
+
+Out-of-office here is everything from today on, not the dashboard's
+fortnight — somebody looking at one person wants their holiday in three
+weeks. "Right now" (their local time, inside/outside their hours, hours
+until they're back) is computed in the browser from the raw cells and their
+`users.timezone`, via `lib/working-hours.ts`'s `wallClock` and
+`hoursUntilWorking`, and ticks every minute. `scripts/e2e-member-profile.sh`
+pins the access half; `dashboard.spec.ts` pins what a second person sees.

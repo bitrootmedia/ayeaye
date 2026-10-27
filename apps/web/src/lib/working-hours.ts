@@ -61,3 +61,35 @@ export function convertWeek(
     return { weekday: Math.floor(wrapped / 24), hour: wrapped % 24 };
   });
 }
+
+/** Wall-clock weekday (0=Monday), hour and minute in `timeZone` right now —
+ *  the same numbering the grid uses, so it can be looked up in a `cellSet`. */
+export function wallClock(timeZone: string, at: Date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(at);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return {
+    weekday: WEEKDAY_LABELS.indexOf(get("weekday")),
+    hour: Number(get("hour")) % 24,
+    minute: Number(get("minute")),
+  };
+}
+
+/** Hours from `from` until the next marked cell, walking forward through the
+ *  week — 0 if `from` is itself marked, `null` if nothing is marked at all. */
+export function hoursUntilWorking(
+  cells: WorkingHourCell[],
+  from: { weekday: number; hour: number },
+): number | null {
+  const on = cellSet(cells);
+  for (let step = 0; step < 168; step++) {
+    const slot = (from.weekday * 24 + from.hour + step) % 168;
+    if (on.has(cellKey(Math.floor(slot / 24), slot % 24))) return step;
+  }
+  return null;
+}

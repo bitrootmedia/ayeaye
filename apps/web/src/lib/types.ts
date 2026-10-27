@@ -516,6 +516,42 @@ export type WorkingHours = {
   cells: WorkingHourCell[];
 };
 
+/** One task on a colleague's profile. `is_owner`/`is_action_required` are
+ *  from the *profile's* person's side, not the viewer's. */
+export type ProfileTask = {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  project_id: string | null;
+  project_name: string | null;
+  due_on: string | null;
+  is_owner: boolean;
+  is_action_required: boolean;
+  is_open: boolean;
+  updated_at: string;
+  closed_at: string | null;
+};
+
+/** `GET /organisations/{id}/members/{user_id}/profile`. The person is
+ *  membership-scoped; their tasks and timer only reach as far as the
+ *  viewer's own task access — see `services/profiles.py`. */
+export type MemberProfile = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: Role;
+  joined_at: string | null;
+  timezone: string | null;
+  status_message: string | null;
+  working_hours: WorkingHourCell[];
+  away: { id: string; starts_on: string; ends_on: string; note: string | null; away_now: boolean }[];
+  working_on: { task: ProfileTask; started_at: string } | null;
+  open_tasks: ProfileTask[];
+  open_total: number;
+  recently_closed: ProfileTask[];
+};
+
 /** A quick capture — an idea, a link, a note-to-self. Cross-organisation
  *  and yours alone; see the "Sparks" section in CLAUDE.md. */
 export type Spark = {

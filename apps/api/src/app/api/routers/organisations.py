@@ -8,10 +8,11 @@ the response, nothing more.
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
+from sqlalchemy import select
 
 from app.api.deps import CurrentOrg, CurrentUser, DbSession
 from app.core import mailer
-from app.models import OrganisationMember, User
+from app.models import OrganisationMember, Project, Task, User
 from app.models.organisation import STATUS_INVITED
 from app.schemas.organisations import (
     InviteCreate,
@@ -23,9 +24,13 @@ from app.schemas.organisations import (
     OrganisationUpdate,
     RequireMfaUpdate,
 )
+from app.schemas.profiles import ProfileAbsence, ProfileOut, ProfileTask, ProfileTimer
 from app.schemas.working_hours import WorkingHourCell, WorkingHoursOut
 from app.services import invites as invites_service
 from app.services import organisations as orgs_service
+from app.services import presence as presence_service
+from app.services import profiles as profiles_service
+from app.services import reminders as reminders_service
 from app.services import working_hours as working_hours_service
 from app.tasks.invites import send_invite_email
 
@@ -149,6 +154,71 @@ async def member_working_hours(user_id: uuid.UUID, ctx: CurrentOrg, db: DbSessio
     return WorkingHoursOut(
         timezone=target.timezone,
         cells=[WorkingHourCell(weekday=c.weekday, hour=c.hour) for c in cells],
+    )
+
+
+@router.get("/{org_id}/members/{user_id}/profile", response_model=ProfileOut)
+async def member_profile(user_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession):
+    """Everything a colleague needs before getting in touch: when they work,
+    whether they're away, what they've said they're on, and the work of
+    theirs the caller can already see. `user_id` is the user's own id, like
+    the working-hours route beside it. See `services/profiles.py` for why
+    none of this widens anybody's access."""
+    today = reminders_service.today_for(user)
+    p = await profiles_service.for_member(db, ctx, user, user_id, today=today)
+
+    tasks = [*p.open_tasks, *p.recently_closed, *([p.running[1]] if p.running else [])]
+    project_ids = {t.project_id for t in tasks if t.project_id}
+    names: dict = {}
+    if project_ids:
+        rows = (
+            await db.execute(select(Project.id, Project.name).where(Project.id.in_(project_ids)))
+        ).all()
+        names = {pid: name for pid, name in rows}
+
+    def task_out(t: Task) -> ProfileTask:
+        return ProfileTask(
+            id=str(t.id),
+            title=t.title,
+            status=t.status,
+            priority=t.priority,
+            project_id=str(t.project_id) if t.project_id else None,
+            project_name=names.get(t.project_id) if t.project_id else None,
+            due_on=t.due_on,
+            is_owner=t.owner_user_id == p.user.id,
+            is_action_required=t.action_required_user_id == p.user.id,
+            is_open=t.closed_at is None,
+            updated_at=t.updated_at,
+            closed_at=t.closed_at,
+        )
+
+    return ProfileOut(
+        id=str(p.user.id),
+        email=p.user.email,
+        display_name=p.user.display_name,
+        role=p.member.role,
+        joined_at=p.member.accepted_at,
+        timezone=p.user.timezone,
+        status_message=p.user.status_message,
+        working_hours=[WorkingHourCell(weekday=c.weekday, hour=c.hour) for c in p.cells],
+        away=[
+            ProfileAbsence(
+                id=str(a.id),
+                starts_on=a.starts_on,
+                ends_on=a.ends_on,
+                note=a.note,
+                away_now=presence_service.is_away(a, today=today),
+            )
+            for a in p.absences
+        ],
+        working_on=(
+            ProfileTimer(task=task_out(p.running[1]), started_at=p.running[0].started_at)
+            if p.running
+            else None
+        ),
+        open_tasks=[task_out(t) for t in p.open_tasks],
+        open_total=p.open_total,
+        recently_closed=[task_out(t) for t in p.recently_closed],
     )
 
 

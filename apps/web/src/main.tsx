@@ -26,6 +26,7 @@ import Dashboard from "@/views/Dashboard";
 import Help from "@/views/Help";
 import Instance from "@/views/Instance";
 import Landing, { Footer, Header } from "@/views/Landing";
+import MemberProfile from "@/views/MemberProfile";
 import ArticleDetail from "@/views/ArticleDetail";
 import Bookmarks from "@/views/Bookmarks";
 import Changelog from "@/views/Changelog";
@@ -304,6 +305,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route
                   path="orgs/:orgId/people"
                   element={<OrganisationDetail />}
+                />
+                <Route
+                  path="orgs/:orgId/people/:userId"
+                  element={<Keyed param="userId" element={<MemberProfile />} />}
                 />
                 <Route
                   path="orgs/:orgId/settings"

@@ -6,7 +6,7 @@ import { HOURS, WEEKDAY_LABELS, cellKey, cellSet } from "@/lib/working-hours";
 /**
  * A Mon–Sun × 0–23 weekly grid. The same component renders both the
  * editable version (Account) and the read-only version (a colleague's
- * grid on the People roster) — `onToggle`'s presence is what tells them
+ * grid on their profile) — `onToggle`'s presence is what tells them
  * apart, rather than keeping two near-identical grids in sync by hand.
  */
 export function WorkingHoursGrid({

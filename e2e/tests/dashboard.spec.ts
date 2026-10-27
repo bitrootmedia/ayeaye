@@ -1,6 +1,14 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
-import { createOrg, inviteMember, shellIsUp, signUp, uniqueEmail } from "./helpers";
+import {
+  createOrg,
+  createProject,
+  createTask,
+  inviteMember,
+  shellIsUp,
+  signUp,
+  uniqueEmail,
+} from "./helpers";
 
 /**
  * The dashboard and the account screen.
@@ -92,6 +100,56 @@ test.describe("the dashboard", () => {
     await expect(away.getByText(crew)).toBeVisible();
     await expect(away.getByText("sailing")).toBeVisible();
     await expect(away.getByText("Right now")).toBeVisible();
+
+    await them.context().close();
+  });
+
+  test("a colleague's profile says when to reach them, and only shows work you can see", async ({
+    page,
+    browser,
+  }) => {
+    const boss = uniqueEmail("dbown");
+    const crew = uniqueEmail("dbmem");
+    await signUp(page, boss);
+    const orgId = await createOrg(page, `Dash ${Date.now()}`);
+    const link = await inviteMember(page, orgId, crew);
+    const them = await otherPerson(browser, crew);
+    await acceptInvite(them, link);
+
+    await them.goto("/account");
+    await them.getByLabel("Status").fill("Heads-down on the refit");
+    await them.getByRole("button", { name: "Save" }).click();
+    await expect(them.getByRole("heading", { name: "Saved" })).toBeVisible();
+    await them.getByLabel("From").fill(today());
+    await them.getByLabel("Until (included)").fill(today());
+    await them.getByLabel("Why").fill("dentist");
+    await them.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(them.getByText("Away now")).toBeVisible();
+
+    // From the roster, by name.
+    await page.goto(`/orgs/${orgId}/people`);
+    await page.getByRole("link", { name: crew }).click();
+    await page.waitForURL(/\/people\/[0-9a-f-]+$/);
+    const now = page.getByRole("region", { name: "Right now" });
+    await expect(now.getByText("Heads-down on the refit")).toBeVisible();
+    await expect(now.getByText("dentist")).toBeVisible();
+    await expect(now.getByText("No working hours recorded.")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Working hours" })).toBeVisible();
+
+    // The boss's own task, in a project nobody else is on: it is on the
+    // boss's own profile and not on the one a colleague sees.
+    await createProject(page, orgId, "Private refit");
+    await createTask(page, orgId, "Quietly reorder the sails", "Private refit");
+    await page.goto(`/orgs/${orgId}/people`);
+    await page.getByRole("link", { name: boss }).click();
+    await expect(
+      page.getByRole("region", { name: "Open tasks" }).getByText("Quietly reorder the sails"),
+    ).toBeVisible();
+
+    await them.goto(`/orgs/${orgId}/people`);
+    await them.getByRole("link", { name: boss }).click();
+    await expect(them.getByText("Nothing open of theirs that you can see.")).toBeVisible();
+    await expect(them.getByText("Quietly reorder the sails")).toHaveCount(0);
 
     await them.context().close();
   });

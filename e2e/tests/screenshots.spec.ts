@@ -81,6 +81,9 @@ test("photograph the product", async ({ page }) => {
   await shot(page, "02b-dashboard-empty");
   await page.goto(`/orgs/${orgId}/people`);
   await shot(page, "03-organisation-people");
+  await page.getByRole("link", { name: owner }).click();
+  await page.getByRole("region", { name: "Right now" }).waitFor();
+  await shot(page, "03a-member-profile");
 
   await page.goto(`/orgs/${orgId}/settings`);
   await shot(page, "03b-organisation-settings");
@@ -341,6 +344,11 @@ test("photograph the product", async ({ page }) => {
   await shot(page, "15-task-board-dark");
   await page.goto(`/orgs/${orgId}/projects`);
   await shot(page, "16-projects-dark");
+
+  await page.goto(`/orgs/${orgId}/people`);
+  await page.getByRole("link", { name: owner }).click();
+  await page.getByRole("region", { name: "Right now" }).waitFor();
+  await shot(page, "16b-member-profile-dark");
 
   await page.goto(`/orgs/${orgId}/settings`);
   await shot(page, "17-organisation-settings-dark");

@@ -418,6 +418,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-notification-emails.sh    # per-organisation address, confirmed first, proved against Mailpit
 ./scripts/e2e-email-verification.sh     # the enforced path; restarts the API to turn it on, and back
 ./scripts/e2e-working-hours.sh          # idempotent, bounded, visible to a shared org and nobody else
+./scripts/e2e-member-profile.sh         # a colleague's profile: membership-scoped person, viewer-scoped work and timer
 ./scripts/e2e-sparks.sh                 # quick capture, cross-organisation, nobody else ever
 ./scripts/e2e-kb.sh                     # book access, private-article vanish, revision sessions, search
 ./scripts/e2e-recall.sh                 # facts, recall by meaning, access on the vector half, MCP remember
