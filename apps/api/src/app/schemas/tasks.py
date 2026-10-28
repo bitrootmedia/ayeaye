@@ -190,8 +190,11 @@ class ChecklistItemUpdate(BaseModel):
 class SheetCellOut(BaseModel):
     row_id: str
     column_id: str
+    # For a text cell: who last set it, and when.
     checked_by: PersonOut
     checked_at: datetime
+    # None in a checkbox column.
+    value: str | None = None
 
 
 class SheetRowOut(BaseModel):
@@ -202,6 +205,7 @@ class SheetRowOut(BaseModel):
 class SheetColumnOut(BaseModel):
     id: str
     label: str
+    kind: Literal["check", "text"]
 
 
 class SheetOut(BaseModel):
@@ -209,9 +213,9 @@ class SheetOut(BaseModel):
     title: str
     rows: list[SheetRowOut]
     columns: list[SheetColumnOut]
-    # Sparse — only checked cells appear. Every (row, column) pair not
-    # listed here is unchecked, including one from a row or column added
-    # after every other cell in the grid.
+    # Sparse — only checked or filled-in cells appear. Every (row, column)
+    # pair not listed here is unchecked or empty, including one from a row
+    # or column added after every other cell in the grid.
     cells: list[SheetCellOut]
 
 
@@ -229,6 +233,13 @@ class SheetRowIn(BaseModel):
 
 class SheetColumnIn(BaseModel):
     label: str = Field(min_length=1, max_length=200)
+    # Fixed once the column exists — see `models/sheet.py`.
+    kind: Literal["check", "text"] = "check"
+
+
+class SheetValueIn(BaseModel):
+    # Empty clears the cell.
+    value: str = Field(default="", max_length=500)
 
 
 class NoteIn(BaseModel):

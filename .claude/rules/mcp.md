@@ -317,6 +317,26 @@ those services, with no rule restated. Three decisions in them:
   `checklists.get_checklist_or_404`'s own docstring for what happens when
   one does.
 
+**`set_sheet_cell` fills cells; it never lays a sheet out.** Rows and
+columns are a person's to name, so there is no add-row or add-column tool,
+and the docstring tells the model to say so in a comment when the row it
+needs isn't there rather than write the value somewhere else. The point is
+an assistant recording "Server2 is on 1.4.2 now" after a deploy, into a
+grid somebody arranged. Three decisions in it:
+
+- **Sheet, row and column are each an id or a name.** `_pick` tries the id,
+  then the name ignoring case — "Server2" and "Version" are what the person
+  said. A name matching two things is refused, not guessed between, and a
+  name matching nothing lists the names there are, so the next call works.
+- **One tool for both column kinds**, since the caller usually doesn't know
+  which a column is. A checkbox column takes `x` (or yes/true/done/1) to tick
+  and empty (or no/false/0) to untick; anything else is refused with that
+  sentence, because "maybe" silently ticking a box would be worse.
+- **`task` renders each sheet one line per row**, every cell named by its
+  column (`Server2 [id] — Version: 1.4.2 · Patched: [x]`), so reading one
+  server's state is reading one line and the ids a later call needs are
+  beside the names.
+
 **The `Denied` lesson had a second half, and this is it.** `_refusal` turns
 a service's `HTTPException` into a `Denied`, because an `HTTPException`
 escaping a tool is an *unhandled* exception as far as the SDK is concerned

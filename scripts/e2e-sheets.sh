@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# Sheets: a grid checklist under a task — rows, columns, a checkbox per cell.
+# Sheets: a grid under a task — rows, columns, and per column either a
+# checkbox or text in each cell.
 #
 #   docker compose up -d && ./scripts/e2e-sheets.sh
 #
 # A cell's existence IS the check (see models/sheet.py), so this proves the
 # idempotent check/uncheck shape and that a new row starts unchecked against
 # every existing column for free, alongside the same write-gate every other
-# piece of shared task content (checklists, tags, files) already has.
+# piece of shared task content (checklists, tags, files) already has. A text
+# column's cells are the same rows with a value: empty deletes, each column
+# refuses the other kind's write, and reset leaves text alone.
 #
 # Creates real accounts and leaves them behind. Dev stacks only.
 set -u
@@ -63,6 +66,31 @@ echo "== unchecking"
 ok "uncheck the cell"       "$(code -b /tmp/sh-owner.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R1/$C1)" "204"
 ok "back to zero"           "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['cells'])")" "0"
 
+echo "== text columns"
+CT=$(post /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/columns "{\"label\":\"Version\",\"kind\":\"text\"}")
+CTID=$(echo "$CT" | j "d['id']")
+ok "a text column says so"  "$(echo "$CT" | j "d['kind']")" "text"
+ok "columns default to checkboxes" "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "[c['kind'] for c in d[0]['columns']]")" "['check', 'check', 'text']"
+ok "an unknown kind -> 422" "$(code -b /tmp/sh-owner.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/columns -d '{"label":"Nope","kind":"date"}')" "422"
+V=$(put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R1/$CTID '{"value":"  1.4.2  "}')
+ok "sets a value, trimmed"  "$(echo "$V" | j "d['value']")" "1.4.2"
+ok "records who set it"     "$(echo "$V" | j "d['checked_by']['email']")" "$OWNER"
+V2=$(put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R1/$CTID '{"value":"1.5.0"}')
+ok "overwriting replaces it" "$(echo "$V2" | j "d['value']")" "1.5.0"
+ok "…and moves the time on" "$(python3 -c "print('$(echo "$V2" | j "d['checked_at']")' > '$(echo "$V" | j "d['checked_at']")')")" "True"
+ok "still one cell for it"  "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "[c['value'] for c in d[0]['cells'] if c['column_id']=='$CTID']")" "['1.5.0']"
+ok "a checkbox cell has no value" "$(put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R2/$C1 | j "d['value']")" "None"
+ok "can't tick a text cell -> 409"       "$(code -b /tmp/sh-owner.jar -X PUT $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R1/$CTID)" "409"
+ok "can't untick a text cell -> 409"     "$(code -b /tmp/sh-owner.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R1/$CTID)" "409"
+ok "can't type into a checkbox -> 409"   "$(code -b /tmp/sh-owner.jar -H 'Content-Type: application/json' -X PUT $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R1/$C1 -d '{"value":"x"}')" "409"
+ok "over 500 characters -> 422" "$(code -b /tmp/sh-owner.jar -H 'Content-Type: application/json' -X PUT $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R1/$CTID -d "{\"value\":\"$(printf 'v%.0s' $(seq 501))\"}")" "422"
+put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R2/$CTID '{"value":"1.3.9"}' >/dev/null
+ok "reset unticks the checkboxes…" "$(code -b /tmp/sh-owner.jar -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/reset)" "204"
+ok "…and keeps the text"    "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "sorted(c['value'] for c in d[0]['cells'])")" "['1.3.9', '1.5.0']"
+ok "an empty value clears it, answering null" "$(put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R2/$CTID '{"value":"   "}')" "null"
+ok "…and the cell is gone"  "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['cells'])")" "1"
+ok "clearing an empty cell is fine too" "$(put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R3/$CTID '{"value":""}')" "null"
+
 echo "== read is enough to see, write is needed to change"
 post /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/access "{\"user_id\":\"$VUID\",\"level\":\"read\"}" >/dev/null
 ok "viewer sees the sheet"  "$(curl -s -b /tmp/sh-viewer.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d)")" "1"
@@ -70,20 +98,22 @@ ok "…but cannot add a sheet" "$(code -b /tmp/sh-viewer.jar -H 'Content-Type: a
 ok "…nor add a row"          "$(code -b /tmp/sh-viewer.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/rows -d '{"label":"Nope"}')" "403"
 ok "…nor add a column"       "$(code -b /tmp/sh-viewer.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/columns -d '{"label":"Nope"}')" "403"
 ok "…nor check a cell"       "$(code -b /tmp/sh-viewer.jar -X PUT $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R1/$C1)" "403"
+ok "…nor type into one"     "$(code -b /tmp/sh-viewer.jar -H 'Content-Type: application/json' -X PUT $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/values/$R1/$CTID -d '{"value":"9.9"}')" "403"
+ok "…but sees the text"     "$(curl -s -b /tmp/sh-viewer.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "[c['value'] for c in d[0]['cells'] if c['column_id']=='$CTID']")" "['1.5.0']"
 ok "…nor reset"              "$(code -b /tmp/sh-viewer.jar -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/reset)" "403"
 ok "…nor delete the sheet"   "$(code -b /tmp/sh-viewer.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID)" "403"
 
 echo "== resetting"
 put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R1/$C1 >/dev/null
 put /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/cells/$R2/$C2 >/dev/null
-ok "two cells checked"      "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['cells'])")" "2"
+ok "two cells checked"      "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "sum(1 for c in d[0]['cells'] if c['value'] is None)")" "2"
 ok "reset the sheet"        "$(code -b /tmp/sh-owner.jar -X POST $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/reset)" "204"
-ok "back to zero"           "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['cells'])")" "0"
+ok "no checks left, the text stays" "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "[c['value'] for c in d[0]['cells']]")" "['1.5.0']"
 
 echo "== renaming and removing"
 ok "owner renames it"       "$(curl -s -b /tmp/sh-owner.jar -H 'Content-Type: application/json' -X PATCH $B/api/organisations/$OID/tasks/$TID/sheets/$SHID -d '{"title":"Weekly maintenance (renamed)"}' | j "d['title']")" "Weekly maintenance (renamed)"
 ok "remove a column"        "$(code -b /tmp/sh-owner.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/columns/$C2)" "204"
-ok "one column left"        "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['columns'])")" "1"
+ok "two columns left"       "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['columns'])")" "2"
 ok "remove a row"           "$(code -b /tmp/sh-owner.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID/rows/$R3)" "204"
 ok "two rows left"          "$(curl -s -b /tmp/sh-owner.jar $B/api/organisations/$OID/tasks/$TID/sheets | j "len(d[0]['rows'])")" "2"
 ok "delete the sheet"       "$(code -b /tmp/sh-owner.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/sheets/$SHID)" "204"

@@ -24,6 +24,7 @@ paths:
   - "scripts/e2e-notes.sh"
   - "scripts/e2e-checklists.sh"
   - "scripts/e2e-sheets.sh"
+  - "e2e/tests/sheets.spec.ts"
   - "scripts/e2e-reminders.sh"
   - "e2e/tests/notes.spec.ts"
   - "e2e/tests/tags.spec.ts"
@@ -252,9 +253,10 @@ collection and reintroduce the same trap one call later.
 
 ## Sheets
 
-Read `models/sheet.py`. A grid checklist under a task: rows and columns are
+Read `models/sheet.py`. A grid under a task: rows and columns are
 freeform labels you type in — servers down one side, repeatable checks
-across the top — and a cell is a checkbox at their intersection. It exists
+across the top — and a cell is a checkbox at their intersection, or text
+in a text column (below). It exists
 for exactly the case a single flat checklist can't express: "run the same
 three checks across twenty servers" is 3 items × 1 list in a checklist, or a
 2D grid here, and the difference is whether you can see at a glance which
@@ -288,6 +290,43 @@ drag-and-drop reordering.
 **`write` gates every mutation, `read` is enough to see the grid.** The
 identical bar checklists, tags and files already clear — this is shared
 task content, not a personal record.
+
+**A column holds checkboxes or text, and `kind` is fixed when it's made.**
+`task_sheet_columns.kind` is `check` (the default, so every sheet from
+before stayed as it was) or `text`. A text cell is the same
+`task_sheet_cells` row with `value` filled in, so the existence rule above
+still holds: a row means "something is here", **saving an empty value
+deletes it**, and a new row or column starts empty for free. Five things
+that follow:
+
+- **Each column refuses the other kind's write with a 409** —
+  `PUT/DELETE …/cells/{row}/{col}` on a text column, `PUT …/values/{row}/{col}`
+  on a checkbox column. Text has its own path rather than a body on the
+  checkbox `PUT`, so no verb means two things depending on the column.
+- **A text write is last-write-wins for that one cell**:
+  `ON CONFLICT DO UPDATE` setting value, setter and `updated_at`, where a
+  check is `DO NOTHING`. A second click on a box means what the first did;
+  a second value means something new. Still read back afterwards, with
+  `one_or_none` since a clear can land between the two statements.
+- **`checked_by`/`checked_at` mean "set by"/"last set" for a text cell.**
+  The response reads `updated_at`, which equals `created_at` for a check
+  since checks are never edited. The column names predate text and weren't
+  worth a rename.
+- **Reset unticks; text stays.** The versions and providers down a sheet are
+  what the next round is checked against, not part of the round. The UI
+  offers Reset only when a box is actually ticked.
+- **The kind can't be changed.** Turning text into checkboxes would throw
+  every value away, so it is a delete and a new column, on purpose.
+
+The text cell (`SheetTextCell` in `sheet-panel.tsx`) edits in place: click,
+type, Enter or blur saves, Escape restores (a ref stops the blur on unmount
+from saving anyway), Tab saves and moves on through the browser's own focus
+order. It shows the typed value until the refetch lands, or the old one
+flashes up in between. Values are `font-mono` because a version or a host
+is data. The add-column controls are two groups that wrap as wholes, so
+the Checkbox/Text choice never ends up on a line away from its input.
+`e2e/tests/sheets.spec.ts` covers the cell; `scripts/e2e-sheets.sh` the
+rules; `scripts/e2e-mcp.sh` the `set_sheet_cell` tool (see `mcp.md`).
 
 **A `<td>` is not a flex container, and Base UI's `Checkbox` root is a plain
 inline `<span>`.** Its explicit `size-4` width and height are simply

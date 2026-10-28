@@ -42,6 +42,7 @@ from app.schemas.tasks import (
     SheetRowIn,
     SheetRowOut,
     SheetUpdate,
+    SheetValueIn,
     TagIn,
     TagOut,
     TagUpdate,
@@ -966,23 +967,25 @@ async def delete_checklist_item(
     await tasks_service.announce(db, tctx.task, "checklist_item_removed")
 
 
+def _sheet_cell_out(cell, who) -> SheetCellOut:
+    return SheetCellOut(
+        row_id=str(cell.row_id),
+        column_id=str(cell.column_id),
+        checked_by=PersonOut(id=str(who.id), email=who.email, display_name=who.display_name),
+        checked_at=cell.updated_at,
+        value=cell.value,
+    )
+
+
 def _sheet_out(sheet, cells: dict) -> SheetOut:
     return SheetOut(
         id=str(sheet.id),
         title=sheet.title,
         rows=[SheetRowOut(id=str(r.id), label=r.label) for r in sheet.rows],
-        columns=[SheetColumnOut(id=str(c.id), label=c.label) for c in sheet.columns],
-        cells=[
-            SheetCellOut(
-                row_id=str(row_id),
-                column_id=str(column_id),
-                checked_by=PersonOut(
-                    id=str(who.id), email=who.email, display_name=who.display_name
-                ),
-                checked_at=cell.created_at,
-            )
-            for (row_id, column_id), (cell, who) in cells.items()
+        columns=[
+            SheetColumnOut(id=str(c.id), label=c.label, kind=c.kind) for c in sheet.columns
         ],
+        cells=[_sheet_cell_out(cell, who) for cell, who in cells.values()],
     )
 
 
@@ -1100,9 +1103,9 @@ async def add_sheet_column(
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
     sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)
-    column = await sheets_service.add_column(db, sheet, label=body.label)
+    column = await sheets_service.add_column(db, sheet, label=body.label, kind=body.kind)
     await tasks_service.announce(db, tctx.task, "sheet_column_added")
-    return SheetColumnOut(id=str(column.id), label=column.label)
+    return SheetColumnOut(id=str(column.id), label=column.label, kind=column.kind)
 
 
 @router.delete(
@@ -1144,12 +1147,7 @@ async def check_sheet_cell(
     column = await sheets_service.get_column_or_404(db, sheet_id, column_id)
     cell, who = await sheets_service.check_cell(db, row, column, user)
     await tasks_service.announce(db, tctx.task, "sheet_cell_checked")
-    return SheetCellOut(
-        row_id=str(row.id),
-        column_id=str(column.id),
-        checked_by=PersonOut(id=str(who.id), email=who.email, display_name=who.display_name),
-        checked_at=cell.created_at,
-    )
+    return _sheet_cell_out(cell, who)
 
 
 @router.delete(
@@ -1173,11 +1171,39 @@ async def uncheck_sheet_cell(
     await tasks_service.announce(db, tctx.task, "sheet_cell_unchecked")
 
 
+@router.put(
+    "/tasks/{task_id}/sheets/{sheet_id}/values/{row_id}/{column_id}",
+    response_model=SheetCellOut | None,
+)
+async def set_sheet_value(
+    task_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    row_id: uuid.UUID,
+    column_id: uuid.UUID,
+    body: SheetValueIn,
+    ctx: CurrentOrg,
+    user: CurrentUser,
+    db: DbSession,
+):
+    """Write a text cell; an empty value clears it and answers `null`. Its
+    own path rather than a body on `PUT .../cells/…`, so a checkbox column
+    and a text column never share a verb that means two things — each
+    refuses the other's write with a 409."""
+    tctx = await tasks_service.context_for(db, ctx, task_id, user)
+    tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+    row = await sheets_service.get_row_or_404(db, sheet_id, row_id)
+    column = await sheets_service.get_column_or_404(db, sheet_id, column_id)
+    found = await sheets_service.set_value(db, row, column, user, body.value)
+    await tasks_service.announce(db, tctx.task, "sheet_cell_set")
+    return _sheet_cell_out(*found) if found else None
+
+
 @router.post("/tasks/{task_id}/sheets/{sheet_id}/reset", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_task_sheet(
     task_id: uuid.UUID, sheet_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db: DbSession
 ):
-    """Clears every cell — the sweep is done, start the next round."""
+    """Unticks every checkbox — the sweep is done, start the next round.
+    Text cells stay; see `sheets_service.reset_sheet`."""
     tctx = await tasks_service.context_for(db, ctx, task_id, user)
     tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
     sheet = await sheets_service.get_sheet_or_404(db, task_id, sheet_id)

@@ -87,6 +87,7 @@ from app.services import recall as recall_service
 from app.services import reminders as reminders_service
 from app.services import richtext, time_tracking
 from app.services import search as search_service
+from app.services import sheets as sheets_service
 from app.services import sparks as sparks_service
 from app.services import tags as tags_service
 from app.services import tasks as tasks_service
@@ -535,7 +536,7 @@ async def search(
 
 async def _task_detail(db, org, user: User, tctx) -> str:
     """One task, rendered in full: what it says, what it is waiting on,
-    its checklists, its files, its comments and its history.
+    its checklists and sheets, its files, its comments and its history.
 
     Split out of the `task` tool so `next_task` can hand back the same
     thing without a second, drifting copy of it — the top of a planner is
@@ -547,6 +548,7 @@ async def _task_detail(db, org, user: User, tctx) -> str:
     tags = (await tags_service.for_tasks(db, [t.id])).get(t.id, [])
     depends_on, blocks = await dependencies_service.list_dependencies(db, org, user, t.id)
     checklists = await checklists_service.for_task(db, t.id)
+    sheets = await sheets_service.for_task(db, t.id)
     # `create=False`, the default: *reading* a task must not bring a
     # thread into existence. `conversation` is None until somebody
     # comments, and both readers below take that.
@@ -585,6 +587,11 @@ async def _task_detail(db, org, user: User, tctx) -> str:
             for item in checklist.items
         ]
 
+    if sheets:
+        cells = await sheets_service.cells_for_sheets(db, [sheet.id for sheet in sheets])
+        for sheet in sheets:
+            lines += _sheet_lines(sheet, cells)
+
     # A removed comment has had its body cleared by `remove()`, so there
     # is nothing of the person's own words left to read back — left out
     # entirely rather than shown as a tombstone, the same call
@@ -618,10 +625,34 @@ async def _task_detail(db, org, user: User, tctx) -> str:
     return "\n".join(lines)
 
 
+def _sheet_lines(sheet, cells: dict) -> list[str]:
+    """A sheet as one line per row, every cell named by its column — a grid
+    flattened so that reading one server's state is reading one line."""
+    lines = [f"\nsheet {sheet.title} [{sheet.id}]"]
+    if sheet.columns:
+        lines.append(
+            "  columns: "
+            + " · ".join(
+                f"{c.label} ({'text' if c.kind == 'text' else 'checkbox'}) [{c.id}]"
+                for c in sheet.columns
+            )
+        )
+    for row in sheet.rows:
+        shown = []
+        for column in sheet.columns:
+            found = cells.get((row.id, column.id))
+            if column.kind == "text":
+                shown.append(f"{column.label}: {found[0].value if found else '—'}")
+            else:
+                shown.append(f"{column.label}: [{'x' if found else ' '}]")
+        lines.append(f"  {row.label} [{row.id}]" + (" — " + " · ".join(shown) if shown else ""))
+    return lines
+
+
 @tool()
 async def task(ctx: Context, organisation_id: str, task_id: str) -> str:
     """Everything about one task: what it says, what it is waiting on, its
-    checklists, its files, its comments and its history.
+    checklists and sheets, its files, its comments and its history.
 
     **Read this before picking work back up.** A task's comment thread is
     where its state actually lives — the decisions taken, the corrections,
@@ -1587,6 +1618,94 @@ async def check_item(
         f"{'Ticked' if done else 'Unticked'} {item.text!r} in {checklist.title!r}. "
         f"{outstanding} left on that list."
     )
+
+
+_TICK = {"x", "yes", "true", "done", "1", "✓"}
+_UNTICK = {"", "no", "false", "0"}
+
+
+def _pick(things, wanted: str, what: str, sheet_title: str, label=lambda t: t.label):
+    """By id first, then by name ignoring case — `Server2` is what a person
+    says, and the id is what `task` printed beside it. A name matching two
+    things is refused rather than guessed between."""
+    wanted = wanted.strip()
+    by_id = [t for t in things if str(t.id) == wanted]
+    if by_id:
+        return by_id[0]
+    by_name = [t for t in things if label(t).casefold() == wanted.casefold()]
+    if len(by_name) == 1:
+        return by_name[0]
+    if by_name:
+        raise Denied(f"More than one {what} is called {wanted!r} in {sheet_title!r}; use its id.")
+    names = ", ".join(repr(label(t)) for t in things) or "none"
+    raise Denied(f"No {what} {wanted!r} in {sheet_title!r}. It has: {names}.")
+
+
+@tool()
+async def set_sheet_cell(
+    ctx: Context,
+    organisation_id: str,
+    task_id: str,
+    sheet: Annotated[str, Field(description="The sheet's id or title, from `task`.")],
+    row: Annotated[str, Field(description="The row's id or label, e.g. 'Server2'.")],
+    column: Annotated[str, Field(description="The column's id or label, e.g. 'Version'.")],
+    value: Annotated[
+        str,
+        Field(
+            description=(
+                "A text column: the text, or empty to clear it. "
+                "A checkbox column: 'x' to tick, empty to untick."
+            )
+        ),
+    ],
+) -> str:
+    """Fill in one cell of a sheet on a task — a version after a deploy, a
+    tick once a server is patched.
+
+    A sheet is a grid on a task: rows down one side (usually the things
+    being tracked, such as servers), columns across the top, and each column
+    holds either text or checkboxes. `task` shows every sheet with its
+    current values. Rows and columns are named by a person, not by this
+    tool: if the row you need isn't there, say so in a comment rather than
+    putting the value somewhere else. Needs write on the task.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            tctx = await tasks_service.context_for(db, org, uuid.UUID(task_id), user)
+        except Exception as exc:
+            raise Denied("No such task, or you can't see it.") from exc
+        tctx.require(tasks_service.can_edit(tctx.level), "you have read-only access to this task")
+        # `for_task` eager-loads rows and columns, so the lookups below walk
+        # loaded lists — see `sheets.get_sheet_or_404` for why that matters.
+        sheets = await sheets_service.for_task(db, tctx.task.id)
+        if not sheets:
+            raise Denied(f"{tctx.task.title!r} has no sheets.")
+        found = _pick(sheets, sheet, "sheet", tctx.task.title, label=lambda s: s.title)
+        the_row = _pick(found.rows, row, "row", found.title)
+        the_column = _pick(found.columns, column, "column", found.title)
+        where = f"{the_row.label} · {the_column.label} in {found.title!r}"
+
+        if the_column.kind == "text":
+            cell = await sheets_service.set_value(db, the_row, the_column, user, value)
+            await tasks_service.announce(db, tctx.task, "sheet_cell_set")
+            return f"Set {where} to {cell[0].value!r}." if cell else f"Cleared {where}."
+
+        wanted = value.strip().casefold()
+        if wanted in _TICK:
+            await sheets_service.check_cell(db, the_row, the_column, user)
+            await tasks_service.announce(db, tctx.task, "sheet_cell_checked")
+            return f"Ticked {where}."
+        if wanted in _UNTICK:
+            await sheets_service.uncheck_cell(db, the_row, the_column)
+            await tasks_service.announce(db, tctx.task, "sheet_cell_unchecked")
+            return f"Unticked {where}."
+        raise Denied(
+            f"{the_column.label!r} holds checkboxes: send 'x' to tick it or an empty "
+            "value to untick it."
+        )
 
 
 @tool()

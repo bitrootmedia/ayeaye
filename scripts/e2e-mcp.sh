@@ -255,6 +255,26 @@ ok "a read-only token cannot tick"       "$(tool "$READ" check_item "$TICK" | te
 ok "…nor start a list"                   "$(tool "$READ" add_checklist "$CLARGS" | text | grep -ci 'read-only')" "1"
 ok "…and nothing changed"                "$(curl -s -b /tmp/ma.jar $CHECKLISTS | j "len(d)")" "1"
 
+echo "== sheets, so a deploy can fill in what it changed"
+# Rows and columns are a person's to lay out; the tool only fills cells in,
+# naming them as a person would ("Server2", "Version") or by id.
+SHEETS=$B/api/organisations/$OID/tasks/$TID/sheets
+SHID=$(post /tmp/ma.jar $SHEETS '{"title":"Servers"}' | j "d['id']")
+post /tmp/ma.jar $SHEETS/$SHID/rows '{"label":"Server1"}' >/dev/null
+post /tmp/ma.jar $SHEETS/$SHID/rows '{"label":"Server2"}' >/dev/null
+post /tmp/ma.jar $SHEETS/$SHID/columns '{"label":"Version","kind":"text"}' >/dev/null
+post /tmp/ma.jar $SHEETS/$SHID/columns '{"label":"Patched"}' >/dev/null
+ok "an empty sheet reads back on the task" "$(tool "$WRITE" task "$TASKARGS" | text | grep -c 'Server2 \[.*Version: — · Patched: \[ \]')" "1"
+ok "sets a text cell by name"          "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=servers row=server2 column=version value=1.4.2)" | text | grep -c "Set Server2 · Version in 'Servers' to '1.4.2'")" "1"
+ok "ticks a checkbox by name"          "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=$SHID row=Server2 column=Patched value=x)" | text | grep -c 'Ticked')" "1"
+ok "…and the task shows both"          "$(tool "$WRITE" task "$TASKARGS" | text | grep -c 'Server2 \[.*Version: 1.4.2 · Patched: \[x\]')" "1"
+ok "…as does the screen's own API"     "$(curl -s -b /tmp/ma.jar $SHEETS | j "sorted(str(c['value']) for c in d[0]['cells'])")" "['1.4.2', 'None']"
+ok "a word that isn't a tick is refused" "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=Servers row=Server1 column=Patched value=maybe)" | text | grep -c 'holds checkboxes')" "1"
+ok "an unknown row names the ones there are" "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=Servers row=Server9 column=Version value=1)" | text | grep -c "It has: 'Server1', 'Server2'")" "1"
+ok "an empty value clears a text cell" "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=Servers row=Server2 column=Version value=)" | text | grep -c 'Cleared')" "1"
+ok "a read-only token cannot fill one" "$(tool "$READ" set_sheet_cell "$(args organisation_id=$OID task_id=$TID sheet=Servers row=Server1 column=Version value=2)" | text | grep -ci 'read-only')" "1"
+ok "a task with no sheets says so"     "$(tool "$WRITE" set_sheet_cell "$(args organisation_id=$OID task_id=$SECOND sheet=Servers row=a column=b value=c)" | text | grep -c 'has no sheets')" "1"
+
 echo "== a write says what acted on the person's behalf"
 # The friction this closes: everything an assistant wrote appeared to have
 # been written by its owner, and the workaround was a convention — "prefix

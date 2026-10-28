@@ -19,6 +19,15 @@ Ordered by `id`, no `position` column — UUIDv7 sorts chronologically, the
 same convention `task_checklists` uses and for the same reason: nothing here
 needs drag-and-drop reordering.
 
+**A column is either checkboxes or text, and its `kind` says which.** A
+text cell is the same `task_sheet_cells` row with `value` filled in, so the
+rule above carries over unchanged: a row means "something is here", clearing
+the text deletes it, and a new row or column starts empty for free. The kind
+is fixed when the column is made — turning text into checkboxes would have
+to throw every value away, so that is a delete and a new column, on purpose.
+`checked_by_user_id` reads as "set by" for a text cell; the name predates
+text and wasn't worth a rename.
+
 Shared task content, not a personal record: `write` gates every mutation
 (`services/sheets.py`), the identical bar checklists, tags and files already
 clear.
@@ -27,7 +36,7 @@ clear.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, text
 from sqlalchemy import func as sa_func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -36,6 +45,9 @@ from app.db.base import Base
 
 MAX_TITLE_LENGTH = 200
 MAX_LABEL_LENGTH = 200
+MAX_VALUE_LENGTH = 500
+
+COLUMN_KINDS = ("check", "text")
 
 
 class TaskSheet(Base):
@@ -82,6 +94,9 @@ class TaskSheetRow(Base):
 
 class TaskSheetColumn(Base):
     __tablename__ = "task_sheet_columns"
+    __table_args__ = (
+        CheckConstraint("kind IN ('check', 'text')", name="ck_task_sheet_columns_kind"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
@@ -93,6 +108,7 @@ class TaskSheetColumn(Base):
         index=True,
     )
     label: Mapped[str] = mapped_column(String(MAX_LABEL_LENGTH), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="check")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=sa_func.now()
     )
@@ -129,8 +145,16 @@ class TaskSheetCell(Base):
     checked_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # NULL in a check column, never empty in a text one — clearing the text
+    # deletes the row rather than leaving an empty string behind.
+    value: Mapped[str | None] = mapped_column(String(MAX_VALUE_LENGTH), nullable=True)
     # The check IS this row's existence — `created_at` doubles as "when",
     # with no separate boolean anywhere to drift out of sync with it.
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_func.now()
+    )
+    # A check is never edited, only made or removed, so this equals
+    # `created_at` there; a text cell is overwritten, and this is when.
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=sa_func.now()
     )

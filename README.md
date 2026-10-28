@@ -35,7 +35,9 @@ self-hosted installation has all of it.
 - **Checklists and sheets.** More than one checklist per task — "packing list"
   and "before we ship" are two lists, not two headings in one. A sheet is the
   same idea in two dimensions: the same three checks across twenty servers,
-  as a grid, with who ticked each box and when.
+  as a grid, with who ticked each box and when. A column can hold text
+  instead — each server's version, provider or how it's deployed — so the
+  facts and the checks sit in one table.
 - **Depends on.** Record that one task is waiting on another, in both
   directions. It's visibility, not a gate — you can still close a task with
   open dependencies, because the ask was to *see* what's blocking, and this
@@ -379,10 +381,11 @@ Both paths answer the same questions once connected:
 > *Create a task for Ada to chase the yard about the travel lift, urgent.*
 
 **What it can do.** Read with `organisations`, `list_tasks`, `search`,
-`task` — which reads back a task's comments, checklists, files and what it
-is waiting on, not just its status — plus `activity`, `my_reminders` and
+`task` — which reads back a task's comments, checklists, sheets, files and
+what it is waiting on, not just its status — plus `activity`, `my_reminders` and
 `running_timer`. Write with `create_task`, `update_task`, `close_task`,
 `comment`, `tag_task`, `add_dependency`, `add_checklist`, `check_item`,
+`set_sheet_cell`,
 `start_timer` and `stop_timer`, among others; any MCP client's own tool
 listing has the full set.
 

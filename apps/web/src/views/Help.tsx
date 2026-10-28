@@ -184,8 +184,10 @@ export default function Help() {
             </p>
             <p>
               A task also carries <strong>checklists</strong> (more than one, if you like),{" "}
-              <strong>sheets</strong> (a grid — rows and columns you name yourself, a checkbox
-              at each intersection, for "run the same three checks across twenty servers"),{" "}
+              <strong>sheets</strong> (a grid — rows and columns you name yourself, and each
+              column holds either a checkbox or text, for "run the same three checks across
+              twenty servers" beside each server's version or provider; resetting a sheet
+              unticks the boxes and keeps the text),{" "}
               <strong>files</strong> (drag and drop, or paste a screenshot straight into the
               description) and a <strong>comment thread</strong> with realtime updates and
               voice notes. A <strong>private note</strong> on a task is yours alone — nobody
