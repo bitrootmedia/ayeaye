@@ -23,6 +23,7 @@ import {
   InboxIcon,
   LogOutIcon,
   MailIcon,
+  MessagesSquareIcon,
   MoonIcon,
   NetworkIcon,
   NotebookIcon,
@@ -55,6 +56,15 @@ import {
 import { canSeeWorkReports, type Organisation } from "@/lib/types";
 import { useTheme } from "@/lib/theme";
 
+type NavItem = {
+  to: string;
+  label: string;
+  icon: typeof CircleDotIcon;
+  exact?: boolean;
+  /** A count beside the link — Chats' unread messages. */
+  badge?: number;
+};
+
 export function AppSidebar({
   me,
   organisations,
@@ -62,6 +72,7 @@ export function AppSidebar({
   inviteCount,
   unread,
   remindersDue,
+  chatsUnread,
   onCreateOrg,
   onSignOut,
 }: {
@@ -72,6 +83,8 @@ export function AppSidebar({
   /** Polled in the shell, so the count is right on every screen. */
   unread: number;
   remindersDue: number;
+  /** Unread chat messages in this organisation, muted chats left out. */
+  chatsUnread: number;
   onCreateOrg: () => void;
   onSignOut: () => void;
 }) {
@@ -105,6 +118,12 @@ export function AppSidebar({
                     label: "Dashboard",
                     icon: LayoutDashboardIcon,
                     exact: true,
+                  },
+                  {
+                    to: `/orgs/${currentOrg.id}/chats`,
+                    label: "Chats",
+                    icon: MessagesSquareIcon,
+                    badge: chatsUnread,
                   },
                   {
                     to: `/orgs/${currentOrg.id}/tasks`,
@@ -174,7 +193,7 @@ export function AppSidebar({
                     label: "Settings",
                     icon: SettingsIcon,
                   },
-                ].map((item) => (
+                ].map((item: NavItem) => (
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton
                       isActive={isActive(item.to, item.exact)}
@@ -184,6 +203,11 @@ export function AppSidebar({
                       <item.icon />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
+                    {!!item.badge && (
+                      <SidebarMenuBadge className="font-mono text-primary">
+                        {item.badge}
+                      </SidebarMenuBadge>
+                    )}
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>

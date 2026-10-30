@@ -41,13 +41,17 @@ export type RealtimeEvent = {
    *  refreshes for changes it recognises stops refreshing the day somebody
    *  adds a sixth kind. */
   change?: string;
-  anchor?: { kind: "task" | "project"; id: string };
+  /** A chat's anchor is the chat itself — `kind: "chat"`, id the
+   *  conversation's — since a DM or a group has nothing else to hang off. */
+  anchor?: { kind: "task" | "project" | "chat"; id: string };
   organisation_id?: string;
 };
 
 /** `org` is the board: it shows many tasks at once, so watching each of them
- *  would be hundreds of registrations per tab. Membership is the check. */
-export type Watch = { kind: "task" | "project" | "org"; id: string };
+ *  would be hundreds of registrations per tab. Membership is the check.
+ *  `chat` is a direct or group chat, and membership of *it* is the check —
+ *  an org admin can't watch somebody's DM any more than read it. */
+export type Watch = { kind: "task" | "project" | "org" | "chat"; id: string };
 
 const FIRST_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;

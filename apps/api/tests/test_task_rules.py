@@ -351,4 +351,6 @@ def test_notification_kinds_are_a_closed_set():
         "timer_paused",
         # Monday's report on last week, to an organisation's admins.
         "weekly_report",
+        # Somebody wrote to you in a direct or group chat (0055).
+        "direct_message",
     }

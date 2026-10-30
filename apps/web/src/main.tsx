@@ -45,6 +45,7 @@ import ProjectDetail from "@/views/ProjectDetail";
 import Projects from "@/views/Projects";
 import Sparks from "@/views/Sparks";
 import TaskDetail from "@/views/TaskDetail";
+import Chats from "@/views/Chats";
 import Tasks from "@/views/Tasks";
 import Teams from "@/views/Teams";
 import Time from "@/views/Time";
@@ -320,6 +321,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   path="orgs/:orgId/projects/:projectId"
                   element={<Keyed param="projectId" element={<ProjectDetail />} />}
                 />
+                {/* One component for both: the list stays mounted while you move
+                    between conversations, and the conversation pane keys
+                    itself on the id. */}
+                <Route path="orgs/:orgId/chats" element={<Chats />} />
+                <Route path="orgs/:orgId/chats/:chatId" element={<Chats />} />
                 <Route path="orgs/:orgId/tasks" element={<Tasks />} />
                 <Route path="orgs/:orgId/triage" element={<Triage />} />
                 <Route

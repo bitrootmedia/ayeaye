@@ -1,7 +1,8 @@
-"""Conversations: the comment thread on a task or a project.
+"""Conversations: the comment thread on a task or a project, and chats.
 
     tasks    ──1:1──► conversations ──► messages
-    projects ──1:1──┘                └─► message_reads  (one cursor per person)
+    projects ──1:1──┘   ▲            └─► message_reads  (one row per person)
+    (no anchor) ────────┘  direct / group ──► conversation_members
 
 **There is no separate comment system, and there must not be.** Trello-style
 comments under a task *are* this thread, which is what makes attachments,
@@ -13,6 +14,13 @@ enforced by `CHECK (num_nonnulls(task_id, project_id) = 1)`. It has no access
 rules of its own: **who can see a thread is who can see its anchor**. That is
 one rule rather than two, and it means revoking access to a task revokes the
 conversation with it, with nothing else to remember.
+
+**Chats are the same table, with no anchor.** A `direct` conversation (two
+people, or one: your own saved messages) or a `group` has nothing to inherit
+access from, so `conversation_members` is its access rule — and the only one.
+**An organisation admin is not a member of anybody's DM**: the admin route
+that opens every task deliberately does not open these, the same promise a
+private note makes. See `services/chats.py`.
 """
 
 import uuid
@@ -20,6 +28,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -35,12 +44,25 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
+KIND_TASK = "task"
+KIND_PROJECT = "project"
+KIND_DIRECT = "direct"
+KIND_GROUP = "group"
+CONVERSATION_KINDS = (KIND_TASK, KIND_PROJECT, KIND_DIRECT, KIND_GROUP)
+# The kinds whose access is membership rather than an anchor.
+CHAT_KINDS = (KIND_DIRECT, KIND_GROUP)
+
 
 class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
+        # The anchor follows the kind: a task thread has a task and nothing
+        # else, a chat has neither. One CHECK so the two can never disagree.
         CheckConstraint(
-            "num_nonnulls(task_id, project_id) = 1", name="ck_conversations_one_anchor"
+            "(kind = 'task' AND task_id IS NOT NULL AND project_id IS NULL)"
+            " OR (kind = 'project' AND project_id IS NOT NULL AND task_id IS NULL)"
+            " OR (kind IN ('direct', 'group') AND task_id IS NULL AND project_id IS NULL)",
+            name="ck_conversations_kind_anchor",
         ),
         # One thread per thing. Partial, because the other column is NULL on
         # every row and NULLs never collide.
@@ -56,6 +78,17 @@ class Conversation(Base):
             unique=True,
             postgresql_where=text("project_id IS NOT NULL"),
         ),
+        # One DM per pair of people per organisation. The key is the two user
+        # ids sorted and joined, so "A to B" and "B to A" are the same row.
+        Index(
+            "uq_conversations_direct",
+            "organisation_id",
+            "direct_key",
+            unique=True,
+            postgresql_where=text("direct_key IS NOT NULL"),
+        ),
+        # The chat list orders by this.
+        Index("ix_conversations_last_message", "organisation_id", "last_message_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -72,6 +105,19 @@ class Conversation(Base):
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default=KIND_TASK)
+    # A group's name. A DM is named after the other person, at read time, so
+    # a rename shows up without rewriting anything.
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    direct_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Denormalised from `messages` so the chat list sorts without scanning
+    # them. Stamped by `services/conversations.post`, the one writer.
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -135,11 +181,53 @@ class Message(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # Telegram-style quoted reply. SET NULL: removing the original leaves the
+    # reply standing, just no longer quoting anything.
+    reply_to_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+class ConversationMember(Base):
+    """Who is in a direct or group chat — **the whole of its access rule**.
+
+    Only chats have rows here. A task thread's audience is whoever can see the
+    task, and a member row there would be a second answer that could disagree.
+    """
+
+    __tablename__ = "conversation_members"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "user_id", name="uq_conversation_members"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class MessageRead(Base):
-    """How far one person has read in one conversation.
+    """One person's place in one conversation: how far they've read, and how
+    the thread sits in their chat list.
+
+    **A row here is what puts a task or project thread in somebody's chat
+    list** — written when they read it, post in it, or are given a stake in
+    it (owner, action-required, named). It is display, never access: the list
+    still filters every row through the anchor's visibility, so a thread you
+    lost access to drops out however many rows point at it.
 
     A cursor per person, not a row per person per message. The badge only ever
     asks "how many since my cursor", and a join table of read receipts would be
@@ -171,7 +259,18 @@ class MessageRead(Base):
     # The `created_at` of the newest message this person has seen. Set from the
     # message's own timestamp, never from now() — clock skew between the API
     # and the database could otherwise mark a message read before it arrived.
-    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # NULL is "nothing read yet": a stake-holder put in the list by somebody
+    # else's message, before they've opened it.
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Muted: still listed and still counted on the chat itself, but no
+    # notifications and no contribution to the total badge.
+    muted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # Out of the list until something newer than this arrives.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # What may be attached. A closed set, checked before a ticket is issued and

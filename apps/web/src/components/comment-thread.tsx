@@ -263,8 +263,12 @@ export function CommentThread({
     for (const file of files) await upload(file, file.name, file.type);
   };
 
-  const send = async () => {
-    const body = draft.trim();
+  /** `typed` is the box's own value at the moment Enter went down. Reading
+   *  `draft` there instead can see the render *before* the last keystroke
+   *  landed, and a fast typist's comment silently doesn't send — the same
+   *  race the chat composer hit first. */
+  const send = async (typed?: string) => {
+    const body = (typed ?? draft).trim();
     if (!body || sending) return;
     setSending(true);
     try {
@@ -452,7 +456,7 @@ export function CommentThread({
                 // multi-paragraph comment is rarer than a one-line one.
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  void send();
+                  void send(e.currentTarget.value);
                 }
               }}
             />
@@ -515,7 +519,7 @@ export function CommentThread({
                 {canRecord() && (
                   <VoiceNoteRecorder onRecorded={sendVoiceNote} disabled={!!uploading} />
                 )}
-                <Button size="sm" disabled={sending || !draft.trim()} onClick={send}>
+                <Button size="sm" disabled={sending || !draft.trim()} onClick={() => void send()}>
                   <SendIcon />
                   Comment
                 </Button>

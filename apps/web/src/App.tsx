@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { signOut } from "supertokens-auth-react/recipe/session";
 
@@ -16,6 +16,7 @@ import {
   useSearchHotkey,
 } from "@/components/search-palette";
 import { SparkCaptureDialog, SparkTrigger, useSparkHotkey } from "@/components/spark-capture";
+import { useRealtime } from "@/hooks/use-realtime";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -181,6 +182,9 @@ function Shell() {
   // reminder you set last week must not be invisible because you're looking
   // at a different organisation today.
   const [remindersDue, setRemindersDue] = useState(0);
+  // Unread chat messages in the rail's organisation, muted chats left out.
+  // Per organisation, unlike the inbox: Chats is a screen inside one.
+  const [chatsUnread, setChatsUnread] = useState(0);
   const [timer, setTimer] = useState<Timer>({ entry: null, organisation_id: null });
   const [gate, setGate] = useState<Gate>("loading");
   // Only ever set alongside the verify-email gate, and read from the session
@@ -271,7 +275,22 @@ function Shell() {
     } catch {
       // A failed poll must never break the shell. The next tick tries again.
     }
-  }, []);
+    // Separately, so a suspended organisation answering 403 here costs the
+    // chat badge and nothing else.
+    try {
+      setChatsUnread(
+        railOrg
+          ? (await api<{ messages: number }>(`/organisations/${railOrg.id}/chats/unread`))
+              .messages
+          : 0,
+      );
+    } catch {
+      setChatsUnread(0);
+    }
+    // `railOrg?.id`, not `railOrg`: the object is rebuilt on every reload of
+    // the organisations list, and the poll shouldn't restart for that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railOrg?.id]);
 
   useEffect(() => {
     if (gate !== "ok") return;
@@ -294,6 +313,21 @@ function Shell() {
     const id = setInterval(refreshTimer, TIMER_POLL_MS);
     return () => clearInterval(id);
   }, [gate, refreshTimer]);
+
+  // A chat message anywhere moves the Chats badge, and it should move now,
+  // not on the next minute's poll — that's the difference between a
+  // messenger and an inbox. Coalesced: a conversation is a burst of events.
+  const chatBadge = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useRealtime(
+    useCallback(
+      (event) => {
+        if (event.type !== "message" || gate !== "ok") return;
+        clearTimeout(chatBadge.current);
+        chatBadge.current = setTimeout(() => void refreshUnread(), 500);
+      },
+      [gate, refreshUnread],
+    ),
+  );
 
   // Coming back to a screen is the other moment the count is likely stale.
   useEffect(() => {
@@ -396,6 +430,7 @@ function Shell() {
         inviteCount={invites.length}
         unread={unread}
         remindersDue={remindersDue}
+        chatsUnread={chatsUnread}
         onCreateOrg={() => setCreating(true)}
         onSignOut={signOutTo}
       />

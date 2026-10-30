@@ -766,6 +766,114 @@ export const NOTIFICATION_KIND_LABEL: Record<string, string> = {
   comment_mention: "Mentioned in a comment",
   timer_paused: "Your timer was paused while you were away",
   weekly_report: "Weekly report (organisations you administer)",
+  direct_message: "Direct and group messages",
+};
+
+// --- chats -----------------------------------------------------------------
+
+/** A file on a message. The URLs are presigned and short-lived — minted fresh
+ *  on every read, never stored. */
+export type ChatAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  url: string;
+  thumbnail_url?: string | null;
+};
+
+/** What a reply quotes: a pointer, trimmed by the server, not a copy. */
+export type ReplyOut = {
+  id: string;
+  author: Person | null;
+  body: string;
+  deleted: boolean;
+};
+
+/** One message in any conversation — a comment and a chat message are the
+ *  same row, which is the whole point of chats sharing that machinery. */
+export type ChatMessage = {
+  id: string;
+  author: Person | null;
+  body: string;
+  attachments: ChatAttachment[];
+  created_at: string;
+  edited_at: string | null;
+  deleted: boolean;
+  mine: boolean;
+  via: string | null;
+  reply_to: ReplyOut | null;
+};
+
+export type ChatKind = "task" | "project" | "direct" | "group";
+
+export type MemberOut = Person & { online: boolean; last_seen_at: string | null };
+
+export type LastMessageOut = {
+  id: string;
+  author: Person | null;
+  body: string;
+  created_at: string;
+  deleted: boolean;
+  mine: boolean;
+  attachments: number;
+};
+
+export type ChatOut = {
+  id: string;
+  kind: ChatKind;
+  /** Resolved server-side: the task's title, the project's name, the group's
+   *  name, or — for a DM — the other person, at read time. */
+  title: string;
+  task: {
+    id: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    closed: boolean;
+    project_id: string | null;
+  } | null;
+  project_id: string | null;
+  /** Direct and group chats only. A thread's audience is its anchor's. */
+  members: MemberOut[];
+  created_by: string | null;
+  last_message: LastMessageOut | null;
+  last_message_at: string | null;
+  unread: number;
+  pinned: boolean;
+  muted: boolean;
+  archived: boolean;
+  can_post: boolean;
+};
+
+export type ChatPage = {
+  messages: ChatMessage[];
+  can_post: boolean;
+  unread: number;
+  /** Whether anything is older than the first message on this page. */
+  has_more: boolean;
+};
+
+export type Presence = { user_id: string; online: boolean; last_seen_at: string | null };
+
+export const CHAT_FILTERS = [
+  "all",
+  "unread",
+  "direct",
+  "groups",
+  "tasks",
+  "projects",
+  "archived",
+] as const;
+export type ChatFilter = (typeof CHAT_FILTERS)[number];
+
+export const CHAT_FILTER_LABEL: Record<ChatFilter, string> = {
+  all: "All",
+  unread: "Unread",
+  direct: "Direct",
+  groups: "Groups",
+  tasks: "Tasks",
+  projects: "Projects",
+  archived: "Archived",
 };
 
 // --- time ------------------------------------------------------------------

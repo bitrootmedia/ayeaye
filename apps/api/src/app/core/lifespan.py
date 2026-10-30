@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from app.mcp.server import mcp
 from app.realtime.connections import manager
 from app.realtime.events import realtime_subscriber
+from app.services.online import heartbeat
 from app.storage import s3
 from app.tasks import broker
 
@@ -30,6 +31,8 @@ async def lifespan(app: FastAPI):
     # Every uvicorn worker holds only its own sockets, so each one subscribes
     # and forwards to whichever browsers it happens to be holding.
     subscriber = asyncio.create_task(realtime_subscriber(manager))
+    # Keeps this worker's "who's online" claims fresh in Redis.
+    presence = asyncio.create_task(heartbeat(manager))
     # Marks accounts that predate email verification as verified, once.
     #
     # A background task rather than awaited: it talks to the SuperTokens
@@ -47,6 +50,9 @@ async def lifespan(app: FastAPI):
         grandfather.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await grandfather
+        presence.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await presence
         subscriber.cancel()
         # Let it observe the cancellation before the broker goes away.
         with contextlib.suppress(asyncio.CancelledError):

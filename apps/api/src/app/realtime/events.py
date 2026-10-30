@@ -31,7 +31,12 @@ EVENTS_CHANNEL = "realtime_events"
 
 
 async def publish_message(
-    *, conversation_id: str, message_id: str, user_ids: list[str], anchor: dict
+    *,
+    conversation_id: str,
+    message_id: str,
+    user_ids: list[str],
+    anchor: dict,
+    organisation_id: str | None = None,
 ) -> None:
     """Announce that a conversation has moved.
 
@@ -39,6 +44,11 @@ async def publish_message(
     it is an explicit list rather than "everyone who can see the anchor",
     because resolving that in reverse is expensive and this is a notification
     hint, not the access check.
+
+    The same event moves the chat list: `user_ids` is everybody who has the
+    thread listed with a stake, and `organisation_id` says whose list. A
+    chat's anchor is the chat itself (`{"kind": "chat"}`), so its watch key
+    is `chat:<id>`.
     """
     client = aioredis.from_url(settings.redis_url)
     try:
@@ -51,6 +61,7 @@ async def publish_message(
                     "message_id": message_id,
                     "user_ids": user_ids,
                     "anchor": anchor,
+                    "organisation_id": organisation_id,
                     # What a client must be watching to receive this even
                     # without a stake in it.
                     "watch": f"{anchor['kind']}:{anchor['id']}",

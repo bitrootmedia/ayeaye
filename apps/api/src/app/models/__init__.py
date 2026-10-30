@@ -6,6 +6,7 @@ from app.models.checklist import TaskChecklist, TaskChecklistItem
 from app.models.conversation import (
     Attachment,
     Conversation,
+    ConversationMember,
     Message,
     MessageRead,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "ChangelogEntry",
     "Embedding",
     "Conversation",
+    "ConversationMember",
     "Attachment",
     "Message",
     "MessageRead",

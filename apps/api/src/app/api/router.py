@@ -11,6 +11,7 @@ from app.api.routers import (
     bookmarks,
     calendar,
     changelog,
+    chats,
     conversations,
     dashboard,
     docs,
@@ -127,6 +128,11 @@ api_router.include_router(changelog.router)
 # these ARE the conversations, which is what makes attachments, voice notes and
 # the unread badge one implementation instead of two.
 api_router.include_router(conversations.router)
+
+# Chats: DMs, groups, and one list of every conversation you're in — task and
+# project threads included. Same conversations as the comments above; the
+# access rules for anchor-less ones are in services/chats.py.
+api_router.include_router(chats.router)
 
 # The realtime socket. Authenticated by the session cookie, which single-origin
 # gives us for free — see the route docstring.

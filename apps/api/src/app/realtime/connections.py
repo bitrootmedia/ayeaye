@@ -74,6 +74,11 @@ class ConnectionManager:
     def is_connected(self, user_id: str) -> bool:
         return bool(self._by_user.get(user_id))
 
+    def user_ids(self) -> list[str]:
+        """Everyone with at least one socket on this process — what the
+        presence heartbeat refreshes. See `services/online.py`."""
+        return list(self._by_user)
+
     async def dispatch(
         self, event: dict, *, user_ids: list[str], watch_keys: str | list[str] | None
     ) -> None:

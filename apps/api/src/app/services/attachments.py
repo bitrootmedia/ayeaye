@@ -329,6 +329,29 @@ async def sweep_stale(db: AsyncSession, conversation: Conversation, user: User) 
     return len(stale)
 
 
+async def bindable(
+    db: AsyncSession, conversation: Conversation, user: User, attachment_ids: list[uuid.UUID]
+) -> int:
+    """How many of these `bind_to_message` would actually take — the same
+    four conditions, asked before the message exists. It is what lets a
+    message be only files: the body may be empty only if this isn't zero."""
+    if not attachment_ids:
+        return 0
+    return (
+        await db.execute(
+            select(func.count())
+            .select_from(Attachment)
+            .where(
+                Attachment.id.in_(attachment_ids),
+                Attachment.conversation_id == conversation.id,
+                Attachment.user_id == user.id,
+                Attachment.message_id.is_(None),
+                Attachment.status == STATUS_READY,
+            )
+        )
+    ).scalar_one()
+
+
 async def bind_to_message(
     db: AsyncSession,
     conversation: Conversation,

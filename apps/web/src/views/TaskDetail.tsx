@@ -5,6 +5,7 @@ import {
   EyeOffIcon,
   HistoryIcon,
   LockIcon,
+  MessagesSquareIcon,
   PinIcon,
   PlusIcon,
   RepeatIcon,
@@ -483,6 +484,27 @@ export default function TaskDetail() {
         }
         actions={
           <span className="flex items-center gap-2">
+            {/* The same thread as the Comments card below, in the messenger:
+                for a conversation that has outgrown the side of a task. The
+                server creates the thread if nobody has commented yet. */}
+            <Button
+              variant="ghost"
+              aria-label="Open in Chats"
+              onClick={async () => {
+                try {
+                  const chat = await api<{ id: string }>(
+                    `/organisations/${org.id}/tasks/${task.id}/chat`,
+                    { method: "POST" },
+                  );
+                  navigate(`/orgs/${org.id}/chats/${chat.id}`);
+                } catch {
+                  toast.add({ title: "Couldn't open it in Chats" });
+                }
+              }}
+            >
+              <MessagesSquareIcon />
+              <span className="hidden lg:inline">Open in Chats</span>
+            </Button>
             {/* Yours to set regardless of edit access — see services/pins.py.
                 A pin is a personal bookmark, not a change to the task, so
                 read is enough and there's nothing to disable here. */}

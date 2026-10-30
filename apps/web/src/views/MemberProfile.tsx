@@ -4,12 +4,13 @@ import {
   ClockIcon,
   ListTodoIcon,
   MessageSquareQuoteIcon,
+  MessagesSquareIcon,
   PlaneIcon,
   TimerIcon,
   UserIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 import { ApiError, api } from "@/api";
 import type { Shell } from "@/App";
@@ -52,6 +53,7 @@ export default function MemberProfile() {
   const org = organisations.find((o) => o.id === orgId) ?? null;
 
   const [profile, setProfile] = useState<Profile | null | "missing">(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!orgId || !userId) return;
@@ -116,11 +118,27 @@ export default function MemberProfile() {
           </span>
         }
         actions={
-          isMe && (
-            <Button variant="outline" render={<Link to="/account" />} nativeButton={false}>
-              Edit on your account
+          <span className="flex items-center gap-2">
+            {/* A DM with yourself is your saved messages — offered here too,
+                since it's the same button doing the same thing. */}
+            <Button
+              onClick={async () => {
+                const chat = await api<{ id: string }>(`/organisations/${org.id}/chats/direct`, {
+                  method: "POST",
+                  body: JSON.stringify({ user_id: profile.id }),
+                });
+                navigate(`/orgs/${org.id}/chats/${chat.id}`);
+              }}
+            >
+              <MessagesSquareIcon />
+              {isMe ? "Saved messages" : "Message"}
             </Button>
-          )
+            {isMe && (
+              <Button variant="outline" render={<Link to="/account" />} nativeButton={false}>
+                Edit on your account
+              </Button>
+            )}
+          </span>
         }
       />
 

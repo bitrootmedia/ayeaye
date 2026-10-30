@@ -68,6 +68,9 @@ KIND_TIMER_PAUSED = "timer_paused"
 # and facts added, hours by person, tasks opened and closed. See
 # services/weekly_report.py.
 KIND_WEEKLY_REPORT = "weekly_report"
+# Somebody wrote to you in a direct or group chat. One per unread run, like a
+# comment, and never while the chat is muted. See services/chats.py.
+KIND_DIRECT_MESSAGE = "direct_message"
 NOTIFICATION_KINDS = (
     KIND_ACTION_REQUIRED,
     KIND_ACTION_REQUIRED_CLEARED,
@@ -84,6 +87,7 @@ NOTIFICATION_KINDS = (
     KIND_COMMENT_MENTION,
     KIND_TIMER_PAUSED,
     KIND_WEEKLY_REPORT,
+    KIND_DIRECT_MESSAGE,
 )
 
 

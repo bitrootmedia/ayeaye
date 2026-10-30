@@ -30,6 +30,12 @@ facts filed in books, and recall across facts, articles and tasks by text
 and by meaning — pgvector in the same Postgres, so access stays one
 statement. Optional like email. See `.claude/rules/recall.md`.
 
+**Chats** (2026-10-30): direct and group messages plus one Telegram-style
+list of every conversation you're in, task and project threads included.
+They are the comment conversations with no anchor, not a second system —
+and a DM is the one thing an org admin cannot open. See
+`.claude/rules/chats.md`.
+
 **One deviation from PLAN.md worth knowing:** it sequences access as Phase 3,
 after structure. It was built with Phase 2 instead, because the product
 decision is that projects are private by default — shipping "every member
@@ -391,6 +397,7 @@ cd apps/web && pnpm typecheck
 ./scripts/e2e-work-reports.sh           # admins only, clipped to the window, hidden stays hidden
 ./scripts/e2e-weekly-report.sh          # Monday, admins only, once; the admin's own view, by email
 ./scripts/e2e-comments.sh               # threads, debouncing, mentions, the socket
+./scripts/e2e-chats.sh                  # DMs an org admin cannot open, groups, the one list, presence
 ./scripts/e2e-attachments.sh            # the upload handshake, against real storage
 ./scripts/e2e-task-files.sh             # priority, task files, thumbnails, moving a task
 ./scripts/e2e-hidden.sh                 # the one place access is subtracted

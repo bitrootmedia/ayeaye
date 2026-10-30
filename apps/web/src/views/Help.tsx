@@ -12,6 +12,7 @@ import {
   FolderKanbanIcon,
   InboxIcon,
   KeyRoundIcon,
+  MessagesSquareIcon,
   NotebookIcon,
   PackageIcon,
   ScrollTextIcon,
@@ -38,6 +39,7 @@ const SECTIONS: Section[] = [
   { id: "projects", title: "Projects & sharing", icon: FolderKanbanIcon },
   { id: "tasks", title: "Tasks", icon: CircleDotIcon },
   { id: "triage", title: "Triage", icon: InboxIcon },
+  { id: "chats", title: "Chats", icon: MessagesSquareIcon },
   { id: "search", title: "Search", icon: SearchIcon },
   { id: "time", title: "Time tracking", icon: ClockIcon },
   { id: "planner", title: "Planner", icon: CalendarDaysIcon },
@@ -223,6 +225,33 @@ export default function Help() {
             <p>
               An empty Triage screen is good news, not a broken one — it means nothing you
               can see is waiting for someone to claim it.
+            </p>
+          </Section>
+
+          <Section id="chats" title="Chats">
+            <p>
+              <strong>Chats</strong> is one list of every conversation you&rsquo;re in:
+              direct messages, groups, and the comment threads on tasks and projects you
+              have a stake in — ones you own, are asked to act on, were named in, wrote in
+              or read. Newest first, pinned ones on top, and searching looks through what
+              was said as well as who said it.
+            </p>
+            <p>
+              Start one with <strong>New message</strong>, or <strong>Message</strong> on
+              somebody&rsquo;s profile; a message to yourself is your Saved messages.
+              <strong> Open in Chats</strong> on a task opens its comments here — a reply
+              from Chats is a comment on the task, and the other way round.
+            </p>
+            <p>
+              <strong>Direct messages and groups are private to the people in them.</strong>{" "}
+              Unlike everything else in an organisation, an admin can&rsquo;t open them,
+              search them or remove what you wrote. Messages stay until whoever wrote them
+              deletes them.
+            </p>
+            <p>
+              Mute a chat to stop its notifications (being @mentioned still reaches you);
+              archive it to tidy it away until something new arrives. A green dot means
+              that person has {BRAND.name} open right now.
             </p>
           </Section>
 

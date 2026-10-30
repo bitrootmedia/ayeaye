@@ -15,6 +15,7 @@ from app.realtime.connections import manager
 from app.schemas.structure import PersonOut
 from app.services import attachments as attachments_service
 from app.services import conversations as conversations_service
+from app.services import online as online_service
 from app.services import tasks as tasks_service
 from app.services import tokens as tokens_service
 from app.services import users as users_service
@@ -26,7 +27,9 @@ ws_router = APIRouter(tags=["realtime"])
 
 
 class MessageIn(BaseModel):
-    body: str = Field(min_length=1, max_length=10_000)
+    # May be empty only when the message is files and nothing else — checked
+    # against what can actually be bound, in `_post`. An edit still needs words.
+    body: str = Field(default="", max_length=10_000)
     # Staged uploads to bind to this comment. They already exist (confirmed in
     # step 3 of the handshake); sending is what gives them a home.
     attachment_ids: list[str] = Field(default_factory=list)
@@ -37,6 +40,8 @@ class MessageIn(BaseModel):
     # comment posts, so it's refused for a read-only commenter exactly the
     # way changing it from the task screen would be.
     action_required_user_id: str | None = None
+    # The message this one quotes — same thread only. Ignored by an edit.
+    reply_to_id: str | None = None
 
 
 class AttachmentOut(BaseModel):
@@ -59,6 +64,16 @@ class UploadTicket(BaseModel):
     content_type: str
 
 
+class ReplyOut(BaseModel):
+    """What a reply quotes: enough for the strip above the bubble."""
+
+    id: str
+    author: PersonOut | None
+    # Trimmed — the quote is a pointer, not a copy.
+    body: str
+    deleted: bool
+
+
 class MessageOut(BaseModel):
     id: str
     author: PersonOut | None
@@ -73,6 +88,7 @@ class MessageOut(BaseModel):
     # What posted it on the author's behalf, if anything — see
     # `models/conversation.py`. None for anything typed in the web app.
     via: str | None = None
+    reply_to: ReplyOut | None = None
 
 
 class AttachmentIn(BaseModel):
@@ -102,10 +118,37 @@ def _attachment_out(attachment) -> AttachmentOut:
     )
 
 
+QUOTE_CHARS = 200
+
+
+def _person(user: User | None) -> PersonOut | None:
+    if user is None:
+        return None
+    return PersonOut(id=str(user.id), email=user.email, display_name=user.display_name)
+
+
+def _reply_out(quoted) -> ReplyOut | None:
+    if quoted is None:
+        return None
+    message, author = quoted
+    return ReplyOut(
+        id=str(message.id),
+        author=_person(author),
+        body=message.body[:QUOTE_CHARS],
+        deleted=message.deleted_at is not None,
+    )
+
+
 def _message_out(
-    message: Message, author: User | None, *, me: uuid.UUID, files: list | None = None
+    message: Message,
+    author: User | None,
+    *,
+    me: uuid.UUID,
+    files: list | None = None,
+    quoted=None,
 ) -> MessageOut:
     return MessageOut(
+        reply_to=_reply_out(quoted),
         id=str(message.id),
         attachments=[_attachment_out(a) for a in (files or [])],
         author=(
@@ -132,9 +175,19 @@ async def _thread_out(db, thread, user) -> ThreadOut:
     rows = await conversations_service.list_messages(db, thread.conversation)
     # One query for the whole thread's attachments, not one per comment.
     files = await attachments_service.for_messages(db, [m.id for m, _ in rows])
+    quotes = await conversations_service.replied_to(
+        db, [m.reply_to_message_id for m, _ in rows]
+    )
     return ThreadOut(
         messages=[
-            _message_out(m, a, me=user.id, files=files.get(m.id)) for m, a in rows
+            _message_out(
+                m,
+                a,
+                me=user.id,
+                files=files.get(m.id),
+                quoted=quotes.get(m.reply_to_message_id),
+            )
+            for m, a in rows
         ],
         can_post=thread.can_post,
         unread=await conversations_service.unread_count(db, thread.conversation, user.id),
@@ -207,7 +260,15 @@ async def comment_on_project(
 
 
 async def _post(db, ctx, thread, user, body: MessageIn) -> MessageOut:
-    message = await conversations_service.post(db, ctx, thread, user, body=body.body)
+    reply_to = _uuid_or_422(body.reply_to_id) if body.reply_to_id else None
+    files_only = not body.body.strip() and bool(
+        await attachments_service.bindable(
+            db, thread.conversation, user, [_uuid_or_422(i) for i in body.attachment_ids]
+        )
+    )
+    message = await conversations_service.post(
+        db, ctx, thread, user, body=body.body, reply_to=reply_to, allow_empty=files_only
+    )
     files = await attachments_service.bind_to_message(
         db,
         thread.conversation,
@@ -215,7 +276,19 @@ async def _post(db, ctx, thread, user, body: MessageIn) -> MessageOut:
         user,
         [uuid.UUID(i) for i in body.attachment_ids],
     )
-    return _message_out(message, user, me=user.id, files=files)
+    quotes = await conversations_service.replied_to(db, [message.reply_to_message_id])
+    return _message_out(
+        message, user, me=user.id, files=files, quoted=quotes.get(message.reply_to_message_id)
+    )
+
+
+def _uuid_or_422(value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="not an id"
+        ) from exc
 
 
 # --- attachments: the three-step handshake ----------------------------------
@@ -319,7 +392,7 @@ async def confirm_attachment(
 
 async def _anchor_of(db, ctx, user, attachment):
     """Resolve and access-check whatever this attachment hangs off."""
-    from app.models import ArticleRevision, Conversation
+    from app.models import ArticleRevision
     from app.services import articles as articles_service
     from app.services import tasks as tasks_service
 
@@ -334,18 +407,8 @@ async def _anchor_of(db, ctx, user, attachment):
         if revision is None:
             raise _not_found()
         return await articles_service.context_for(db, ctx, revision.article_id, user.id)
-    conversation = (
-        await db.execute(
-            select(Conversation).where(
-                Conversation.id == attachment.conversation_id,
-                Conversation.organisation_id == ctx.organisation.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if conversation is None:
-        raise _not_found()
-    return await _thread(
-        db, ctx, user, task_id=conversation.task_id, project_id=conversation.project_id
+    return await conversations_service.for_conversation(
+        db, ctx, user, attachment.conversation_id
     )
 
 
@@ -367,7 +430,10 @@ async def edit_comment(
     updated = await conversations_service.edit(
         db, ctx, message, user, body=body.body, thread=thread
     )
-    return _message_out(updated, user, me=user.id)
+    quotes = await conversations_service.replied_to(db, [updated.reply_to_message_id])
+    return _message_out(
+        updated, user, me=user.id, quoted=quotes.get(updated.reply_to_message_id)
+    )
 
 
 @router.delete("/comments/{message_id}", response_model=MessageOut)
@@ -377,8 +443,7 @@ async def delete_comment(
     """Soft delete — the response is the tombstone, not a 204, so the client
     can render it in place without refetching the thread."""
     message, thread = await _own_message(db, ctx, user, message_id)
-    removed = await conversations_service.remove(db, ctx, message, user)
-    del thread
+    removed = await conversations_service.remove(db, ctx, message, user, thread=thread)
     return _message_out(removed, user, me=user.id)
 
 
@@ -400,13 +465,7 @@ async def _own_message(db, ctx, user, message_id: uuid.UUID):
     if row is None:
         raise _not_found()
     message, conversation = row
-    thread = await _thread(
-        db,
-        ctx,
-        user,
-        task_id=conversation.task_id,
-        project_id=conversation.project_id,
-    )
+    thread = await conversations_service.for_conversation(db, ctx, user, conversation.id)
     return message, thread
 
 
@@ -428,7 +487,7 @@ async def _handle_watch(ws: WebSocket, raw: str, user_id: str) -> None:
         kind, anchor_id = target["kind"], uuid.UUID(target["id"])
     except Exception:
         return
-    if kind not in ("task", "project", "org"):
+    if kind not in ("task", "project", "org", "chat"):
         return
 
     async with SessionLocal() as db:
@@ -440,6 +499,8 @@ async def _handle_watch(ws: WebSocket, raw: str, user_id: str) -> None:
                 await _visible_task(db, user, anchor_id)
             elif kind == "project":
                 await _visible_project(db, user, anchor_id)
+            elif kind == "chat":
+                await _chat_member(db, user, anchor_id)
             else:
                 # A board. Membership is the check — the events carry no
                 # content, and what the board then refetches is filtered by
@@ -471,6 +532,24 @@ async def _is_member(db, user, org_id: uuid.UUID) -> None:
     ).scalar_one_or_none()
     if found is None:
         raise LookupError("not a member")
+
+
+async def _chat_member(db, user, conversation_id: uuid.UUID) -> None:
+    """Raises unless this person is in that direct or group chat. Membership
+    and nothing else — an organisation admin can't watch somebody's DM any
+    more than they can read it."""
+    from app.models import ConversationMember
+
+    found = (
+        await db.execute(
+            select(ConversationMember.id).where(
+                ConversationMember.conversation_id == conversation_id,
+                ConversationMember.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        raise LookupError("not in that chat")
 
 
 async def _visible_task(db, user, task_id: uuid.UUID):
@@ -562,7 +641,10 @@ async def realtime(ws: WebSocket):
         await ws.close(code=4401)
         return
 
+    first = not manager.is_connected(user_id)
     await manager.connect(user_id, ws)
+    if first:
+        await online_service.came_online(user_id)
     try:
         while True:
             # The client sends `{"watch": {"kind": "task", "id": "…"}}` when it
@@ -577,3 +659,5 @@ async def realtime(ws: WebSocket):
         logger.info("socket closed: %s", exc)
     finally:
         manager.disconnect(user_id, ws)
+        if not manager.is_connected(user_id):
+            await online_service.went_offline(user_id)

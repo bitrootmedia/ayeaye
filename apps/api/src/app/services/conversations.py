@@ -1,4 +1,12 @@
-"""Comment threads on tasks and projects.
+"""Comment threads on tasks and projects, and the chats that share their
+machinery.
+
+Direct and group chats (`services/chats.py`) are the same conversations with
+no anchor: everything below holds for them too, with **membership** standing
+in for "who can see the anchor" in rule 1 and as the audience in rule 4. Two
+differences are deliberate: an organisation admin cannot edit or remove
+somebody else's words in a chat (they cannot even see it), and a muted thread
+raises nothing but mentions.
 
 Four rules:
 
@@ -40,12 +48,32 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException
 from fastapi import status as http_status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Conversation, Message, MessageRead, Project, Task, User
-from app.models.notification import KIND_COMMENT_MENTION, KIND_TASK_SHARED
+from app.models import (
+    Conversation,
+    ConversationMember,
+    Message,
+    MessageRead,
+    Project,
+    Task,
+    User,
+)
+from app.models.conversation import (
+    CHAT_KINDS,
+    KIND_DIRECT,
+    KIND_GROUP,
+    KIND_PROJECT,
+    KIND_TASK,
+)
+from app.models.notification import (
+    KIND_COMMENT_MENTION,
+    KIND_DIRECT_MESSAGE,
+    KIND_TASK_SHARED,
+)
 from app.realtime import events
 from app.services import access
 from app.services import mentions as mentions_service
@@ -64,12 +92,18 @@ class ThreadContext:
     conversation: Conversation
     # The anchor's title, for notification text and the UI header.
     anchor_title: str
-    anchor_kind: str  # "task" | "project"
+    anchor_kind: str  # "task" | "project" | "direct" | "group"
     can_post: bool
 
+    @property
+    def is_chat(self) -> bool:
+        return self.anchor_kind in CHAT_KINDS
 
-def _clean(body: str) -> str:
+
+def _clean(body: str, *, allow_empty: bool = False) -> str:
     body = (body or "").strip()
+    if not body and allow_empty:
+        return ""
     if not body:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="say something"
@@ -114,6 +148,56 @@ async def for_project(
     )
 
 
+async def for_chat(
+    db: AsyncSession, ctx: OrgContext, user: User, conversation: Conversation
+) -> ThreadContext:
+    """A direct or group chat. 404s unless you are in it — **an organisation
+    admin included**, which is the one place their see-everything route
+    stops. The 404 rather than a 403 is the usual rule: whether a DM exists
+    between two other people is itself not yours to learn."""
+    member = (
+        await db.execute(
+            select(ConversationMember.id).where(
+                ConversationMember.conversation_id == conversation.id,
+                ConversationMember.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if member is None or conversation.organisation_id != ctx.organisation.id:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="chat not found")
+    return ThreadContext(
+        conversation=conversation,
+        anchor_title=conversation.title or "",
+        anchor_kind=conversation.kind,
+        can_post=True,
+    )
+
+
+async def for_conversation(
+    db: AsyncSession, ctx: OrgContext, user: User, conversation_id: uuid.UUID
+) -> ThreadContext:
+    """Any conversation by its own id, through whichever rule governs it.
+
+    The id is never the access: a task thread goes back through the task, a
+    chat through its members, exactly as if it had been reached by its anchor.
+    """
+    conversation = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.organisation_id == ctx.organisation.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="chat not found")
+    if conversation.kind in CHAT_KINDS:
+        return await for_chat(db, ctx, user, conversation)
+    if conversation.task_id is not None:
+        return await for_task(db, ctx, user, conversation.task_id)
+    return await for_project(db, ctx, user, conversation.project_id)
+
+
 async def _find_or_create(
     db: AsyncSession,
     ctx: OrgContext,
@@ -134,7 +218,10 @@ async def _find_or_create(
         return found  # type: ignore[return-value]
 
     conversation = Conversation(
-        organisation_id=ctx.organisation.id, task_id=task_id, project_id=project_id
+        organisation_id=ctx.organisation.id,
+        task_id=task_id,
+        project_id=project_id,
+        kind=KIND_TASK if task_id else KIND_PROJECT,
     )
     db.add(conversation)
     try:
@@ -147,20 +234,52 @@ async def _find_or_create(
 
 
 async def list_messages(
-    db: AsyncSession, conversation: Conversation | None
+    db: AsyncSession,
+    conversation: Conversation | None,
+    *,
+    before: uuid.UUID | None = None,
+    limit: int | None = None,
 ) -> list[tuple[Message, User | None]]:
-    """Oldest first — a conversation reads as a conversation, not a feed."""
+    """Oldest first — a conversation reads as a conversation, not a feed.
+
+    With `limit`, the newest `limit` messages older than `before` (still
+    returned oldest first): a chat opens at the bottom and pages upwards.
+    Without it, the whole thread, which is what a task's comments have always
+    been. UUIDv7 ids sort by time, so `before` is a message id, not a date.
+    """
     if conversation is None:
         return []
+    stmt = (
+        select(Message, User)
+        .outerjoin(User, User.id == Message.user_id)
+        .where(Message.conversation_id == conversation.id)
+    )
+    if before is not None:
+        stmt = stmt.where(Message.id < before)
+    if limit is None:
+        rows = (await db.execute(stmt.order_by(Message.id))).all()
+    else:
+        newest = await db.execute(stmt.order_by(Message.id.desc()).limit(limit))
+        rows = list(reversed(newest.all()))
+    return [(m, u) for m, u in rows]
+
+
+async def replied_to(
+    db: AsyncSession, message_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, tuple[Message, User | None]]:
+    """The messages these quote, with their authors — one statement for a
+    page of replies, not one per bubble."""
+    ids = [i for i in message_ids if i is not None]
+    if not ids:
+        return {}
     rows = (
         await db.execute(
             select(Message, User)
             .outerjoin(User, User.id == Message.user_id)
-            .where(Message.conversation_id == conversation.id)
-            .order_by(Message.id)
+            .where(Message.id.in_(ids))
         )
     ).all()
-    return [(m, u) for m, u in rows]
+    return {m.id: (m, u) for m, u in rows}
 
 
 async def for_tasks(
@@ -200,21 +319,53 @@ async def post(
     *,
     body: str,
     via: str | None = None,
+    reply_to: uuid.UUID | None = None,
+    allow_empty: bool = False,
 ) -> Message:
     """`via` names whatever acted on the author's behalf — a personal access
     token or an OAuth client, by the name its owner gave it. It is
     attribution, not authorship: `user_id` is still whose comment this is.
     Defaults to None, which is what the web app sends and what every row
-    written before this existed holds."""
+    written before this existed holds.
+
+    `allow_empty` is for a message that is only files — a photo with no
+    caption. The caller must already have checked there are files to bind;
+    an empty body with nothing attached is still "say something"."""
     if not thread.can_post:
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="you can't comment on this",
         )
+    if reply_to is not None:
+        # Quoting is only within the same thread: a reply pointing into a
+        # conversation you can't see would render somebody else's words.
+        quoted = (
+            await db.execute(
+                select(Message.id).where(
+                    Message.id == reply_to, Message.conversation_id == thread.conversation.id
+                )
+            )
+        ).scalar_one_or_none()
+        if quoted is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="that message isn't in this conversation",
+            )
     message = Message(
-        conversation_id=thread.conversation.id, user_id=user.id, body=_clean(body), via=via
+        conversation_id=thread.conversation.id,
+        user_id=user.id,
+        body=_clean(body, allow_empty=allow_empty),
+        via=via,
+        reply_to_message_id=reply_to,
     )
     db.add(message)
+    await db.flush()
+    await db.refresh(message)
+    await db.execute(
+        update(Conversation)
+        .where(Conversation.id == thread.conversation.id)
+        .values(last_message_at=message.created_at)
+    )
     await db.commit()
     await db.refresh(message)
 
@@ -224,8 +375,27 @@ async def post(
 
     recipients = await _interested(db, thread, exclude=user.id)
     mentioned = await _mentioned(db, ctx, thread, message.body, exclude=user.id)
+    # Everyone with a stake now has the thread in their chat list, read or
+    # not — that is how a comment on your task reaches you there.
+    await enlist(db, thread.conversation, [*recipients, *mentioned])
     await _announce(db, ctx, thread, message, user, recipients, mentioned)
     return message
+
+
+async def enlist(db: AsyncSession, conversation: Conversation, user_ids) -> None:
+    """Put this thread in these people's chat lists, without touching how far
+    they've read. Idempotent, and it un-archives nothing: an archived thread
+    comes back by having something newer than its `archived_at`, which the
+    list checks, not by having its row rewritten here."""
+    ids = {uid for uid in user_ids if uid is not None}
+    if not ids:
+        return
+    await db.execute(
+        pg_insert(MessageRead)
+        .values([{"conversation_id": conversation.id, "user_id": uid} for uid in ids])
+        .on_conflict_do_nothing(constraint="uq_message_reads")
+    )
+    await db.commit()
 
 
 async def _candidates(
@@ -240,7 +410,18 @@ async def _candidates(
 
     Fetched once even where it's used twice (an edit compares the old body
     against the new), because it is four queries rather than one.
+
+    A chat's candidates are its members — the same "who can see it" answer.
     """
+    if thread.is_chat:
+        rows = (
+            await db.execute(
+                select(User)
+                .join(ConversationMember, ConversationMember.user_id == User.id)
+                .where(ConversationMember.conversation_id == thread.conversation.id)
+            )
+        ).scalars().all()
+        return [mentions_service.Mentionable(user=u, level="read") for u in rows]
     if thread.conversation.task_id is None:
         return []
     task = (
@@ -265,7 +446,7 @@ async def _mentioned(
 
 
 async def _interested(
-    db: AsyncSession, thread: ThreadContext, *, exclude: uuid.UUID
+    db: AsyncSession, thread: ThreadContext, *, exclude: uuid.UUID | None
 ) -> list[uuid.UUID]:
     """Who has a stake in this thread.
 
@@ -276,7 +457,18 @@ async def _interested(
     """
     people: set[uuid.UUID] = set()
 
-    if thread.conversation.task_id is not None:
+    if thread.is_chat:
+        # A chat's stake-holders are simply its members.
+        people.update(
+            (
+                await db.execute(
+                    select(ConversationMember.user_id).where(
+                        ConversationMember.conversation_id == thread.conversation.id
+                    )
+                )
+            ).scalars().all()
+        )
+    elif thread.conversation.task_id is not None:
         task = (
             await db.execute(select(Task).where(Task.id == thread.conversation.task_id))
         ).scalar_one_or_none()
@@ -312,7 +504,10 @@ async def _interested(
 
 def _link(ctx: OrgContext, thread: ThreadContext) -> str:
     """Where a notification about this thread points: the anchor's own
-    screen. A thread has no page of its own, which is the whole of rule 1."""
+    screen. A thread has no page of its own, which is the whole of rule 1 —
+    except a chat, whose page is the chat."""
+    if thread.is_chat:
+        return f"/orgs/{ctx.organisation.id}/chats/{thread.conversation.id}"
     if thread.conversation.task_id:
         return f"/orgs/{ctx.organisation.id}/tasks/{thread.conversation.task_id}"
     return f"/orgs/{ctx.organisation.id}/projects/{thread.conversation.project_id}"
@@ -353,7 +548,6 @@ async def _announce(
 
     # Live first: everyone with the thread open sees it appear, including the
     # author's other tabs.
-    anchor_id = thread.conversation.task_id or thread.conversation.project_id
     await events.publish_message(
         conversation_id=str(thread.conversation.id),
         message_id=str(message.id),
@@ -361,10 +555,22 @@ async def _announce(
         # already, and an event they never receive is a screen that only
         # moves on its next refetch.
         user_ids=[str(uid) for uid in {*recipients, *mentioned, author.id}],
-        anchor={"kind": thread.anchor_kind, "id": str(anchor_id)},
+        anchor=_anchor(thread),
+        organisation_id=str(ctx.organisation.id),
     )
 
     who = author.display_name or author.email or "Someone"
+    muted = set(
+        (
+            await db.execute(
+                select(MessageRead.user_id).where(
+                    MessageRead.conversation_id == thread.conversation.id,
+                    MessageRead.muted.is_(True),
+                )
+            )
+        ).scalars().all()
+    )
+    where = f"“{thread.anchor_title}”" if thread.anchor_title else "a chat"
 
     # Rule 5, and it runs first so the loop below can skip these people: one
     # comment naming the task's owner is one notification, the specific one.
@@ -373,26 +579,44 @@ async def _announce(
             db,
             user_id=recipient,
             kind=KIND_COMMENT_MENTION,
-            title=f"{who} mentioned you in “{thread.anchor_title}”",
+            title=f"{who} mentioned you in {where}",
             link_path=link,
             organisation_id=ctx.organisation.id,
         )
 
     for recipient in recipients:
-        if recipient in mentioned:
+        # A mute silences everything but being named.
+        if recipient in mentioned or recipient in muted:
             continue
         # Rule 4. Two unread messages in one thread is one notification; the
         # alternative is an email per line of a conversation.
         if await unread_count(db, thread.conversation, recipient) > 1:
             continue
+        if thread.anchor_kind == KIND_DIRECT:
+            kind, title = KIND_DIRECT_MESSAGE, f"{who} sent you a message"
+        elif thread.anchor_kind == KIND_GROUP:
+            kind, title = KIND_DIRECT_MESSAGE, f"{who} wrote in {where}"
+        else:
+            kind = KIND_TASK_SHARED if thread.anchor_kind == "task" else "project_shared"
+            title = f"{who} commented on {where}"
         await notifications_service.notify(
             db,
             user_id=recipient,
-            kind=KIND_TASK_SHARED if thread.anchor_kind == "task" else "project_shared",
-            title=f"{who} commented on “{thread.anchor_title}”",
+            kind=kind,
+            title=title,
             link_path=link,
             organisation_id=ctx.organisation.id,
         )
+
+
+def _anchor(thread: ThreadContext) -> dict:
+    """What a message event says it's about: the task or project for a
+    comment, the chat itself for a chat — which is also the watch key a
+    screen with it open registered."""
+    if thread.is_chat:
+        return {"kind": "chat", "id": str(thread.conversation.id)}
+    anchor_id = thread.conversation.task_id or thread.conversation.project_id
+    return {"kind": thread.anchor_kind, "id": str(anchor_id)}
 
 
 async def unread_count(
@@ -418,6 +642,26 @@ async def unread_count(
     if cursor is not None:
         stmt = stmt.where(Message.created_at > cursor)
     return (await db.execute(stmt)).scalar_one()
+
+
+def unread_expression(conversation_id_col, cursor_col, user_id: uuid.UUID):
+    """`unread_count` as a correlated subquery, for a list of threads at once.
+
+    The same three conditions — not removed, not yours, newer than your
+    cursor (or everything, with no cursor) — so the badge on a chat and the
+    count inside it can't disagree.
+    """
+    return (
+        select(func.count())
+        .select_from(Message)
+        .where(
+            Message.conversation_id == conversation_id_col,
+            Message.deleted_at.is_(None),
+            or_(Message.user_id != user_id, Message.user_id.is_(None)),
+            or_(cursor_col.is_(None), Message.created_at > cursor_col),
+        )
+        .scalar_subquery()
+    )
 
 
 async def mark_read(
@@ -452,7 +696,7 @@ async def mark_read(
         db.add(
             MessageRead(conversation_id=conversation.id, user_id=user.id, last_read_at=newest)
         )
-    elif row.last_read_at < newest:
+    elif row.last_read_at is None or row.last_read_at < newest:
         row.last_read_at = newest
     else:
         return
@@ -477,12 +721,17 @@ async def get_message(db: AsyncSession, conversation: Conversation, message_id: 
     return message
 
 
-def can_modify(*, author_id: uuid.UUID | None, actor_id: uuid.UUID, org_role: str) -> bool:
+def can_modify(
+    *, author_id: uuid.UUID | None, actor_id: uuid.UUID, org_role: str, chat: bool = False
+) -> bool:
     """Your own words, or an organisation admin's override.
 
     The task's owner is deliberately not on this list: owning the work does not
-    make you the editor of what other people said about it.
+    make you the editor of what other people said about it. **Nor is an admin,
+    in a chat** — they cannot see it, so they cannot have an override in it.
     """
+    if chat:
+        return author_id == actor_id
     return author_id == actor_id or access.administers_organisation(org_role)
 
 
@@ -504,7 +753,8 @@ async def edit(
     thing people do, and re-notifying on every save would make fixing a typo
     a second nudge. See rule 5.
     """
-    if not can_modify(author_id=message.user_id, actor_id=user.id, org_role=ctx.role):
+    chat = thread is not None and thread.is_chat
+    if not can_modify(author_id=message.user_id, actor_id=user.id, org_role=ctx.role, chat=chat):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN, detail="you can only edit your own comments"
         )
@@ -519,6 +769,7 @@ async def edit(
     await db.refresh(message)
 
     if thread is not None:
+        await _changed(ctx, thread, message, user, db)
         candidates = await _candidates(db, ctx, thread)
         before = set(mentions_service.resolve(was, candidates, exclude=user.id))
         now = mentions_service.resolve(message.body, candidates, exclude=user.id)
@@ -530,21 +781,33 @@ async def edit(
                 db,
                 user_id=recipient,
                 kind=KIND_COMMENT_MENTION,
-                title=f"{who} mentioned you in “{thread.anchor_title}”",
+                title=(
+                    f"{who} mentioned you in “{thread.anchor_title}”"
+                    if thread.anchor_title
+                    else f"{who} mentioned you in a chat"
+                ),
                 link_path=_link(ctx, thread),
                 organisation_id=ctx.organisation.id,
             )
     return message
 
 
-async def remove(db: AsyncSession, ctx: OrgContext, message: Message, user: User) -> Message:
+async def remove(
+    db: AsyncSession,
+    ctx: OrgContext,
+    message: Message,
+    user: User,
+    *,
+    thread: ThreadContext | None = None,
+) -> Message:
     """Soft delete.
 
     A hole in a thread people have already read and replied to is worse than a
     tombstone — "this comment was removed" is honest, and the replies still
     make sense.
     """
-    if not can_modify(author_id=message.user_id, actor_id=user.id, org_role=ctx.role):
+    chat = thread is not None and thread.is_chat
+    if not can_modify(author_id=message.user_id, actor_id=user.id, org_role=ctx.role, chat=chat):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="you can only remove your own comments",
@@ -553,4 +816,22 @@ async def remove(db: AsyncSession, ctx: OrgContext, message: Message, user: User
     message.body = ""
     await db.commit()
     await db.refresh(message)
+    if thread is not None:
+        await _changed(ctx, thread, message, user, db)
     return message
+
+
+async def _changed(
+    ctx: OrgContext, thread: ThreadContext, message: Message, actor: User, db: AsyncSession
+) -> None:
+    """An existing message was edited or removed. Everybody with the thread
+    listed or open refetches — the chat list's preview may have been this
+    very message. No content, as ever."""
+    people = await _interested(db, thread, exclude=None)
+    await events.publish_message(
+        conversation_id=str(thread.conversation.id),
+        message_id=str(message.id),
+        user_ids=[str(uid) for uid in {*people, actor.id}],
+        anchor=_anchor(thread),
+        organisation_id=str(ctx.organisation.id),
+    )
