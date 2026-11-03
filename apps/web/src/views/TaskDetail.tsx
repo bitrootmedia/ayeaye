@@ -962,6 +962,8 @@ export default function TaskDetail() {
             members={members}
             teams={teams}
             onChanged={load}
+            viewers={accessInfo.viewers}
+            projectName={accessInfo.project_name}
           />
 
           {accessInfo.can_manage && (

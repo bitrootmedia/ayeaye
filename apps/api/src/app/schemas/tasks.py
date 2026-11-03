@@ -297,6 +297,21 @@ class TaskRevisionOut(BaseModel):
     created_at: datetime
 
 
+class AccessRouteOut(BaseModel):
+    """One reason somebody can see a task — see `services/mentions.Route`."""
+
+    kind: str
+    name: str | None = None
+
+
+class TaskViewerOut(BaseModel):
+    """One person who can see the task, at what level, and every way in."""
+
+    person: PersonOut
+    level: str
+    routes: list[AccessRouteOut]
+
+
 class TaskAccessOut(BaseModel):
     """Everyone who can see this task, and how.
 
@@ -312,6 +327,10 @@ class TaskAccessOut(BaseModel):
     inherits_from_project: bool
     grants: list[GrantOut]
     organisation_admins: list[PersonOut]
+    # Everyone, resolved — the rows above are how access is *managed*; this is
+    # who it actually reaches, teams expanded and the project's own people
+    # included, so nobody who can open the task is missing from the card.
+    viewers: list[TaskViewerOut] = []
     can_manage: bool
 
 

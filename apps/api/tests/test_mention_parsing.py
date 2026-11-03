@@ -95,3 +95,79 @@ def test_needles_skip_an_empty_display_name():
     """Nobody has to have one — the email carries it instead."""
     assert needles(None, "bob@example.com") == ("bob@example.com", "bob")
     assert needles("  ", None) == ()
+
+
+# --- the routes behind "Who can see this" -----------------------------------
+
+
+def _task(**kw):
+    import uuid as _uuid
+
+    from app.models import Task
+
+    defaults = dict(
+        id=_uuid.uuid4(),
+        owner_user_id=_uuid.uuid4(),
+        created_by_user_id=None,
+        action_required_user_id=None,
+        project_id=None,
+    )
+    defaults.update(kw)
+    return Task(**defaults)
+
+
+def _routes_for(user_id, task, **kw):
+    from app.services.mentions import _routes
+
+    args = dict(
+        user_id=user_id,
+        role="member",
+        task=task,
+        is_hidden=False,
+        task_grants=[],
+        project_owner_id=None,
+        project_name=None,
+        project_grants=[],
+        teams={},
+        team_names={},
+    )
+    args.update(kw)
+    return [(r.kind, r.name) for r in _routes(**args)]
+
+
+def test_action_required_and_creator_are_routes_of_their_own():
+    """The two routes the card used to leave out: neither is a grant, and
+    either one alone lets somebody open the task."""
+    import uuid
+
+    karol = uuid.uuid4()
+    task = _task(action_required_user_id=karol, created_by_user_id=karol)
+    assert _routes_for(karol, task) == [("action_required", None), ("creator", None)]
+
+
+def test_project_routes_name_the_project_and_the_team():
+    import uuid
+
+    from app.models import ProjectMember
+
+    member, boss = uuid.uuid4(), uuid.uuid4()
+    team = uuid.uuid4()
+    task = _task(project_id=uuid.uuid4())
+    grants = [ProjectMember(team_id=team, level="read")]
+    kw = dict(
+        project_owner_id=boss,
+        project_name="Helm",
+        project_grants=grants,
+        teams={team: {member}},
+        team_names={team: "Ops"},
+    )
+    assert _routes_for(member, task, **kw) == [("project_team", "Ops")]
+    assert _routes_for(boss, task, **kw) == [("project_owner", "Helm")]
+
+
+def test_hidden_leaves_only_the_owner_route():
+    import uuid
+
+    owner = uuid.uuid4()
+    task = _task(owner_user_id=owner, action_required_user_id=owner)
+    assert _routes_for(owner, task, is_hidden=True) == [("owner", None)]

@@ -1,4 +1,11 @@
-import { CrownIcon, ShieldIcon, Trash2Icon, UserPlusIcon, UsersIcon } from "lucide-react";
+import {
+  CrownIcon,
+  ShieldIcon,
+  Trash2Icon,
+  UserIcon,
+  UserPlusIcon,
+  UsersIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { ApiError, api } from "@/api";
@@ -19,9 +26,11 @@ import {
   personName,
   type GrantLevel,
   type Member,
+  type AccessRoute,
   type Person,
   type ProjectAccess,
   type Team,
+  type TaskViewer,
 } from "@/lib/types";
 
 /**
@@ -37,6 +46,14 @@ import {
  * That last group is the one products usually leave implicit, and leaving it
  * implicit makes this screen a comforting lie. It's rendered greyed and
  * unremovable, which is exactly what it is.
+ *
+ * **A task has more routes in than those three** — being action-required,
+ * having created it, its project's owner and grants, and every member of a
+ * team granted either. The rows above are how access is *managed*; `viewers`
+ * is who it actually reaches, resolved server-side by the same rule the
+ * access check uses. Anybody in it without a row of their own is listed under
+ * "Also has access", with the reason, so a person who can open the task is
+ * never missing from the card that claims to say who can.
  */
 export function AccessPanel({
   basePath,
@@ -44,6 +61,8 @@ export function AccessPanel({
   members,
   teams,
   onChanged,
+  viewers,
+  projectName,
 }: {
   /** `/organisations/{orgId}/projects/{projectId}` or
    *  `/organisations/{orgId}/tasks/{taskId}` — both resources expose the
@@ -54,6 +73,11 @@ export function AccessPanel({
   members: Member[];
   teams: Team[];
   onChanged: () => Promise<void>;
+  /** Tasks only: everyone who can open it, so the people reached by some
+   *  route other than a row above can be listed too. */
+  viewers?: TaskViewer[];
+  /** Names the project in "Through {project}". */
+  projectName?: string | null;
 }) {
   const toast = useToastManager();
   const [busy, setBusy] = useState(false);
@@ -85,6 +109,17 @@ export function AccessPanel({
     ].filter(Boolean) as string[],
   );
   const grantedTeams = new Set(access.grants.map((g) => g.team?.id).filter(Boolean) as string[]);
+  // Everyone with a row of their own already; the rest of `viewers` gets one
+  // below. Admins are excluded only when they hold nothing *but* the admin
+  // route — one who is also action-required still belongs in "Also".
+  const listed = new Set(
+    [access.owner?.id, ...access.grants.map((g) => g.user?.id)].filter(Boolean) as string[],
+  );
+  const others = (viewers ?? []).filter(
+    (v) =>
+      !listed.has(v.person.id) &&
+      v.routes.some((r) => r.kind !== "organisation_admin" && r.kind !== "owner"),
+  );
 
   return (
     <Card>
@@ -149,6 +184,24 @@ export function AccessPanel({
           />
         ))}
 
+        {others.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-dashed p-3">
+            <p className="text-xs text-muted-foreground">
+              Also has access, without being shared with by name.
+            </p>
+            {others.map((v) => (
+              <Row
+                key={v.person.id}
+                icon={<UserIcon className="size-4" />}
+                title={personName(v.person)}
+                subtitle={describeRoutes(v.routes, projectName)}
+                plainSubtitle
+                badge={v.level === "owner" ? "Full access" : LEVEL_LABEL[v.level]}
+              />
+            ))}
+          </div>
+        )}
+
         {access.organisation_admins.length > 0 && (
           <div className="space-y-2 rounded-lg border border-dashed p-3">
             <p className="text-xs text-muted-foreground">
@@ -190,6 +243,33 @@ export function AccessPanel({
   );
 }
 
+/** Why somebody is under "Also has access", in words. Every route they
+ *  hold, not just the strongest — each one is independently true. */
+function describeRoutes(routes: AccessRoute[], projectName?: string | null): string {
+  const project = projectName ?? "the project";
+  const words = routes.flatMap((r) => {
+    switch (r.kind) {
+      case "action_required":
+        return ["Action required"];
+      case "creator":
+        return ["Created it"];
+      case "task_team":
+        return [r.name ? `Team ${r.name}` : "A team"];
+      case "project_owner":
+        return [`Owns ${r.name ?? project}`];
+      case "project_grant":
+        return [`Shared on ${r.name ?? project}`];
+      case "project_team":
+        return [r.name ? `Team ${r.name} on ${project}` : `A team on ${project}`];
+      case "organisation_admin":
+        return ["Organisation admin"];
+      default:
+        return [];
+    }
+  });
+  return words.join(" · ");
+}
+
 function Row({
   icon,
   title,
@@ -197,6 +277,7 @@ function Row({
   badge,
   control,
   muted,
+  plainSubtitle,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -204,6 +285,8 @@ function Row({
   badge?: string;
   control?: React.ReactNode;
   muted?: boolean;
+  /** A reason rather than an address — sans, not mono. */
+  plainSubtitle?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
@@ -218,7 +301,11 @@ function Row({
         <div className="min-w-0">
           <div className={`truncate text-sm ${muted ? "text-muted-foreground" : ""}`}>{title}</div>
           {subtitle && (
-            <div className="truncate font-mono text-xs text-muted-foreground">{subtitle}</div>
+            <div
+              className={`truncate text-xs text-muted-foreground ${plainSubtitle ? "" : "font-mono"}`}
+            >
+              {subtitle}
+            </div>
           )}
         </div>
       </div>

@@ -205,6 +205,19 @@ Task access has **six routes in**, three more than a project — see
   the organisation*. The inherited-project rank is a correlated subquery
   precisely so a NULL yields "no route" instead of a join dropping the row.
 
+**"Who can see this" on a task names everyone who can open it, not only
+grantees.** Reported as "how come he saw this task when Who can see this
+doesn't list him" — the person was action-required, which is a route with no grant
+row, and the card listed only owner, grants and admins. The creator, the
+project's owner and grantees, and every member of a granted team were
+equally invisible. `GET /tasks/{id}/access` now carries `viewers`:
+`services/mentions.py::for_task` — the same resolution the mention picker
+uses, so not a third derivation of the rule — with each person's `routes`
+named (`mentions._routes`, every route held, not just the winning one).
+`AccessPanel` lists anybody in it without a row of their own under "Also
+has access", with the reason. Pinned by `e2e-task-sharing.sh`'s last block
+and `tasks.spec.ts` ("lists someone in only by being action-required").
+
 **A hidden task is the one place access is subtracted, and it is not a deny
 rule.** `tasks.hidden_at` short-circuits **ahead of** the whole expression in
 both `effective_task_level` and `task_level_expression` — if it's set and you

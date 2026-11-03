@@ -67,6 +67,20 @@ post /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID/access "$BODY" >/dev/null
 BODY2='{"user_id":"'$OTHER_ID'","level":"write"}'
 ok "a read grantee cannot re-share it" "$(code -b /tmp/tst.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/tasks/$TID/access -d "$BODY2")" "403"
 
+echo "== the card lists everyone who can open it, not only grantees"
+# Being action-required is a route in with no grant behind it. The access
+# response's `viewers` must name that person, with the reason, or the task
+# screen's "Who can see this" card leaves out someone who can plainly open it.
+curl -s -o /dev/null -b /tmp/tso.jar -X DELETE $B/api/organisations/$OID/tasks/$TID/access/$(curl -s -b /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID/access | j "d['grants'][0]['id']")
+ok "no grant left"               "$(code -b /tmp/tst.jar $B/api/organisations/$OID/tasks/$TID)" "404"
+patch /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID "{\"action_required_user_id\":\"$OTHER_ID\"}" >/dev/null
+ACCESS=$(curl -s -b /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID/access)
+ok "action-required can open it" "$(code -b /tmp/tst.jar $B/api/organisations/$OID/tasks/$TID)" "200"
+ok "and is a viewer, at write"   "$(echo "$ACCESS" | j "[v['level'] for v in d['viewers'] if v['person']['id']=='$OTHER_ID'][0]")" "write"
+ok "with the reason"             "$(echo "$ACCESS" | j "[r['kind'] for v in d['viewers'] if v['person']['id']=='$OTHER_ID' for r in v['routes']]")" "['action_required']"
+patch /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID '{"action_required_user_id":null}' >/dev/null
+ok "and drops off when cleared"  "$(curl -s -b /tmp/tso.jar $B/api/organisations/$OID/tasks/$TID/access | j "sum(1 for v in d['viewers'] if v['person']['id']=='$OTHER_ID')")" "0"
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

@@ -197,6 +197,44 @@ test.describe("action required", () => {
     await them.context().close();
   });
 
+  test("who can see this lists someone in only by being action-required", async ({
+    page,
+    browser,
+  }) => {
+    // Being asked to act is a route in with no grant behind it. Revoke the
+    // grant and they can still open the task — so the card that claims to
+    // say who can see it has to still name them, and say why.
+    const owner = uniqueEmail("own");
+    const helper = uniqueEmail("hlp");
+    await signUp(page, owner);
+    const orgId = await createOrg(page, `Crew ${Date.now()}`);
+    const link = await inviteMember(page, orgId, helper);
+    const them = await otherPerson(browser, helper);
+    await acceptInvite(them, link);
+
+    await createTask(page, orgId, "Coil the lines");
+    await openTask(page, orgId, "Coil the lines");
+    await shareThisTask(page, helper);
+    await page.getByRole("button", { name: "Action required", exact: true }).click();
+    await page.getByRole("option", { name: helper }).click();
+    await expect(page.getByText("They've been notified")).toBeVisible();
+
+    await page.getByRole("button", { name: "Remove access" }).click();
+    await expect(page.getByText("Access removed")).toBeVisible();
+
+    const card = page.locator('[data-slot="card"]', {
+      has: page.getByText("Who can see this", { exact: true }),
+    });
+    await expect(card.getByText("Also has access")).toBeVisible();
+    await expect(card.getByText(helper)).toBeVisible();
+    await expect(card.getByText("Action required", { exact: true })).toBeVisible();
+
+    await them.goto(`/orgs/${orgId}/tasks`);
+    await expect(them.getByText("Coil the lines")).toBeVisible();
+
+    await them.context().close();
+  });
+
   test("the unread badge appears and clears", async ({ page, browser }) => {
     const owner = uniqueEmail("own");
     const helper = uniqueEmail("hlp");

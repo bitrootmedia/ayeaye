@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.schemas.structure import GrantLevelIn, GrantOut, PersonOut, TeamOut
 from app.schemas.tasks import (
+    AccessRouteOut,
     BoardColumn,
     BoardOut,
     ChecklistIn,
@@ -62,6 +63,7 @@ from app.schemas.tasks import (
     TaskRevisionOut,
     TaskSummaryOut,
     TaskUpdate,
+    TaskViewerOut,
 )
 from app.services import access as access_service
 from app.services import attachments as attachments_service
@@ -1526,6 +1528,7 @@ async def task_access(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db
     admins = await projects_service.list_implicit_viewers(
         db, ctx.organisation.id, task.owner_user_id
     )
+    viewers = await mentions_service.for_task(db, ctx.organisation.id, task)
     return TaskAccessOut(
         owner=_person(people.get(task.owner_user_id)),
         action_required=_person(people.get(task.action_required_user_id))
@@ -1539,6 +1542,14 @@ async def task_access(task_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db
             _grant_out(g, u, t) for g, u, t in await tasks_service.list_grants(db, task_id)
         ],
         organisation_admins=[p for p in (_person(a) for a in admins) if p],
+        viewers=[
+            TaskViewerOut(
+                person=_person(v.user),
+                level=v.level,
+                routes=[AccessRouteOut(kind=r.kind, name=r.name) for r in v.routes],
+            )
+            for v in viewers
+        ],
         can_manage=tasks_service.can_manage_access(level=tctx.level, is_owner=tctx.is_owner),
     )
 

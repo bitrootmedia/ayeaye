@@ -59,6 +59,7 @@ from app.models import (
     ProjectMember,
     Task,
     TaskGrant,
+    Team,
     TeamMember,
     User,
 )
@@ -72,13 +73,36 @@ MAX_MENTIONS = 20
 
 
 @dataclass(frozen=True)
+class Route:
+    """One reason somebody can see a task. `name` is the team or project it
+    runs through, where there is one.
+
+    Kinds: `owner`, `action_required`, `creator`, `task_grant`, `task_team`,
+    `project_owner`, `project_grant`, `project_team`, `organisation_admin`.
+    """
+
+    kind: str
+    name: str | None = None
+
+
+@dataclass(frozen=True)
 class Mentionable:
     """Somebody who can see the task, and therefore can be named in its
     thread. `level` is theirs, not the caller's — the composer only needs the
-    names, but the notify path uses the same rows and the level is free."""
+    names, but the notify path uses the same rows and the level is free.
+
+    `routes` is every way in they hold, which is what the task's "Who can see
+    this" card renders: a card that lists only grants leaves out the
+    action-required person, the creator and everyone who reaches the task
+    through its project, and then somebody who can plainly open the task is
+    nowhere on the card that claims to say who can. Every route is listed,
+    not just the winning one — most-permissive-wins means each of them is
+    independently true, and removing one doesn't remove the person.
+    """
 
     user: User
     level: str
+    routes: tuple[Route, ...] = ()
 
 
 def needles(display_name: str | None, email: str | None) -> tuple[str, ...]:
@@ -165,11 +189,16 @@ async def for_task(db: AsyncSession, org_id: uuid.UUID, task: Task) -> list[Ment
     )
 
     project_owner_id: uuid.UUID | None = None
+    project_name: str | None = None
     project_grants: list[ProjectMember] = []
     if task.project_id is not None:
-        project_owner_id = (
-            await db.execute(select(Project.owner_user_id).where(Project.id == task.project_id))
-        ).scalar_one_or_none()
+        project_row = (
+            await db.execute(
+                select(Project.owner_user_id, Project.name).where(Project.id == task.project_id)
+            )
+        ).one_or_none()
+        if project_row is not None:
+            project_owner_id, project_name = project_row
         project_grants = list(
             (
                 await db.execute(
@@ -184,7 +213,11 @@ async def for_task(db: AsyncSession, org_id: uuid.UUID, task: Task) -> list[Ment
     # per grant — the same batching every list endpoint here already does.
     team_ids = {g.team_id for g in (*task_grants, *project_grants) if g.team_id is not None}
     teams: dict[uuid.UUID, set[uuid.UUID]] = {tid: set() for tid in team_ids}
+    team_names: dict[uuid.UUID, str] = {}
     if team_ids:
+        team_names = dict(
+            (await db.execute(select(Team.id, Team.name).where(Team.id.in_(team_ids)))).all()
+        )
         for team_id, user_id in (
             await db.execute(
                 select(TeamMember.team_id, TeamMember.user_id).where(
@@ -230,10 +263,72 @@ async def for_task(db: AsyncSession, org_id: uuid.UUID, task: Task) -> list[Ment
             via_teams=task_teams,
         )
         if level is not None:
-            out.append(Mentionable(user=user, level=level))
+            out.append(
+                Mentionable(
+                    user=user,
+                    level=level,
+                    routes=_routes(
+                        user_id=user.id,
+                        role=role,
+                        task=task,
+                        is_hidden=is_hidden,
+                        task_grants=task_grants,
+                        project_owner_id=project_owner_id,
+                        project_name=project_name,
+                        project_grants=project_grants,
+                        teams=teams,
+                        team_names=team_names,
+                    ),
+                )
+            )
 
     out.sort(key=lambda m: (m.user.display_name or m.user.email or "").lower())
     return out
+
+
+def _routes(
+    *,
+    user_id: uuid.UUID,
+    role: str,
+    task: Task,
+    is_hidden: bool,
+    task_grants: list[TaskGrant] | tuple[TaskGrant, ...],
+    project_owner_id: uuid.UUID | None,
+    project_name: str | None,
+    project_grants: list[ProjectMember],
+    teams: dict[uuid.UUID, set[uuid.UUID]],
+    team_names: dict[uuid.UUID, str],
+) -> tuple[Route, ...]:
+    """Every route this person holds — the same inputs `effective_task_level`
+    was just given, named instead of ranked. Only called for somebody that
+    function already let in, so it explains a decision rather than making one.
+    """
+    if is_hidden:
+        # Hiding short-circuits every route but ownership.
+        return (Route("owner"),)
+    out: list[Route] = []
+    if task.owner_user_id == user_id:
+        out.append(Route("owner"))
+    if task.action_required_user_id == user_id:
+        out.append(Route("action_required"))
+    if task.created_by_user_id == user_id and task.owner_user_id != user_id:
+        out.append(Route("creator"))
+    for g in task_grants:
+        if g.user_id == user_id:
+            out.append(Route("task_grant"))
+        elif g.team_id is not None and user_id in teams.get(g.team_id, ()):
+            out.append(Route("task_team", team_names.get(g.team_id)))
+    if task.project_id is not None:
+        if project_owner_id == user_id:
+            out.append(Route("project_owner", project_name))
+        for g in project_grants:
+            if g.user_id == user_id:
+                out.append(Route("project_grant", project_name))
+            elif g.team_id is not None and user_id in teams.get(g.team_id, ()):
+                out.append(Route("project_team", team_names.get(g.team_id)))
+    if access.administers_organisation(role):
+        out.append(Route("organisation_admin"))
+    return tuple(out)
 
 
 def resolve(body: str, candidates: list[Mentionable], *, exclude: uuid.UUID) -> list[uuid.UUID]:
@@ -250,4 +345,12 @@ def resolve(body: str, candidates: list[Mentionable], *, exclude: uuid.UUID) -> 
     return [uid for uid in find_mentions(body, pairs) if uid != exclude]
 
 
-__all__ = ["MAX_MENTIONS", "Mentionable", "find_mentions", "for_task", "needles", "resolve"]
+__all__ = [
+    "MAX_MENTIONS",
+    "Mentionable",
+    "Route",
+    "find_mentions",
+    "for_task",
+    "needles",
+    "resolve",
+]

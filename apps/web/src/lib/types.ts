@@ -422,6 +422,31 @@ export type TaskEvent = {
   created_at: string;
 };
 
+/** One way somebody reaches a task — see `services/mentions.Route`. `name`
+ *  is the team (`task_team`, `project_team`) or project (`project_owner`,
+ *  `project_grant`) it runs through. */
+export type AccessRoute = {
+  kind:
+    | "owner"
+    | "action_required"
+    | "creator"
+    | "task_grant"
+    | "task_team"
+    | "project_owner"
+    | "project_grant"
+    | "project_team"
+    | "organisation_admin";
+  name: string | null;
+};
+
+/** Somebody who can actually open the task, resolved server-side through the
+ *  same rule the access check uses, with every route they hold. */
+export type TaskViewer = {
+  person: Person;
+  level: AccessLevel;
+  routes: AccessRoute[];
+};
+
 export type TaskAccess = {
   owner: Person | null;
   action_required: Person | null;
@@ -429,6 +454,9 @@ export type TaskAccess = {
   inherits_from_project: boolean;
   grants: Grant[];
   organisation_admins: Person[];
+  /** Everyone who can open it, teams expanded and the project's people
+   *  included — what the grant rows above actually reach. */
+  viewers: TaskViewer[];
   can_manage: boolean;
 };
 
