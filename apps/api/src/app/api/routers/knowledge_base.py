@@ -57,6 +57,7 @@ def _book_out(book: Book, level: str, *, owner: User | None) -> BookOut:
         description=book.description,
         owner=_person(owner),
         archived=book.archived_at is not None,
+        personal=book.is_personal,
         created_at=book.created_at,
         access=level,
     )
@@ -140,14 +141,20 @@ async def book_access(book_id: uuid.UUID, ctx: CurrentOrg, user: CurrentUser, db
     owner = (
         await db.execute(select(User).where(User.id == bctx.book.owner_user_id))
     ).scalar_one_or_none()
-    admins = await books_service.list_implicit_viewers(
-        db, ctx.organisation.id, bctx.book.owner_user_id
+    # A personal book has no implicit viewers and nothing to manage: admins
+    # can't open it and it can't be shared — listing either would be a lie.
+    admins = (
+        []
+        if bctx.book.is_personal
+        else await books_service.list_implicit_viewers(
+            db, ctx.organisation.id, bctx.book.owner_user_id
+        )
     )
     return BookAccessOut(
         owner=_person(owner),
         grants=[_grant_out(g, u, t) for g, u, t in grants],
         organisation_admins=[p for p in (_person(a) for a in admins) if p],
-        can_manage=access_service.can_administer(bctx.level),
+        can_manage=access_service.can_administer(bctx.level) and not bctx.book.is_personal,
     )
 
 

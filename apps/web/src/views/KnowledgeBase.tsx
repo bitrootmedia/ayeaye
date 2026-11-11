@@ -135,6 +135,11 @@ export default function KnowledgeBase() {
               <div className="min-w-0">
                 <div className="flex items-start gap-2">
                   <span className="min-w-0 flex-1 truncate font-medium">{book.name}</span>
+                  {book.personal && (
+                    <Badge variant="outline" className="shrink-0">
+                      Personal
+                    </Badge>
+                  )}
                   {book.archived && (
                     <Badge variant="outline" className="shrink-0 text-muted-foreground">
                       Archived

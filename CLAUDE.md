@@ -28,7 +28,10 @@ smaller features. Read the git log for what landed when.
 **The knowledge base is also the team's shared agent memory** (2026-10-26):
 facts filed in books, and recall across facts, articles and tasks by text
 and by meaning — pgvector in the same Postgres, so access stays one
-statement. Optional like email. See `.claude/rules/recall.md`.
+statement. Optional like email. See `.claude/rules/recall.md`. **Personal
+memory** (2026-11-10): each person's own book, which `remember` fills by
+default and nobody else can open, organisation admins included; `share_fact`
+is the separate tool for a shared book.
 
 **Chats** (2026-10-30): direct and group messages plus one Telegram-style
 list of every conversation you're in, task and project threads included.

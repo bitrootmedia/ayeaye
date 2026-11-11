@@ -1032,6 +1032,9 @@ export type Book = {
   description: string | null;
   owner: Person | null;
   archived: boolean;
+  /** Somebody's own memory book: only its owner ever sees it (organisation
+   *  admins included), and it can't be shared or handed over. */
+  personal: boolean;
   created_at: string;
   access: AccessLevel;
   article_count: number;

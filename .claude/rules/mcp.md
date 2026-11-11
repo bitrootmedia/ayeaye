@@ -229,8 +229,11 @@ with its text withheld, exactly as `create_spark` documents. **No edit or
 delete tool**, deliberately — correcting a log is a person's judgement about
 their own record, and nothing asked for it.
 
-**`recall`, `remember`, `list_facts`, `supersede_fact`, `tag_article` and
-`untag_article` are the shared-memory surface** — see `recall.md`. The server
+**`recall`, `remember`, `share_fact`, `list_facts`, `supersede_fact`,
+`tag_article` and `untag_article` are the memory surface** — see `recall.md`.
+Since 2026-11-10 `remember` writes to the caller's personal book only and
+`share_fact` to a shared book only — two tools so a client can gate sharing
+with a per-tool approval (`recall.md`, "Personal memory"). The server
 `instructions` tell an assistant to recall before working on a named system
 and to remember what the next session should know, never a secret; `remember`
 and `supersede_fact` are *recording*, so they need no asking under "recording

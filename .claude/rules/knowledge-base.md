@@ -22,6 +22,10 @@ Read `services/books.py` and `services/articles.py`. Book → article, with
 every edit kept as history — a runbook or a policy is durable reference
 material, the thing this product had no place for before it existed.
 
+**A personal book is the one exception** (`is_personal`, 2026-11-10): its
+owner's alone, admins included, never shared or handed over — see
+`recall.md`, "Personal memory".
+
 **A book's access model is a project's, unchanged.** `models/knowledge_base.py`'s
 `Book`/`BookMember` are near-mechanical copies of `Project`/`ProjectMember` —
 owner + grants to a person or a team at `read`/`write`, org admins see

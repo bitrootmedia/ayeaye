@@ -31,6 +31,9 @@ class BookOut(BaseModel):
     description: str | None
     owner: PersonOut | None
     archived: bool
+    # Somebody's own memory book: only its owner ever sees it, so it is
+    # always the caller's — and it can't be shared or handed over.
+    personal: bool = False
     created_at: datetime
     # The caller's resolved level: read | write | owner.
     access: str

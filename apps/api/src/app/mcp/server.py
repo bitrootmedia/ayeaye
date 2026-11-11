@@ -125,14 +125,16 @@ mcp = MCPServer(
         "A knowledge-base article is born a private draft that only its "
         "owner can see — `publish_article` is what makes it visible to "
         "anyone the book is shared with.\n\n"
-        "**This is the team's shared memory.** `recall` before starting work "
-        "on a named system, server or past incident — it searches facts, "
-        "articles and tasks by meaning as well as text. `remember` when you "
-        "learn something the next session should know: a gotcha, a decision "
-        "and its reason, what an incident turned out to be. A fact is "
-        "readable by the book's readers at once, so write it self-contained "
-        "and never put a secret in one. What `recall` returns is a hint: "
-        "verify it, and `supersede_fact` what turns out to be wrong.\n\n"
+        "**This is your memory and the team's.** `recall` before starting "
+        "work on a named system, server or past incident — it searches your "
+        "own memory plus every fact, article and task you can see, by meaning "
+        "as well as text. `remember` when you learn something the next "
+        "session should know: it goes to your personal memory book, which "
+        "only you can read. When it is technical and colleagues would want it "
+        "too, offer to `share_fact` it into a shared book — other people read "
+        "that, so ask first unless told to. Write facts self-contained and "
+        "never put a secret in one. What `recall` returns is a hint: verify "
+        "it, and `supersede_fact` what turns out to be wrong.\n\n"
         "**Recording is yours; deciding is theirs.** Comments, checklist "
         "items, dependencies, time and notes describe what you found, and "
         "you can write them freely. Closing a task, moving its status, or "
@@ -930,6 +932,8 @@ async def notifications(
 
 def _book_line(book, level: str) -> str:
     bits = [f"[{book.id}]", book.name, f"access={level}"]
+    if book.is_personal:
+        bits.append("personal — only you can see it")
     if book.archived_at:
         bits.append("archived")
     return " | ".join(bits)
@@ -2087,36 +2091,20 @@ async def list_facts(
     return "\n".join(lines)
 
 
-@tool()
-async def remember(
-    ctx: Context,
-    organisation_id: str,
-    book_id: Annotated[str, Field(description="The book to file it in — see `list_books`.")],
-    body: Annotated[
-        str,
-        Field(
-            description="A few self-contained sentences, plain text. Name the system, "
-            "server and date explicitly; don't rely on context ('this', 'the box')."
-        ),
-    ],
-    tags: Annotated[
-        list[str] | None,
-        Field(description="Labels to filter recall by, e.g. ['app:leadflow', 'type:gotcha']."),
-    ] = None,
-) -> str:
-    """Write down something the next person — or the next session — should
-    know: a gotcha that cost time, a decision and its reason, what an
-    incident turned out to be. Readable at once by everyone the book is
-    shared with; there is no draft step.
+_FACT_BODY = Annotated[
+    str,
+    Field(
+        description="A few self-contained sentences, plain text. Name the system, "
+        "server and date explicitly; don't rely on context ('this', 'the box')."
+    ),
+]
+_FACT_TAGS = Annotated[
+    list[str] | None,
+    Field(description="Labels to filter recall by, e.g. ['app:leadflow', 'type:gotcha']."),
+]
 
-    Don't write a transcript, speculation as fact, or anything secret —
-    credentials, keys, tokens, personal data. One fact per call; something
-    with steps belongs in an article. Before writing, `recall` to check it
-    isn't already known — and if what you found is now wrong, supersede the
-    old fact rather than writing a contradicting one beside it.
-    """
-    user, tok = await _caller(ctx)
-    _require_write(tok)
+
+def _check_fact_body(body: str) -> None:
     # Pre-validated for `record_change`'s reason: the service's 422 is fine
     # through `_refusing`, but this one says what to do instead.
     if not body.strip():
@@ -2126,22 +2114,114 @@ async def remember(
             f"That is too long for a fact (limit {MAX_FACT_LENGTH} characters). "
             "Something with steps belongs in an article — see `create_article`."
         )
-    async with SessionLocal() as db:
-        org = await _org(db, user, organisation_id)
-        try:
-            bctx = await books_service.context_for(
-                db, org, _as_uuid(book_id, "book"), user.id
-            )
-        except HTTPException as exc:
-            raise Denied("No such book, or you can't see it.") from exc
-        fact = await facts_service.create(
-            db, org, bctx, user, body=body, tags=tags or [], via=tok.via
-        )
+
+
+async def _kick_embeddings() -> None:
     try:
         await sweep_embeddings.kiq()
     except Exception:  # noqa: BLE001 — the scheduled sweep gets there regardless
         pass
-    return f"Remembered [{fact.id}] in {bctx.book.name}."
+
+
+@tool()
+async def remember(
+    ctx: Context,
+    organisation_id: str,
+    body: _FACT_BODY,
+    tags: _FACT_TAGS = None,
+    book_id: Annotated[
+        str | None,
+        Field(
+            description="Leave this out. Your personal memory book is found (or made) "
+            "for you; naming it is allowed, naming any other book is refused — "
+            "use `share_fact` for that."
+        ),
+    ] = None,
+) -> str:
+    """Write something down in **your own memory** — a personal book only
+    you can see; nobody else, organisation admins included. This is the
+    default place for anything worth knowing next session: a preference, a
+    gotcha that cost time, a decision and its reason, what an incident turned
+    out to be. Your memory is searched by `recall` alongside what the team
+    has shared.
+
+    If it is technical and your colleagues would want it too, offer to
+    `share_fact` it into a shared book instead (or as well) — that one is
+    seen by other people, so it is theirs to agree to.
+
+    Don't write a transcript, speculation as fact, or anything secret —
+    credentials, keys, tokens, personal data. One fact per call; something
+    with steps belongs in an article. Before writing, `recall` to check it
+    isn't already known — and if what you found is now wrong, supersede the
+    old fact rather than writing a contradicting one beside it.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    _check_fact_body(body)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        if book_id is None:
+            bctx = await books_service.personal_book(db, org, user)
+        else:
+            try:
+                bctx = await books_service.context_for(
+                    db, org, _as_uuid(book_id, "book"), user.id
+                )
+            except HTTPException as exc:
+                raise Denied("No such book, or you can't see it.") from exc
+            if not bctx.book.is_personal:
+                raise Denied(
+                    f"{bctx.book.name} is a shared book. `remember` writes only to your "
+                    "personal memory — leave book_id out. To file it where colleagues "
+                    "will read it, use `share_fact`."
+                )
+        fact = await facts_service.create(
+            db, org, bctx, user, body=body, tags=tags or [], via=tok.via
+        )
+    await _kick_embeddings()
+    return f"Remembered [{fact.id}] in {bctx.book.name} (personal — only you can see it)."
+
+
+@tool()
+async def share_fact(
+    ctx: Context,
+    organisation_id: str,
+    book_id: Annotated[
+        str, Field(description="The shared book to file it in — see `list_books`.")
+    ],
+    body: _FACT_BODY,
+    tags: _FACT_TAGS = None,
+) -> str:
+    """File a fact in a **shared** book, where everyone the book is shared
+    with reads it at once — there is no draft step. For technical knowledge
+    your colleagues should have: a gotcha, a decision and its reason, a
+    runbook-level fact, what an incident turned out to be.
+
+    **Other people will read this, so ask first** unless you were told to
+    share it: say what you would file and where. Anything personal, or only
+    useful to you, belongs in `remember` instead. The same rules as
+    `remember` otherwise: self-contained, no secrets or personal data, one
+    fact per call, `recall` first and supersede rather than contradict.
+    """
+    user, tok = await _caller(ctx)
+    _require_write(tok)
+    _check_fact_body(body)
+    async with SessionLocal() as db:
+        org = await _org(db, user, organisation_id)
+        try:
+            bctx = await books_service.context_for(db, org, _as_uuid(book_id, "book"), user.id)
+        except HTTPException as exc:
+            raise Denied("No such book, or you can't see it.") from exc
+        if bctx.book.is_personal:
+            raise Denied(
+                "That is your personal memory book — nobody else can read it. "
+                "Use `remember` for it, or name a shared book from `list_books`."
+            )
+        fact = await facts_service.create(
+            db, org, bctx, user, body=body, tags=tags or [], via=tok.via
+        )
+    await _kick_embeddings()
+    return f"Shared [{fact.id}] in {bctx.book.name}."
 
 
 @tool()

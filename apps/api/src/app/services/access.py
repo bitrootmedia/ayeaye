@@ -49,6 +49,16 @@ reassigns ownership — and the new owner can then see it. That is the recovery
 path; there is no other, and there should not be one, or "hidden" would mean
 "hidden from colleagues" and the screen would be lying.
 
+**A personal book is the same shape** (`Book.is_personal`, 2026-11-10): its
+owner and nobody else — no grantee, no organisation admin. It short-circuits
+ahead of the book expression exactly the way `hidden_at` does ahead of the
+task one, so everything that resolves through `book_level_expression` (the
+book's facts, its articles, recall, search) inherits it with no second
+check. Unlike a hidden task it has no recovery path at all: it can't be
+shared or handed over (`services/books.py` refuses both), and offboarding
+does not reassign it. That is the point — it is somebody's own memory, and
+"personal" that an admin can open would make the screen a lie.
+
 ## Why there is no policy engine
 
 Every question here is per-resource and dynamic. Plain RBAC with string
@@ -185,14 +195,33 @@ def effective_level(
 
     Generic over *which* resource — a project's or a book's grants are the
     identical shape (owner, a direct grant, a team grant, organisation role),
-    so this same function is `effective_book_level` too. Nothing book-specific
-    to add.
+    so `effective_book_level` is this function behind one short-circuit for
+    a personal book.
     """
     ranks = [level_rank(direct), *(level_rank(t) for t in via_teams)]
     if is_owner or administers_organisation(org_role):
         ranks.append(LEVEL_RANK[LEVEL_OWNER])
     best = max(ranks, default=NO_ACCESS)
     return level_name(best)
+
+
+def effective_book_level(
+    *,
+    org_role: str,
+    is_owner: bool = False,
+    is_personal: bool = False,
+    direct: str | None = None,
+    via_teams: tuple[str, ...] = (),
+) -> str | None:
+    """Rule 2 for a book: `effective_level`, unless it is personal.
+
+    **`is_personal` is checked first and returns immediately**, the same
+    shape as `is_hidden` and `is_private`: only ownership survives it, so a
+    stray grant row and an organisation admin both resolve to nothing.
+    """
+    if is_personal:
+        return LEVEL_OWNER if is_owner else None
+    return effective_level(is_owner=is_owner, org_role=org_role, direct=direct, via_teams=via_teams)
 
 
 def effective_article_level(
@@ -807,14 +836,19 @@ def _book_grant_rank_subquery(user_id: uuid.UUID):
 
 def book_level_expression(user_id: uuid.UUID, org_role: str):
     """Rule 2 for a book, as SQL — the mirror of `project_level_expression`,
-    reading `Book`/`BookMember` instead of `Project`/`ProjectMember`."""
+    reading `Book`/`BookMember` instead of `Project`/`ProjectMember`.
+
+    `Book.is_personal` short-circuits the whole expression, the SQL half of
+    `effective_book_level`: the outer `CASE` puts it first, and when it's
+    true only ownership survives."""
+    owner_route = case((Book.owner_user_id == user_id, LEVEL_RANK[LEVEL_OWNER]), else_=NO_ACCESS)
     routes = [
-        case((Book.owner_user_id == user_id, LEVEL_RANK[LEVEL_OWNER]), else_=NO_ACCESS),
+        owner_route,
         func.coalesce(_book_grant_rank_subquery(user_id), NO_ACCESS),
     ]
     if administers_organisation(org_role):
         routes.append(literal(LEVEL_RANK[LEVEL_OWNER]))
-    return func.greatest(*routes)
+    return case((Book.is_personal, owner_route), else_=func.greatest(*routes))
 
 
 def visible_books_stmt(

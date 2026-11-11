@@ -102,6 +102,62 @@ async def create(
     return BookContext(book=book, level=access.LEVEL_OWNER)
 
 
+PERSONAL_BOOK_NAME = "My memory"
+
+
+async def personal_book(db: AsyncSession, ctx: OrgContext, user: User) -> BookContext:
+    """The caller's own memory book in this organisation, created on first
+    use. Only they can ever open it — see `Book.is_personal`.
+
+    Get-or-create against `uq_books_personal_owner`: two first `remember`
+    calls racing each other both try the INSERT, one loses on the unique
+    index, rolls back and reads the winner's row. An archived personal book
+    is still theirs and is returned as is — archiving hides it from the
+    contents, it doesn't make a second one.
+    """
+
+    async def existing() -> Book | None:
+        return (
+            await db.execute(
+                select(Book).where(
+                    Book.organisation_id == ctx.organisation.id,
+                    Book.owner_user_id == user.id,
+                    Book.is_personal.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+
+    book = await existing()
+    if book is None:
+        book = Book(
+            organisation_id=ctx.organisation.id,
+            name=PERSONAL_BOOK_NAME,
+            description="Your own memory: what your assistant remembers for you. "
+            "Only you can see this book, organisation admins included.",
+            owner_user_id=user.id,
+            created_by_user_id=user.id,
+            is_personal=True,
+        )
+        db.add(book)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            book = await existing()
+            if book is None:  # pragma: no cover — the index said otherwise
+                raise
+        else:
+            await db.refresh(book)
+    return BookContext(book=book, level=access.LEVEL_OWNER)
+
+
+def _refuse_if_personal(bctx: BookContext, detail: str) -> None:
+    """409: a personal book exists to be nobody else's. Reaching this means
+    the caller owns it (nobody else can see it to get here)."""
+    if bctx.book.is_personal:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=detail)
+
+
 async def update(
     db: AsyncSession,
     bctx: BookContext,
@@ -138,6 +194,7 @@ async def transfer(
 ) -> Book:
     """Hand the book to someone else. Owner or organisation admin only."""
     bctx.require(access.can_administer(bctx.level), "only the book owner can hand it over")
+    _refuse_if_personal(bctx, "a personal book can't be handed over")
     member = (
         await db.execute(
             select(OrganisationMember).where(
@@ -222,6 +279,7 @@ async def grant(
     bctx.require(
         access.can_administer(bctx.level), "only the book owner can change who has access"
     )
+    _refuse_if_personal(bctx, "a personal book can't be shared")
     if (user_id is None) == (team_id is None):
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,

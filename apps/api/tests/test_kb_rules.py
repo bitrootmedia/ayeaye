@@ -1,11 +1,11 @@
 """The knowledge base access rules. No database, no fixtures.
 
 `effective_article_level` is the pure statement of rule 2 for an article —
-see `services/access.py`'s own docstring on it. A book's own rule needs no
-new function at all: `effective_level` already is `effective_book_level`,
-since a project's and a book's grants are the identical shape. That's tested
-exhaustively for projects already in `test_access_matrix.py`; nothing here
-repeats it.
+see `services/access.py`'s own docstring on it. A book's own rule is
+`effective_level` (a project's and a book's grants are the identical shape,
+tested exhaustively in `test_access_matrix.py`) behind one short-circuit for
+a personal book, which is all `effective_book_level` adds and all that is
+tested for it here.
 """
 
 import itertools
@@ -13,7 +13,13 @@ import itertools
 import pytest
 
 from app.models.organisation import ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER
-from app.services.access import effective_article_level, level_name, level_rank
+from app.services.access import (
+    effective_article_level,
+    effective_book_level,
+    effective_level,
+    level_name,
+    level_rank,
+)
 
 LEVELS = (None, "read", "write")
 ORG_ROLES = (ROLE_MEMBER, ROLE_ADMIN, ROLE_OWNER)
@@ -96,3 +102,47 @@ def test_the_grid_is_the_max_of_book_level_and_ownership(book_level, is_owner):
     )
     expected = max(level_rank(book_level), level_rank("owner") if is_owner else -1)
     assert got == level_name(expected)
+
+
+# --- a personal book: its owner's memory, nobody else's -----------------------
+
+
+def test_a_personal_book_is_its_owners():
+    assert effective_book_level(org_role=ROLE_MEMBER, is_personal=True, is_owner=True) == "owner"
+
+
+@pytest.mark.parametrize("role", [ROLE_ADMIN, ROLE_OWNER])
+def test_a_personal_book_beats_organisation_admin(role):
+    """The point of it: "personal" an admin could open would be a lie."""
+    assert effective_book_level(org_role=role, is_personal=True) is None
+
+
+@pytest.mark.parametrize(
+    ("org_role", "direct", "team"),
+    list(itertools.product(ORG_ROLES, LEVELS, LEVELS)),
+)
+def test_no_route_survives_a_personal_book_but_ownership(org_role, direct, team):
+    """A grant row can't be created on one (`services/books.py` refuses), but
+    if one existed it would still resolve to nothing."""
+    via = (team,) if team else ()
+    assert (
+        effective_book_level(org_role=org_role, is_personal=True, direct=direct, via_teams=via)
+        is None
+    )
+    assert (
+        effective_book_level(
+            org_role=org_role, is_personal=True, is_owner=True, direct=direct, via_teams=via
+        )
+        == "owner"
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_owner", "org_role", "direct", "team"),
+    list(itertools.product((False, True), ORG_ROLES, LEVELS, LEVELS)),
+)
+def test_an_ordinary_book_is_effective_level_unchanged(is_owner, org_role, direct, team):
+    via = (team,) if team else ()
+    assert effective_book_level(
+        org_role=org_role, is_owner=is_owner, direct=direct, via_teams=via
+    ) == effective_level(is_owner=is_owner, org_role=org_role, direct=direct, via_teams=via)

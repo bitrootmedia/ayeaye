@@ -168,6 +168,7 @@ export default function BookDetail() {
         description={
           <span className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{LEVEL_LABEL[book.access]}</Badge>
+            {book.personal && <Badge variant="outline">Personal</Badge>}
             {book.archived && <Badge variant="outline">Archived</Badge>}
             <span className="text-muted-foreground">owned by {personName(book.owner)}</span>
           </span>
@@ -259,13 +260,26 @@ export default function BookDetail() {
         </div>
 
         <div className="space-y-4">
-          <AccessPanel
-            basePath={`/organisations/${org.id}/kb/books/${book.id}`}
-            access={accessInfo}
-            members={members}
-            teams={teams}
-            onChanged={load}
-          />
+          {book.personal ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Who can see this</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                Only you. This is your personal memory: organisation admins can&rsquo;t open
+                it, and it can&rsquo;t be shared or handed over. To give colleagues a fact,
+                add it to a shared book.
+              </CardContent>
+            </Card>
+          ) : (
+            <AccessPanel
+              basePath={`/organisations/${org.id}/kb/books/${book.id}`}
+              access={accessInfo}
+              members={members}
+              teams={teams}
+              onChanged={load}
+            />
+          )}
 
           {admin && (
             <DangerZone
@@ -444,30 +458,32 @@ function DangerZone({
         <CardTitle>Ownership</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="space-y-2">
-          <Label htmlFor="new-owner">Hand over to</Label>
-          <Select items={candidates} value={newOwner} onValueChange={(v) => setNewOwner(String(v))}>
-            <SelectTrigger id="new-owner" className="w-full">
-              <SelectValue placeholder="Choose someone" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {candidates.map((c) => (
-                  <SelectItem key={c.value} value={c.value}>
-                    {c.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            disabled={!newOwner}
-            onClick={() => setConfirmingTransfer(true)}
-          >
-            Hand over
-          </Button>
-        </div>
+        {!book.personal && (
+          <div className="space-y-2">
+            <Label htmlFor="new-owner">Hand over to</Label>
+            <Select items={candidates} value={newOwner} onValueChange={(v) => setNewOwner(String(v))}>
+              <SelectTrigger id="new-owner" className="w-full">
+                <SelectValue placeholder="Choose someone" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {candidates.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              disabled={!newOwner}
+              onClick={() => setConfirmingTransfer(true)}
+            >
+              Hand over
+            </Button>
+          </div>
+        )}
 
         <div className="space-y-2 rounded-lg border border-destructive/30 p-3">
           <div className="font-medium">Delete this book</div>

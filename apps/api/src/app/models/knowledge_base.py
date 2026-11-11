@@ -47,9 +47,27 @@ from app.models.structure import GRANT_LEVELS, LEVEL_READ
 
 class Book(Base):
     """A book. Private to its owner until shared — see `models/structure.py`'s
-    identical `Project` docstring."""
+    identical `Project` docstring.
+
+    **A personal book is somebody's own memory** (`is_personal`): the book an
+    assistant's `remember` files into when no book is named. Only its owner
+    can ever open it — not a grantee (it can't be shared), not a new owner
+    (it can't be handed over), not an organisation admin. That is
+    `services/access.py`'s short-circuit, the same shape a hidden task and a
+    private article already use. At most one per person per organisation,
+    created on first use by `services/books.py::personal_book`.
+    """
 
     __tablename__ = "books"
+    __table_args__ = (
+        Index(
+            "uq_books_personal_owner",
+            "organisation_id",
+            "owner_user_id",
+            unique=True,
+            postgresql_where=text("is_personal"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
@@ -77,6 +95,8 @@ class Book(Base):
     # convention. A real DELETE stays available (services/books.py::delete)
     # for the owner who actually wants the history gone.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    is_personal: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

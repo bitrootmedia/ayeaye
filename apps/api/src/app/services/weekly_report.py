@@ -247,8 +247,9 @@ async def for_org(
     week.opened, week.opened_count = await tasks(Task.created_at)
     week.closed, week.closed_count = await tasks(Task.closed_at)
 
-    # Published ones only: a draft is its owner's until they say otherwise,
-    # and "added" means added to what everybody reads.
+    # Published ones only, outside personal books: a draft is its owner's
+    # until they say otherwise, and "added" means added to what everybody
+    # reads.
     latest_title = (
         select(ArticleRevision.title)
         .where(ArticleRevision.article_id == Article.id)
@@ -258,7 +259,12 @@ async def for_org(
     )
     articles = (
         access.visible_articles_stmt(user_id=user.id, org_id=org.id, org_role=ctx.role)
-        .where(Article.is_private.is_(False), Article.created_at >= start, Article.created_at < end)
+        .where(
+            Article.is_private.is_(False),
+            Book.is_personal.is_(False),
+            Article.created_at >= start,
+            Article.created_at < end,
+        )
         .subquery()
     )
     week.articles_count = (
@@ -276,7 +282,13 @@ async def for_org(
     ).all()
     week.articles = [f"{t or 'Untitled'} ({b})" for t, b in rows]
 
-    facts = access.visible_facts_stmt(user_id=user.id, org_id=org.id, org_role=ctx.role).subquery()
+    # Not personal books: the recipient's own memory is theirs, not something
+    # the organisation added this week — the same reading as drafts above.
+    facts = (
+        access.visible_facts_stmt(user_id=user.id, org_id=org.id, org_role=ctx.role)
+        .where(Book.is_personal.is_(False))
+        .subquery()
+    )
     fact_window = (facts.c.created_at >= start, facts.c.created_at < end)
     week.facts_count = (
         await db.execute(select(func.count()).select_from(facts).where(*fact_window))

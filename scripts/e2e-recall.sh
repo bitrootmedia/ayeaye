@@ -21,7 +21,11 @@
 #     meaning exactly as they are by text;
 #   * superseding takes a fact out of recall without deleting it;
 #   * tags narrow, and one vocabulary spans tasks, articles and facts;
-#   * MCP `remember`/`recall` act as the token's person, attributed "via".
+#   * MCP `share_fact`/`recall` act as the token's person, attributed "via";
+#   * **a personal book is its owner's alone.** `remember` with no book files
+#     into one made on first use; the organisation owner can't open it, its
+#     facts or find it by recall; it can't be shared or handed over; and the
+#     two tools refuse each other's books.
 #
 # ALICE  organisation owner; owns the book
 # CAROL  a member, granted read (later write) on the book
@@ -209,7 +213,7 @@ ok "writer deletes their own"       "$(code -b /tmp/rcc.jar -X DELETE $B/api/org
 ok "owner deletes anything"         "$(code -b /tmp/rca.jar -X DELETE $B/api/organisations/$OID/kb/facts/$F3ID)" "204"
 ok "its chunks go with it"          "$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-app}" -d "${POSTGRES_DB:-app}" -tA -c "SELECT count(*) FROM embeddings WHERE fact_id = '$F3ID'")" "0"
 
-echo "== MCP: remember and recall, as a person =="
+echo "== MCP: share_fact and recall, as a person =="
 TOK=$(post /tmp/rca.jar $B/api/me/tokens '{"name":"Claude","scope":"write"}' | j "d['token']")
 READTOK=$(post /tmp/rca.jar $B/api/me/tokens '{"name":"Reader","scope":"read"}' | j "d['token']")
 tool(){ python3 -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':sys.argv[1],'arguments':json.loads(sys.argv[2])}}))" "$2" "$3" > /tmp/rc-mcp.json
@@ -220,11 +224,12 @@ import json,sys
 d=json.loads(sys.stdin.read()); c=(d.get('result') or {}).get('content') or []
 print(c[0].get('text','') if c else json.dumps(d))"; }
 ARGS=$(python3 -c 'import json,sys; print(json.dumps({"organisation_id": sys.argv[1], "book_id": sys.argv[2], "body": "Metabase: the nightly sync job times out against the read replica unless statement_timeout is raised to five minutes.", "tags": ["app:metabase", "type:gotcha"]}))' "$OID" "$BOOKID")
-REM=$(tool "$TOK" remember "$ARGS")
-ok "remember"                       "$(echo "$REM" | cut -c1-12)" "Remembered ["
-MFID=$(echo "$REM" | sed -E 's/^Remembered \[([^]]+)\].*/\1/')
+REM=$(tool "$TOK" share_fact "$ARGS")
+ok "share_fact"                     "$(echo "$REM" | cut -c1-8)" "Shared ["
+MFID=$(echo "$REM" | sed -E 's/^Shared \[([^]]+)\].*/\1/')
 ok "attributed via the token"       "$(curl -s -b /tmp/rca.jar $B/api/organisations/$OID/kb/facts/$MFID | j "d['via']")" "Claude"
-ok "a read token can't remember"    "$(tool "$READTOK" remember "$ARGS" | grep -c 'read-only')" "1"
+ok "a read token can't share"       "$(tool "$READTOK" share_fact "$ARGS" | grep -c 'read-only')" "1"
+ok "remember refuses a shared book" "$(tool "$TOK" remember "$ARGS" | grep -c 'is a shared book')" "1"
 # Arguments built into a variable first, never inline: bash 3.2 mis-parses a
 # brace inside `$(...)` inside a double-quoted string — see e2e-mcp.sh.
 recall_args(){ python3 -c 'import json,sys
@@ -243,6 +248,31 @@ SUPARGS=$(python3 -c 'import json,sys; print(json.dumps({"organisation_id": sys.
 ok "supersede_fact"                 "$(tool "$TOK" supersede_fact "$SUPARGS" | cut -c1-11)" "Superseded "
 RA=$(recall_args "$OID" "x" "app:nope")
 ok "an unknown tag, said plainly"   "$(tool "$READTOK" recall "$RA" | grep -c 'No tag called')" "1"
+
+echo "== a personal book: its owner's alone, admins included =="
+CTOK=$(post /tmp/rcc.jar $B/api/me/tokens '{"name":"Claude","scope":"write"}' | j "d['token']")
+PARGS=$(python3 -c 'import json,sys; print(json.dumps({"organisation_id": sys.argv[1], "body": "I prefer the staging deploys to go out before lunch, never on a Friday afternoon.", "tags": ["type:preference"]}))' "$OID")
+PREM=$(tool "$CTOK" remember "$PARGS")
+ok "remember, no book named"        "$(echo "$PREM" | cut -c1-12)" "Remembered ["
+PFID=$(echo "$PREM" | sed -E 's/^Remembered \[([^]]+)\].*/\1/')
+PBOOK=$(curl -s -b /tmp/rcc.jar $B/api/organisations/$OID/kb/facts/$PFID | j "d['book_id']")
+ok "made a personal book"           "$(curl -s -b /tmp/rcc.jar $B/api/organisations/$OID/kb/books/$PBOOK | j "d['personal']")" "True"
+PREM2=$(tool "$CTOK" remember "$PARGS")
+PFID2=$(echo "$PREM2" | sed -E 's/^Remembered \[([^]]+)\].*/\1/')
+ok "…and the same one next time"    "$(curl -s -b /tmp/rcc.jar $B/api/organisations/$OID/kb/facts/$PFID2 | j "d['book_id']")" "$PBOOK"
+ok "one personal book, not two"     "$(curl -s -b /tmp/rcc.jar $B/api/organisations/$OID/kb/books | j "sum(1 for b in d if b['personal'])")" "1"
+ok "org owner: book 404"            "$(code -b /tmp/rca.jar $B/api/organisations/$OID/kb/books/$PBOOK)" "404"
+ok "org owner: fact 404"            "$(code -b /tmp/rca.jar $B/api/organisations/$OID/kb/facts/$PFID)" "404"
+ok "org owner: not in the list"     "$(curl -s -b /tmp/rca.jar $B/api/organisations/$OID/kb/books | j "'$PBOOK' in [b['id'] for b in d]")" "False"
+ok "org owner: not recalled"        "$(recall /tmp/rca.jar "staging deploys before lunch" | rank_of $PFID)" "0"
+ok "its owner recalls it"           "$(recall /tmp/rcc.jar "staging deploys before lunch" | rank_of $PFID)" "1"
+ok "can't be shared"                "$(code -b /tmp/rcc.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/kb/books/$PBOOK/access -d "{\"user_id\":\"$(curl -s -b /tmp/rca.jar $B/api/organisations/$OID/members | j "[m['user_id'] for m in d if m['email']=='$A'][0]")\",\"level\":\"read\"}")" "409"
+ok "can't be handed over"           "$(code -b /tmp/rcc.jar -H 'Content-Type: application/json' -X POST $B/api/organisations/$OID/kb/books/$PBOOK/owner -d "{\"owner_user_id\":\"$(curl -s -b /tmp/rca.jar $B/api/organisations/$OID/members | j "[m['user_id'] for m in d if m['email']=='$A'][0]")\"}")" "409"
+ok "no admins listed as viewers"    "$(curl -s -b /tmp/rcc.jar $B/api/organisations/$OID/kb/books/$PBOOK/access | j "(len(d['organisation_admins']), d['can_manage'])")" "(0, False)"
+SPARGS=$(python3 -c 'import json,sys; print(json.dumps({"organisation_id": sys.argv[1], "book_id": sys.argv[2], "body": "x y z"}))' "$OID" "$PBOOK")
+ok "share_fact refuses it"          "$(tool "$CTOK" share_fact "$SPARGS" | grep -c 'personal memory book')" "1"
+ok "remember accepts it by name"    "$(tool "$CTOK" remember "$SPARGS" | cut -c1-12)" "Remembered ["
+ok "an admin's MCP can't name it"   "$(tool "$TOK" remember "$SPARGS" | grep -c "can't see it")" "1"
 
 echo
 echo "pass=$pass fail=$fail"

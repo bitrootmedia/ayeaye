@@ -42,6 +42,35 @@ Plus **one tag vocabulary across tasks, articles and facts** (`article_tags`,
 the same word, and `TagStrip` took a `basePath` + `noun` the way
 `AccessPanel` and `FilesPanel` did.
 
+## Personal memory (2026-11-10)
+
+Each person gets **one personal book per organisation** (`Book.is_personal`,
+migration 0056), made on first use by `books.personal_book` — the book
+`remember` files into when no book is named. It is the IntentLab setup
+"everything goes to my own memory by default; technical things worth sharing
+go to a shared book, with confirmation":
+
+- **Only its owner can open it — organisation admins included.**
+  `book_level_expression` short-circuits on `is_personal` exactly as
+  `article_level_expression` does on `is_private`, so facts, articles,
+  recall, ⌘K and the weekly report all inherit it with no second check.
+  `effective_book_level` is the Python half, pinned in `test_kb_rules.py`.
+- **It can't be shared or handed over** (`books.grant`/`transfer` → 409),
+  and offboarding doesn't touch it: no recovery path, on purpose. The access
+  endpoint lists no implicit admins and `can_manage` is false; the book
+  screen swaps the access panel for a sentence saying so.
+- **Two MCP tools, not a `book_id` switch.** `remember` writes only to your
+  personal book (naming any other is refused, pointing at `share_fact`);
+  `share_fact` writes only to a shared one (naming your personal book is
+  refused). A client can require approval per tool — claude.ai's "needs
+  approval", Claude Code's `permissions.ask` — but not per argument, which is
+  the whole reason they are two.
+- **The weekly report leaves personal books out**: the recipient's own
+  memory isn't something the organisation added that week.
+- `scripts/e2e-recall.sh`'s last section is the regression: made once and
+  reused, invisible to the org owner by id, list and recall, unshareable,
+  and the two tools refusing each other's books.
+
 ## The rules for a fact
 
 1. **Its level is its book's.** No owner, no private state, no route of its
