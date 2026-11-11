@@ -233,6 +233,26 @@
   .prose-task img {
     @apply max-h-96 rounded-lg border;
   }
+  /* Tables: a wide one scrolls inside its own box rather than pushing the
+     page sideways. Cells hold paragraphs (that's what the editor emits), so
+     their own spacing is reset. */
+  .prose-task table {
+    @apply block max-w-full overflow-x-auto border-collapse text-xs;
+  }
+  .prose-task th,
+  .prose-task td {
+    @apply border px-2 py-1 text-left align-top;
+  }
+  .prose-task th {
+    @apply bg-muted font-semibold;
+  }
+  .prose-task td > * + *,
+  .prose-task th > * + * {
+    @apply mt-1;
+  }
+  .prose-task .selectedCell {
+    @apply bg-primary/10;
+  }
   /* An image whose attachment is gone. Says so rather than showing the
      browser's broken-image glyph. */
   .prose-task img:not([src]) {

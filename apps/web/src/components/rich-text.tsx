@@ -1,7 +1,10 @@
 import { common, createLowlight } from "lowlight";
 import {
+  BetweenHorizontalEndIcon,
+  BetweenVerticalEndIcon,
   BoldIcon,
   CodeIcon,
+  Grid2x2XIcon,
   Heading2Icon,
   Heading3Icon,
   ImageIcon,
@@ -12,10 +15,14 @@ import {
   QuoteIcon,
   SquareCodeIcon,
   StrikethroughIcon,
+  TableColumnsSplitIcon,
+  TableIcon,
+  TableRowsSplitIcon,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Image from "@tiptap/extension-image";
+import { TableKit } from "@tiptap/extension-table";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 
@@ -177,6 +184,11 @@ export function RichTextEditor({
       }),
       CodeBlockLowlight.configure({ lowlight }),
       TaskImage.configure({ allowBase64: false }),
+      // Structure only: no column resizing, because the server drops every
+      // width and style on save (`richtext.py` keeps table/tr/th/td and
+      // colspan/rowspan, nothing else) — a resize handle would promise a
+      // width that is gone after the first reload.
+      TableKit.configure({ table: { resizable: false } }),
     ],
     content: value || "",
     editorProps: {
@@ -335,6 +347,28 @@ function Toolbar({
         if (!href) return;
         editor.chain().focus().extendMarkRange("link").setMark("link", { href }).run();
       })}
+      {item("Insert table", <TableIcon />, editor.isActive("table"), () =>
+        editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+      )}
+      {editor.isActive("table") && (
+        <>
+          {item("Add row below", <BetweenHorizontalEndIcon />, false, () =>
+            editor.chain().focus().addRowAfter().run(),
+          )}
+          {item("Add column after", <BetweenVerticalEndIcon />, false, () =>
+            editor.chain().focus().addColumnAfter().run(),
+          )}
+          {item("Delete row", <TableRowsSplitIcon />, false, () =>
+            editor.chain().focus().deleteRow().run(),
+          )}
+          {item("Delete column", <TableColumnsSplitIcon />, false, () =>
+            editor.chain().focus().deleteColumn().run(),
+          )}
+          {item("Delete table", <Grid2x2XIcon />, false, () =>
+            editor.chain().focus().deleteTable().run(),
+          )}
+        </>
+      )}
       <span className="mx-1 h-5 w-px bg-border" />
       {item("Add a picture", <ImageIcon />, false, () => picker.current?.click())}
       {editor.isActive("codeBlock") && (

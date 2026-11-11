@@ -80,3 +80,38 @@ def test_empty_input_is_a_no_op():
     assert richtext.from_markdown(None) == ""
     assert richtext.from_markdown("") == ""
     assert richtext.sanitise(richtext.from_markdown("")) is None
+
+
+# --- tables (2026-11-11) ------------------------------------------------------
+
+
+def test_a_pipe_table_becomes_a_stored_table():
+    out = _stored("| Host | Port |\n|---|---|\n| leadflow | 443 |")
+    assert out is not None
+    assert "<table>" in out and "<thead>" in out and "<tbody>" in out
+    assert "<th>Host</th>" in out and "<td>leadflow</td>" in out
+
+
+def test_editor_table_keeps_structure_and_spans_but_not_styling():
+    # Roughly what Tiptap's table emits: inline widths, a colgroup, and a
+    # paragraph in every cell.
+    html = (
+        '<table style="min-width: 50px"><colgroup><col style="min-width: 25px">'
+        "</colgroup><tbody><tr>"
+        '<th colspan="2" rowspan="1" style="color:red"><p>Both</p></th></tr>'
+        '<tr><td colspan="1" rowspan="1"><p>a</p></td><td><p>b</p></td></tr>'
+        "</tbody></table>"
+    )
+    out = richtext.sanitise(html)
+    assert out is not None
+    assert "style" not in out and "colgroup" not in out and "<col" not in out
+    assert '<th colspan="2" rowspan="1"><p>Both</p></th>' in out
+    assert "<td><p>b</p></td>" in out
+
+
+def test_a_span_is_a_small_number_or_nothing():
+    out = richtext.sanitise(
+        '<table><tr><td colspan="javascript:x" rowspan="999">x</td></tr></table>'
+    )
+    assert out is not None
+    assert "colspan" not in out and "rowspan" not in out

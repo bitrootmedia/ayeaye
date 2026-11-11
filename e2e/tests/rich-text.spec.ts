@@ -54,6 +54,33 @@ test.describe("rich descriptions", () => {
     await expect(body(page).locator("li")).toHaveCount(2);
   });
 
+  test("a table survives a save and a reload", async ({ page }) => {
+    // Tables arrived 2026-11-11 (the BookStack import). The server keeps
+    // structure and spans and drops every width and style, so what has to
+    // survive the round trip is cells, header and the rows you added.
+    await signUp(page, uniqueEmail("rt"));
+    const orgId = await createOrg(page, `Table ${Date.now()}`);
+    await createTask(page, orgId, "Ports");
+    await openTask(page, orgId, "Ports");
+
+    await body(page).click();
+    await page.getByRole("button", { name: "Insert table" }).click();
+    await page.keyboard.type("Host");
+    await page.keyboard.press("Tab");
+    await page.keyboard.type("Port");
+    await page.getByRole("button", { name: "Add row below" }).click();
+    await page.getByRole("button", { name: "Delete column" }).click();
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Saved" })).toBeVisible();
+
+    await page.reload();
+    await expect(body(page).locator("th").first()).toHaveText("Host");
+    // 3x3 with a header, one row added, the third column deleted.
+    await expect(body(page).locator("tr")).toHaveCount(4);
+    await expect(body(page).locator("tr").first().locator("th")).toHaveCount(2);
+  });
+
   test("clicking the toolbar does not swallow the next character", async ({ page }) => {
     // Clicking a button used to blur the editor; the chain's `.focus()` put it
     // back a tick later, and whatever you typed in between was lost. It cost

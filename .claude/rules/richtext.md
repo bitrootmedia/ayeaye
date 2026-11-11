@@ -76,6 +76,19 @@ headings need. `tests/test_richtext.py` pins the conversion against
 `sanitise()` together, because a case that looks right before sanitising
 and wrong after it is the only kind of bug that actually matters here.
 
+**Tables (2026-11-11)** arrived with the BookStack import into the
+knowledge base: `table`/`thead`/`tbody`/`tr`/`th`/`td` are on the allow-list,
+`colspan`/`rowspan` survive only as a one- or two-digit number, and
+everything else on a table — `style`, widths, `colgroup` — is dropped.
+`from_markdown()` enables the `tables` extension, so a pipe table from an
+MCP client stores as a real table. The editor uses Tiptap's `TableKit` with
+**resizing off**, because a dragged width is exactly what the sanitiser
+drops on save; the toolbar has "Insert table" plus row/column/table
+add-and-delete buttons that appear only while the cursor is in a table.
+`.prose-task table` is `display: block` with its own horizontal scroll, so a
+wide table can't widen the page (an earlier `w-max` did, by stretching the
+article grid's `1fr` column). `rich-text.spec.ts` round-trips one.
+
 Things that will bite:
 
 - **Tiptap's `Image` node silently drops unknown attributes.** `TaskImage`

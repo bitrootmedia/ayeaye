@@ -48,6 +48,10 @@ ALLOWED_TAGS = {
     "blockquote",
     "pre", "code",
     "a", "img",
+    # Tables (2026-11-11), for knowledge-base articles imported from
+    # BookStack and anyone documenting hosts, ports or mappings. Structure
+    # only: no `style`, no widths, no `colgroup` — the editor re-measures.
+    "table", "thead", "tbody", "tr", "th", "td",
 }
 
 # `class` is allowed on code blocks alone, and only in the one shape the
@@ -57,7 +61,12 @@ ALLOWED_ATTRIBUTES = {
     "code": {"class"},
     "pre": {"class"},
     "img": {"data-attachment-id", "alt"},
+    "th": {"colspan", "rowspan"},
+    "td": {"colspan", "rowspan"},
 }
+
+# A span is a small positive integer and nothing else.
+_SPAN = re.compile(r"^[1-9][0-9]?$")
 
 # `language-python`, and nothing else. Without this, `class` is a hole through
 # which any of the app's own utility classes can be applied to task content.
@@ -76,6 +85,8 @@ def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
     """Returning None drops the attribute."""
     if attribute == "class":
         return value if _LANGUAGE_CLASS.match(value) else None
+    if attribute in ("colspan", "rowspan"):
+        return value if _SPAN.match(value) else None
     if tag == "img" and attribute == "data-attachment-id":
         try:
             uuid.UUID(value)
@@ -119,10 +130,11 @@ def from_markdown(text: str | None) -> str:
     **This does not sanitise.** Every caller still has to run the result
     through `sanitise()` before storing it, exactly as it would for
     hand-typed HTML — markdown is just another way to arrive at HTML, not a
-    second trust boundary. `fenced_code` is the one extension enabled,
-    because a triple-backtick block is how anyone writing markdown expects
-    to get a code block, and it happens to emit `class="language-python"`
-    already, the exact shape `_LANGUAGE_CLASS` expects.
+    second trust boundary. `fenced_code` is enabled because a
+    triple-backtick block is how anyone writing markdown expects to get a
+    code block, and it happens to emit `class="language-python"` already,
+    the exact shape `_LANGUAGE_CLASS` expects. `tables` turns a pipe table
+    into the `table`/`thead`/`tbody` shape the allow-list now has.
 
     This editor's own toolbar only ever produces `h2`/`h3` (see
     `RichTextEditor`'s `heading: { levels: [2, 3] }`), and `sanitise()`
@@ -138,7 +150,7 @@ def from_markdown(text: str | None) -> str:
     picture has to be attached separately, exactly as it would pasting a
     URL into the HTML editor.
     """
-    html = _markdown.markdown(text or "", extensions=["fenced_code"])
+    html = _markdown.markdown(text or "", extensions=["fenced_code", "tables"])
     html = _H1.sub(r"<\1h2\2>", html)
     return _H4_H6.sub(r"<\1h3\2>", html)
 
